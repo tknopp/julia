@@ -167,7 +167,7 @@ function resolve(reqs::Vector{VersionSet})
 
     G  = [ v == d[1]        ? 1 : 0  for v=vers, d=deps ]
     G *= [ contains(d[2],v) ? 1 : 0  for d=deps, v=vers ]
-    G += [ older(a,b)       ? 2 : 0  for a=vers, b=vers ]
+    G += [ older(a,b)       ? 1 : 0  for a=vers, b=vers ]
     I = find(G)
     W = zeros(Int,length(I),n)
     for (r,i) in enumerate(I)
