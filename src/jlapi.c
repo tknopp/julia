@@ -130,6 +130,34 @@ DLLEXPORT const char *jl_bytestring_ptr(jl_value_t *s)
     return jl_string_data(s);
 }
 
+DLLEXPORT jl_value_t *jl_call(jl_function_t *f, jl_value_t **args, int32_t nargs)
+{
+    jl_value_t *v;
+    JL_TRY {
+        JL_GC_PUSHARGS(args,nargs); // Howto include f here?
+        v = jl_apply(f, args, nargs);
+        JL_GC_POP();
+    }
+    JL_CATCH {
+        v = NULL;
+    }
+    return v;
+}
+
+DLLEXPORT jl_value_t *jl_call0(jl_function_t *f)
+{
+    jl_value_t *v;
+    JL_TRY {
+        JL_GC_PUSH1(&f);
+        v = jl_apply(f, NULL, 0);
+        JL_GC_POP();
+    }
+    JL_CATCH {
+        v = NULL;
+    }
+    return v;
+}
+
 DLLEXPORT jl_value_t *jl_call1(jl_function_t *f, jl_value_t *a)
 {
     jl_value_t *v;
@@ -151,6 +179,21 @@ DLLEXPORT jl_value_t *jl_call2(jl_function_t *f, jl_value_t *a, jl_value_t *b)
         JL_GC_PUSH3(&f,&a,&b);
         jl_value_t *args[2] = {a,b};
         v = jl_apply(f, args, 2);
+        JL_GC_POP();
+    }
+    JL_CATCH {
+        v = NULL;
+    }
+    return v;
+}
+
+DLLEXPORT jl_value_t *jl_call3(jl_function_t *f, jl_value_t *a, jl_value_t *b, jl_value_t *c)
+{
+    jl_value_t *v;
+    JL_TRY {
+        JL_GC_PUSH4(&f,&a,&b,&c);
+        jl_value_t *args[3] = {a,b,c};
+        v = jl_apply(f, args, 3);
         JL_GC_POP();
     }
     JL_CATCH {
