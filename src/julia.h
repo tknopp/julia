@@ -872,9 +872,9 @@ DLLEXPORT struct tm* localtime_r(const time_t *t, struct tm *tm);
 // exceptions
 void NORETURN jl_error(const char *str);
 void NORETURN jl_errorf(const char *fmt, ...);
-void jl_too_few_args(const char *fname, int min);
-void jl_too_many_args(const char *fname, int max);
-void jl_type_error(const char *fname, jl_value_t *expected, jl_value_t *got);
+DLLEXPORT void jl_too_few_args(const char *fname, int min);
+DLLEXPORT void jl_too_many_args(const char *fname, int max);
+DLLEXPORT void jl_type_error(const char *fname, jl_value_t *expected, jl_value_t *got);
 void jl_type_error_rt(const char *fname, const char *context,
                       jl_value_t *ty, jl_value_t *got);
 jl_value_t *jl_no_method_error(jl_function_t *f, jl_value_t **args, size_t na);
@@ -883,6 +883,7 @@ void jl_check_type_tuple(jl_tuple_t *t, jl_sym_t *name, const char *ctx);
 // initialization functions
 DLLEXPORT void julia_init(char *imageFile);
 DLLEXPORT int julia_trampoline(int argc, char *argv[], int (*pmain)(int ac,char *av[]));
+DLLEXPORT void jl_init(char *julia_home_dir);
 void jl_init_types(void);
 void jl_init_box_caches(void);
 DLLEXPORT void jl_init_frontend(void);
@@ -904,6 +905,7 @@ jl_value_t *jl_parse_next();
 DLLEXPORT jl_value_t *jl_load_file_string(const char *text, char *filename);
 DLLEXPORT jl_value_t *jl_expand(jl_value_t *expr);
 jl_lambda_info_t *jl_wrap_expr(jl_value_t *expr);
+DLLEXPORT void *jl_eval_string(char *str);
 
 // some useful functions
 DLLEXPORT void jl_show(jl_value_t *stream, jl_value_t *v);
@@ -920,7 +922,7 @@ extern DLLEXPORT jl_module_t *jl_main_module;
 extern DLLEXPORT jl_module_t *jl_core_module;
 extern DLLEXPORT jl_module_t *jl_base_module;
 extern DLLEXPORT jl_module_t *jl_current_module;
-jl_module_t *jl_new_module(jl_sym_t *name);
+DLLEXPORT jl_module_t *jl_new_module(jl_sym_t *name);
 // get binding for reading
 DLLEXPORT jl_binding_t *jl_get_binding(jl_module_t *m, jl_sym_t *var);
 // get binding for assignment
@@ -935,10 +937,10 @@ DLLEXPORT void jl_set_global(jl_module_t *m, jl_sym_t *var, jl_value_t *val);
 DLLEXPORT void jl_set_const(jl_module_t *m, jl_sym_t *var, jl_value_t *val);
 void jl_checked_assignment(jl_binding_t *b, jl_value_t *rhs);
 void jl_declare_constant(jl_binding_t *b);
-void jl_module_using(jl_module_t *to, jl_module_t *from);
-void jl_module_use(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
-void jl_module_import(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
-void jl_module_importall(jl_module_t *to, jl_module_t *from);
+DLLEXPORT void jl_module_using(jl_module_t *to, jl_module_t *from);
+DLLEXPORT void jl_module_use(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
+DLLEXPORT void jl_module_import(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
+DLLEXPORT void jl_module_importall(jl_module_t *to, jl_module_t *from);
 DLLEXPORT void jl_module_export(jl_module_t *from, jl_sym_t *s);
 void jl_add_standard_imports(jl_module_t *m);
 
