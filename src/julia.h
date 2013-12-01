@@ -161,16 +161,14 @@ STATIC_INLINE_OR_EXPORT int32_t jl_array_ndims(void* a)
 {
     return (int32_t)(((jl_array_t*)a)->ndims);
 }
-STATIC_INLINE_OR_EXPORT jl_value_t* jl_array_data_owner(void* a)
-{
-    return *((jl_value_t**)(&a->ncols+1+jl_array_ndimwords(jl_array_ndims(a))));
-}
 
 // compute # of extra words needed to store dimensions
 STATIC_INLINE int jl_array_ndimwords(uint32_t ndims)
 {
     return (ndims < 3 ? 0 : ndims-2);
 }
+
+#define jl_array_data_owner(a) (*((jl_value_t**)(&a->ncols+1+jl_array_ndimwords(jl_array_ndims(a)))))
 
 typedef jl_value_t *(*jl_fptr_t)(jl_value_t*, jl_value_t**, uint32_t);
 

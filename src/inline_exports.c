@@ -10,6 +10,6 @@
 #define DLLEXPORT __attribute__ ((visibility("default")))
 #endif
 
-#define INLINE_AND_EXPORT DLLEXPORT
+#define STATIC_INLINE_OR_EXPORT DLLEXPORT
 
 #include "julia.h"
