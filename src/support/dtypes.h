@@ -125,6 +125,10 @@
 # define INLINE inline
 #endif
 
+#ifndef STATIC_INLINE_OR_EXPORT
+# define STATIC_INLINE_OR_EXPORT STATIC_INLINE
+#endif
+
 typedef int bool_t;
 typedef unsigned char  byte_t;   /* 1 byte */
 

@@ -130,17 +130,41 @@ typedef struct {
 } jl_array_t;
 
 #ifdef STORE_ARRAY_LEN
-#define jl_array_len(a)   (((jl_array_t*)(a))->length)
+STATIC_INLINE_OR_EXPORT size_t jl_array_len(void* a)
+{
+    return ((jl_array_t*)(a))->length;
+}
 #else
 DLLEXPORT size_t jl_array_len_(jl_array_t *a);
-#define jl_array_len(a)   jl_array_len_((jl_array_t*)(a))
+STATIC_INLINE_OR_EXPORT size_t jl_array_len(void* a)
+{
+    return jl_array_len_((jl_array_t*)(a));
+}
 #endif
-#define jl_array_data(a)  ((void*)((jl_array_t*)(a))->data)
-#define jl_array_dim(a,i) ((&((jl_array_t*)(a))->nrows)[i])
-#define jl_array_dim0(a)  (((jl_array_t*)(a))->nrows)
-#define jl_array_nrows(a) (((jl_array_t*)(a))->nrows)
-#define jl_array_ndims(a) ((int32_t)(((jl_array_t*)a)->ndims))
-#define jl_array_data_owner(a) (*((jl_value_t**)(&a->ncols+1+jl_array_ndimwords(jl_array_ndims(a)))))
+STATIC_INLINE_OR_EXPORT void* jl_array_data(void* a)
+{
+    return (void*)((jl_array_t*)(a))->data;
+}
+STATIC_INLINE_OR_EXPORT size_t jl_array_dim(void* a, uint32_t i)
+{
+    return (&((jl_array_t*)(a))->nrows)[i];
+}
+STATIC_INLINE_OR_EXPORT size_t jl_array_dim0(void* a)
+{
+    return ((jl_array_t*)(a))->nrows;
+}
+STATIC_INLINE_OR_EXPORT size_t jl_array_nrows(void* a)
+{
+    return ((jl_array_t*)(a))->nrows;
+}
+STATIC_INLINE_OR_EXPORT int32_t jl_array_ndims(void* a)
+{
+    return (int32_t)(((jl_array_t*)a)->ndims);
+}
+STATIC_INLINE_OR_EXPORT jl_value_t* jl_array_data_owner(void* a)
+{
+    return *((jl_value_t**)(&a->ncols+1+jl_array_ndimwords(jl_array_ndims(a))));
+}
 
 // compute # of extra words needed to store dimensions
 STATIC_INLINE int jl_array_ndimwords(uint32_t ndims)
