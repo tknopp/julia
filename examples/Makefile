@@ -5,7 +5,7 @@ override CFLAGS += $(JCFLAGS)
 override CXXFLAGS += $(JCXXFLAGS)
 
 FLAGS = -Wall -Wno-strict-aliasing -fno-omit-frame-pointer \
-	-I$(JULIAHOME)/src -I$(JULIAHOME)/src/support -I$(BUILD)/include $(CFLAGS) 
+	-I$(JULIAHOME)/src -I$(JULIAHOME)/src/support -I$(BUILD)/include $(CFLAGS) -std=c99 -fopenmp
 
 DEBUGFLAGS += $(FLAGS)
 SHIPFLAGS += $(FLAGS)
@@ -27,9 +27,9 @@ release debug:
 	$(MAKE) embedding-$@
 
 %.o: %.c
-	@$(call PRINT_CC, $(CC) $(CPPFLAGS) $(CFLAGS) $(SHIPFLAGS) -c $< -o $@)
+	@$(call PRINT_CC, gcc $(CPPFLAGS) $(CFLAGS) $(SHIPFLAGS) -c $< -o $@)
 %.do: %.c
-	@$(call PRINT_CC, $(CC) $(CPPFLAGS) $(CFLAGS) $(DEBUGFLAGS) -c $< -o $@)
+	@$(call PRINT_CC, gcc $(CPPFLAGS) $(CFLAGS) $(DEBUGFLAGS) -c $< -o $@)
 
 embedding: $(BUILD)/bin/embedding$(EXE)
 embedding-debug: $(BUILD)/bin/embedding-debug$(EXE)

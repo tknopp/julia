@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <math.h>
 
+#include<pthread.h>
+pthread_mutex_t lock;
+
 double my_c_sqrt(double x)
 {
     return sqrt(x);
@@ -51,8 +54,8 @@ int main()
       JL_GC_PUSH1(&x);
 
       double* xData = jl_array_data(x);
-
-      for(size_t i=0; i<jl_array_len(x); i++)
+size_t i;
+      for(i=0; i<jl_array_len(x); i++)
         xData[i] = i;
 
       jl_function_t *func  = jl_get_function(jl_base_module, "reverse!");
@@ -93,6 +96,42 @@ int main()
           printf("%s \n", jl_get_exception_str( jl_exception_occurred() ) );
     }
 
+
+
+    
+    {
+      // define julia function and call it
+
+
+      if (pthread_mutex_init(&lock, NULL) != 0)
+      {
+        printf("\n mutex init failed\n");
+        return 1;
+      }
+
+
+
+      jl_eval_string("my_func(x) = 2*x");
+
+      jl_function_t *func = jl_get_function(jl_current_module, "my_func");
+      int i;
+      jl_gc_disable();
+      #pragma omp parallel for
+      for(i=0;i < 100; i++)
+      {
+
+        jl_value_t* arg = jl_box_float64((double)i);
+        pthread_mutex_lock(&lock);
+        jl_value_t* retJ = jl_call1(func, arg);
+        pthread_mutex_unlock(&lock);
+        double ret = jl_unbox_float64(retJ);
+
+        printf("my_func() = %f\n", ret);
+      }
+
+    pthread_mutex_destroy(&lock);
+
+    }
 
     return 0;
 }
