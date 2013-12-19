@@ -4,6 +4,8 @@ Julia v0.3.0 Release Notes
 New language features
 ---------------------
 
+  * Greatly enhanced performance for passing and returning tuples ([#4042]).
+
 New library functions
 ---------------------
 
@@ -35,6 +37,12 @@ Library improvements
   * Triple-quoted regex strings, `r"""..."""` ([#4934]).
 
   * New string type, `UTF16String` ([#4930]).
+
+  * `CharString` is renamed to `UTF32String` ([#4943]).
+
+  * Faster sparse `kron` ([#4958]).
+
+  * `rand` now supports arbitrary `Ranges` arguments ([#5059]).
 
 Deprecated or removed
 ---------------------

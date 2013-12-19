@@ -341,6 +341,17 @@ A1 = randn(4,4) + im*randn(4,4)
 A2 = A1 + A1'
 @test_approx_eq expm(A2) expm(Hermitian(A2))
 
+# complex exponential (issue #5116)
+A = [0.  0.  0.  0.
+     0.  0. -im  0.
+     0. im   0.  0.
+     0.  0.  0.  0.]
+
+@test_approx_eq expm(A) [1 0                     0                    0
+                         0 1.543080634815244    -1.1752011936438016im 0
+                         0 1.1752011936438016im  1.543080634815244    0
+                         0 0                     0                    1]
+
 # matmul for types w/o sizeof (issue #1282)
 A = Array(Complex{Int},10,10)
 A[:] = complex(1,1)
@@ -437,8 +448,14 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
     W = Woodbury(T, U, C, V)
     F = full(W)
     @test_approx_eq W*v F*v
-    @test_approx_eq W\v F\v
+    iFv = F\v
+    @test_approx_eq W\v iFv
     @test_approx_eq det(W) det(F)
+    iWv = similar(iFv)
+    if elty != Int
+        Base.LinAlg.solve!(iWv, W, v)
+        @test_approx_eq iWv iFv
+    end
 
     # Diagonal
     D = Diagonal(d)
@@ -479,6 +496,39 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
     # issue 1490
     @test_approx_eq_eps det(ones(elty, 3,3)) zero(elty) 3*eps(real(one(elty)))
     end
+end
+
+# Generic BLAS tests
+srand(100)
+# syr2k! and her2k!
+for elty in (Float32, Float64, Complex64, Complex128)
+    U = randn(5,2)
+    V = randn(5,2)
+    if elty == Complex64 || elty == Complex128
+        U = complex(U, U)
+        V = complex(V, V)
+    end
+    U = convert(Array{elty, 2}, U)
+    V = convert(Array{elty, 2}, V)
+    @test_approx_eq tril(LinAlg.BLAS.syr2k('L','N',U,V)) tril(U*V.' + V*U.')
+    @test_approx_eq triu(LinAlg.BLAS.syr2k('U','N',U,V)) triu(U*V.' + V*U.')
+    @test_approx_eq tril(LinAlg.BLAS.syr2k('L','T',U,V)) tril(U.'*V + V.'*U)
+    @test_approx_eq triu(LinAlg.BLAS.syr2k('U','T',U,V)) triu(U.'*V + V.'*U)        
+end
+
+for elty in (Complex64, Complex128)
+    U = randn(5,2)
+    V = randn(5,2)
+    if elty == Complex64 || elty == Complex128
+        U = complex(U, U)
+        V = complex(V, V)
+    end
+    U = convert(Array{elty, 2}, U)
+    V = convert(Array{elty, 2}, V)
+    @test_approx_eq tril(LinAlg.BLAS.her2k('L','N',U,V)) tril(U*V' + V*U')
+    @test_approx_eq triu(LinAlg.BLAS.her2k('U','N',U,V)) triu(U*V' + V*U')
+    @test_approx_eq tril(LinAlg.BLAS.her2k('L','C',U,V)) tril(U'*V + V'*U)
+    @test_approx_eq triu(LinAlg.BLAS.her2k('U','C',U,V)) triu(U'*V + V'*U)        
 end
 
 # LAPACK tests

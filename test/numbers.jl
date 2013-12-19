@@ -1162,22 +1162,22 @@ end
 @test iround(Int, 0.5) == 1
 @test iround(Int, prevfloat(0.5)) == 0
 @test iround(Int, -0.5) == -1
-@test iround(Int, prevfloat(-0.5)) == 0
+@test iround(Int, nextfloat(-0.5)) == 0
 
 @test iround(Uint, 0.5) == 1
 @test iround(Uint, prevfloat(0.5)) == 0
 @test_throws iround(Uint, -0.5)
-@test iround(Uint, prevfloat(-0.5)) == 0
+@test iround(Uint, nextfloat(-0.5)) == 0
 
 @test iround(Int, 0.5f0) == 1
 @test iround(Int, prevfloat(0.5f0)) == 0
 @test iround(Int, -0.5f0) == -1
-@test iround(Int, prevfloat(-0.5f0)) == 0
+@test iround(Int, nextfloat(-0.5f0)) == 0
 
 @test iround(Uint, 0.5f0) == 1
 @test iround(Uint, prevfloat(0.5f0)) == 0
 @test_throws iround(Uint, -0.5f0)
-@test iround(Uint, prevfloat(-0.5f0)) == 0
+@test iround(Uint, nextfloat(-0.5f0)) == 0
 
 # numbers that can't be rounded by trunc(x+0.5)
 @test iround(Int64, 2.0^52 + 1) == 4503599627370497
@@ -1284,6 +1284,8 @@ end
 @test 0xf.1P1 === 30.125
 @test 0xf.fP0 === 15.9375
 @test 0xf.fP1 === 31.875
+
+@test -0x1.0p2 === -4.0
 
 # eps / realmin / realmax
 @test 0x1p-52 == eps()
@@ -1576,3 +1578,30 @@ for a = -1:1
 end
 @test_throws nextpow(2,0)
 @test_throws prevpow(2,0)
+
+@test nextprod([2,3,5],30) == 30
+@test nextprod([2,3,5],33) == 36
+
+@test nextfloat(0.0) == 5.0e-324
+@test prevfloat(0.0) == -5.0e-324
+@test nextfloat(-0.0) == 5.0e-324
+@test prevfloat(-0.0) == -5.0e-324
+@test nextfloat(-5.0e-324) == 0.0
+@test prevfloat(5.0e-324) == 0.0
+@test nextfloat(-1.0) > -1.0
+@test prevfloat(-1.0) < -1.0
+@test nextfloat(nextfloat(0.0),-2) == -5.0e-324
+@test nextfloat(prevfloat(0.0), 2) ==  5.0e-324
+
+@test eps(realmax(Float64)) == 1.99584030953472e292
+@test eps(-realmax(Float64)) == 1.99584030953472e292
+
+# modular multiplicative inverses of odd numbers via exponentiation
+
+for T = (Uint8,Int8,Uint16,Int16,Uint32,Int32,Uint64,Int64,Uint128,Int128)
+    for n = 1:2:1000
+        @test convert(T,n*(n^typemax(T))) == one(T)
+        n = rand(T) | one(T)
+        @test convert(T,n*(n^typemax(T))) == one(T)
+    end
+end

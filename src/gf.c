@@ -444,6 +444,9 @@ static int is_kind(jl_value_t *v)
 static jl_value_t *ml_matches(jl_methlist_t *ml, jl_value_t *type,
                               jl_sym_t *name, int lim);
 
+pthread_mutex_t jl_lock;
+
+
 static jl_function_t *cache_method(jl_methtable_t *mt, jl_tuple_t *type,
                                    jl_function_t *method, jl_tuple_t *decl,
                                    jl_tuple_t *sparams)
@@ -1108,7 +1111,7 @@ jl_methlist_t *jl_method_list_insert(jl_methlist_t **pml, jl_tuple_t *type,
         if (jl_args_morespecific((jl_value_t*)type, (jl_value_t*)l->sig))
             break;
         if (check_amb) {
-            check_ambiguous(*pml, (jl_tuple_t*)type, l,
+            check_ambiguous(*pml, type, l,
                             method->linfo ? method->linfo->name :
                             anonymous_sym, method->linfo);
         }
@@ -1356,7 +1359,8 @@ JL_CALLABLE(jl_apply_generic)
     }
     assert(!mfunc->linfo || !mfunc->linfo->inInference);
 
-    return jl_apply(mfunc, args, nargs);
+    jl_value_t*ret = jl_apply(mfunc, args, nargs);
+  return ret;
 }
 
 // invoke()

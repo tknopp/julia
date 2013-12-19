@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 
-#include<pthread.h>
+//#include<pthread.h>
 pthread_mutex_t lock;
 
 double my_c_sqrt(double x)
@@ -12,6 +12,18 @@ double my_c_sqrt(double x)
 
 int main()
 {
+      if (pthread_mutex_init(&jl_lock, NULL) != 0)
+      {
+        printf("\n mutex init failed\n");
+        return 1;
+      }
+
+      if (pthread_mutex_init(&lock, NULL) != 0)
+      {
+        printf("\n mutex init failed\n");
+        return 1;
+      }
+
     jl_init(NULL);
 
     {
@@ -103,34 +115,39 @@ size_t i;
       // define julia function and call it
 
 
-      if (pthread_mutex_init(&lock, NULL) != 0)
-      {
-        printf("\n mutex init failed\n");
-        return 1;
-      }
 
 
 
-      jl_eval_string("my_func(x) = 2*x");
 
-      jl_function_t *func = jl_get_function(jl_current_module, "my_func");
+      jl_function_t *func = (jl_function_t*) jl_eval_string("my_func(x) = sin( norm(2*x*ones(30)) )");
+
+//      jl_function_t *func = jl_get_function(jl_current_module, "sin");
       int i;
-      jl_gc_disable();
+//jl_gc_disable();
+      jl_value_t* arg = jl_box_float64((double)0);
+      //pthread_mutex_lock(&lock);
+      jl_call1(func, arg);
+
+      //func = jl_get_specialization(func, jl_tuple1(jl_float64_type));
+      //jl_function_ptr(func, jl_float64_type, jl_tuple1(jl_float64_type));
+
+      //
       #pragma omp parallel for
-      for(i=0;i < 100; i++)
+      for(i=0;i < 4; i++)
       {
 
         jl_value_t* arg = jl_box_float64((double)i);
-        pthread_mutex_lock(&lock);
+        //pthread_mutex_lock(&lock);
+        //jl_value_t* retJ = jl_apply(func, &arg, 1);
         jl_value_t* retJ = jl_call1(func, arg);
-        pthread_mutex_unlock(&lock);
+        //pthread_mutex_unlock(&lock);
         double ret = jl_unbox_float64(retJ);
 
         printf("my_func() = %f\n", ret);
       }
 
-    pthread_mutex_destroy(&lock);
-
+    pthread_mutex_destroy(&jl_lock);
+pthread_mutex_destroy(&lock);
     }
 
     return 0;

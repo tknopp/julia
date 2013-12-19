@@ -1,5 +1,7 @@
 {
   global:
+    alloc_*w;
+    allocobj;
     asprintf;
     bitvector_any1;
     bitvector_count;
@@ -19,7 +21,8 @@
     ios_fd;
     ios_file;
     ios_flush;
-    ios_get_readonly;
+    ios_get_readable;
+    ios_get_writable;
     ios_getc;
     ios_getutf8;
     ios_mem;
@@ -50,8 +53,10 @@
     jl_alloc_array_2d;
     jl_alloc_array_3d;
     jl_alloc_cell_1d;
+    jl_alloc_tuple;
     jl_cell_1d_push;
     jl_cell_1d_push2;
+    jl_checked_assignment;
     jl_apply_generic;
     jl_array_del_beg;
     jl_array_del_end;
@@ -69,14 +74,10 @@
     jl_base_module;
     jl_boundp;
     jl_breakpoint;
+    jl_declare_constant;
     jl_defines_or_exports_p;
-    jl_box_int32;
-    jl_box_int64;
-    jl_unbox_int32;
-    jl_unbox_int64;
-    jl_unbox_float32;
-    jl_unbox_float64;
-    jl_unbox_voidpointer;
+    jl_box_*;
+    jl_unbox_*;
     jl_callback;
     jl_clear_input;
     jl_close_uv;
@@ -98,7 +99,9 @@
     jl_dlsym;
     jl_dlsym_e;
     jl_dump_function;
+    jl_f_*;
     jl_function_ptr;
+    jl_egal;
     jl_enable_color;
     jl_enable_inference;
     jl_enq_send_req;
@@ -109,6 +112,7 @@
     jl_eqtable_put;
     jl_eqtable_pop;
     jl_errno;
+    jl_error;
     jl_errorexception_type;
     jl_exception_in_transit;
     jl_exit;
@@ -118,6 +122,8 @@
     jl_eval_string;
     jl_exception_occurred;
     jl_exception_clear;
+    jl_tuple;
+    jl_type_error_rt;
     jl_typeof_str;
     jl_typename_str;
     jl_array_eltype;
@@ -165,6 +171,9 @@
     jl_getutf8;
     jl_global_event_loop;
     jl_hrtime;
+    jl_idle_init;
+    jl_idle_start;
+    jl_idle_stop;
     jl_init_frontend;
     jl_init_pipe;
     jl_install_sigint_handler;
@@ -182,6 +191,7 @@
     jl_listen;
     jl_load_;
     jl_load;
+    jl_load_and_lookup;
     jl_load_dynamic_library;
     jl_load_dynamic_library_e;
     jl_load_file_string;
@@ -195,8 +205,10 @@
     jl_make_async;
     jl_make_pipe;
     jl_make_tcp;
+    jl_make_timer;
     jl_matching_methods;
     jl_match_method;
+    jl_method_def;
     jl_mmap;
     jl_module_export;
     jl_module_names;
@@ -206,6 +218,7 @@
     jl_module_usings;
     jl_native_alignment;
     jl_next_from_addrinfo;
+    jl_new_box;
     jl_is_char_signed;
     jl_nb_available;
     jl_new_array;
@@ -226,6 +239,7 @@
     jl_pchar_to_string;
     jl_pgcstack;
     jl_prepare_ast;
+    jl_ast_rettype;
     jl_print_int64;
     jl_print_symbol;
     jl_printf;
@@ -248,6 +262,7 @@
     jl_read_buffer;
     jl_readdir;
     jl_readuntil;
+    jl_RTLD_DEFAULT_handle;
     jl_throw;
     jl_rethrow;
     jl_rethrow_other;
@@ -257,14 +272,14 @@
     jl_lookup_code_address;
     jl_read_sonames;
     rec_backtrace;
-    profile_init;
-    profile_get_data;
-    profile_len_data;
-    profile_maxlen_data;
-    profile_clear_data;
-    profile_start_timer;
-    profile_stop_timer;
-    profile_is_running;
+    jl_profile_init;
+    jl_profile_get_data;
+    jl_profile_len_data;
+    jl_profile_maxlen_data;
+    jl_profile_clear_data;
+    jl_profile_start_timer;
+    jl_profile_stop_timer;
+    jl_profile_is_running;
     jl_reshape_array;
     jl_restore_system_image;
     jl_run_event_loop;
@@ -292,6 +307,8 @@
     jl_tcp6_connect;
     jl_spawn;
     jl_stackovf_exception;
+    jl_start_io_thread;
+    jl_start_reading;
     jl_stat;
     jl_stat_blksize;
     jl_stat_blocks;
@@ -330,6 +347,7 @@
     jl_tcp_init;
     jl_test;
     jl_poll_start;
+    jl_pop_handler;
     jl_fs_poll_start;
     jl_fs_event_init;
     jl_fs_unlink;
@@ -352,6 +370,7 @@
     jl_write;
     jl_write_no_copy;
     jl_value_ptr;
+    jl_value_to_pointer;
     jl_zero_subnormals;
     julia_free;
     julia_home;
@@ -367,8 +386,10 @@
     open_any_tcp_port;
     repl_callback_enable;
     jl_init_repl;
+    restore_arg_area_loc;
     restore_signals;
     rl_clear_input;
+    save_arg_area_loc;
     jl_SC_CLK_TCK;
     jl_getpagesize;
     u8_isvalid;
@@ -378,6 +399,16 @@
     wcwidth;
     uv_*;
     add_library_mapping;
+
+    jl_stackovf_exception;
+    jl_memory_exception;
+    jl_diverror_exception;
+    jl_domain_exception;
+    jl_overflow_exception;
+    jl_inexact_exception;
+    jl_undefref_exception;
+    jl_interrupt_exception;
+    jl_bounds_exception;
 
     /* freebsd */
     environ;
