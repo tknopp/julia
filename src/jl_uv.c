@@ -25,6 +25,7 @@
 #endif
 
 #include "julia.h"
+#include "julia_internal.h"
 #include "support/ios.h"
 #include "uv.h"
 
@@ -34,6 +35,13 @@ extern "C" {
 #endif
 
 /** libuv callbacks */
+
+enum CALLBACK_TYPE { CB_PTR, CB_INT32, CB_INT64 };
+#ifdef _P64
+#define CB_INT CB_INT64
+#else
+#define CB_INT CB_INT32
+#endif
 
 /*
  * Notes for adding new callbacks
@@ -78,20 +86,20 @@ int base_module_conflict = 0; //set to 1 if Base is getting redefined since it m
 // warning: this is defined without the standard do {...} while (0) wrapper, since I wanted ret to escape
 // warning: during bootstrapping, callbacks will be called twice if a MethodError occured at ANY time during callback call
 // Use:  JULIA_CB(hook, arg1, numberOfAdditionalArgs, arg2Type, arg2, ..., argNType, argN)
-#define JULIA_CB(hook, ...) \
+#define JULIA_CB(hook,val, ...) \
     jl_value_t *ret; \
     if (!base_module_conflict) { \
-        ret = jl_callback_call(JULIA_HOOK(hook),__VA_ARGS__); \
+        ret = jl_callback_call(JULIA_HOOK(hook),(jl_value_t*)val,__VA_ARGS__); \
     } else { \
         JL_TRY { \
-            ret = jl_callback_call(JULIA_HOOK(hook),__VA_ARGS__); \
+            ret = jl_callback_call(JULIA_HOOK(hook),(jl_value_t*)val,__VA_ARGS__); \
             /* jl_puts(#hook " original succeeded\n",jl_uv_stderr); */ \
         } \
         JL_CATCH { \
             if (jl_typeof(jl_exception_in_transit) == (jl_value_t*)jl_methoderror_type) { \
                 /* jl_puts("\n" #hook " being retried with new Base bindings --> ",jl_uv_stderr); */ \
                 jl_function_t *cb_func = JULIA_HOOK_((jl_module_t*)jl_get_global(jl_main_module, jl_symbol("Base")), hook); \
-                ret = jl_callback_call(cb_func,__VA_ARGS__); \
+                ret = jl_callback_call(cb_func,(jl_value_t*)val,__VA_ARGS__); \
                 /* jl_puts(#hook " succeeded\n",jl_uv_stderr); */ \
             } else { \
                 jl_rethrow(); \
@@ -128,6 +136,7 @@ jl_value_t *jl_callback_call(jl_function_t *f,jl_value_t *val,int count,...)
             break;
         }
     }
+    va_end(argp);
     v = jl_apply(f,(jl_value_t**)argv,count);
     JL_GC_POP();
     return v;
@@ -149,7 +158,7 @@ DLLEXPORT void jl_uv_shutdownCallback(uv_shutdown_t* req, int status)
      * request.
      */
     if (status != UV__ECANCELED && !uv_is_closing((uv_handle_t*)req->handle)) {
-        uv_close((uv_handle_t*) req->handle, &jl_uv_closeHandle);
+        uv_close((uv_handle_t*)req->handle, &jl_uv_closeHandle);
     }
     free(req);
 }
@@ -173,7 +182,7 @@ DLLEXPORT uv_buf_t jl_uv_alloc_buf(uv_handle_t *handle, size_t suggested_size)
     if (!jl_is_tuple(ret) || !jl_is_pointer(jl_t0(ret)) || !jl_is_int32(jl_t1(ret))) {
         jl_error("jl_alloc_buf: Julia function returned invalid value for buffer allocation callback");
     }
-    buf.base = jl_unbox_voidpointer(jl_t0(ret));
+    buf.base = (char*)jl_unbox_voidpointer(jl_t0(ret));
     buf.len = jl_unbox_int32(jl_t1(ret));
     return buf;
 }
@@ -267,7 +276,8 @@ DLLEXPORT void jl_close_uv(uv_handle_t *handle)
     if (handle->type==UV_TTY)
         uv_tty_set_mode((uv_tty_t*)handle,0);
 
-    if ( (handle->type == UV_NAMED_PIPE || handle->type == UV_TCP) && uv_is_writable( (uv_stream_t *) handle)) { 
+    if ((handle->type == UV_NAMED_PIPE || handle->type == UV_TCP) &&
+        uv_is_writable((uv_stream_t*)handle)) {
         // Make sure that the stream has not already been marked closed in Julia.
         // A double shutdown would cause the process to hang on exit.
         JULIA_CB(isopen, handle->data, 0);
@@ -278,7 +288,7 @@ DLLEXPORT void jl_close_uv(uv_handle_t *handle)
             return;
         }
 
-        uv_shutdown_t *req = malloc(sizeof(uv_shutdown_t));
+        uv_shutdown_t *req = (uv_shutdown_t*)malloc(sizeof(uv_shutdown_t));
         req->data = 0;
         /*
          * We are explicity ignoring the error here for the following reason:
@@ -329,7 +339,7 @@ DLLEXPORT int jl_spawn(char *name, char **argv, uv_loop_t *loop,
                        uv_handle_type stdin_type, uv_pipe_t *stdin_pipe,
                        uv_handle_type stdout_type, uv_pipe_t *stdout_pipe,
                        uv_handle_type stderr_type, uv_pipe_t *stderr_pipe, 
-                       int detach, char **env)
+                       int detach, char **env, char *cwd)
 {
     uv_process_options_t opts;
     uv_stdio_container_t stdio[3];
@@ -341,7 +351,7 @@ DLLEXPORT int jl_spawn(char *name, char **argv, uv_loop_t *loop,
 #else
     opts.flags = UV_PROCESS_RESET_SIGPIPE;
 #endif
-    opts.cwd = NULL;
+    opts.cwd = cwd;
     opts.args = argv;
     if (detach)
         opts.flags |= UV_PROCESS_DETACHED;
@@ -362,7 +372,7 @@ DLLEXPORT int jl_spawn(char *name, char **argv, uv_loop_t *loop,
 #include <time.h>
 DLLEXPORT struct tm* localtime_r(const time_t *t, struct tm *tm)
 {
-    auto struct tm *tmp = localtime(t); //localtime is reentrant on windows
+    struct tm *tmp = localtime(t); //localtime is reentrant on windows
     if (tmp)
         *tm = *tmp;
     return tmp;
@@ -496,7 +506,9 @@ DLLEXPORT int jl_write_copy(uv_stream_t *stream, const char *str, size_t n, uv_w
     JL_SIGATOMIC_BEGIN();
     char *data = (char*)(uvw+1);
     memcpy(data,str,n);
-    uv_buf_t buf[]  = {{.base = data,.len=n}};
+    uv_buf_t buf[1];
+    buf[0].base = data;
+    buf[0].len = n;
     uvw->data = NULL;
     int err = uv_write(uvw,stream,buf,1,(uv_write_cb)writecb);
     JL_SIGATOMIC_END();
@@ -518,8 +530,8 @@ DLLEXPORT int jl_putc(unsigned char c, uv_stream_t *stream)
                 return err ? 0 : 1;
             }
             else {
-                uv_write_t *uvw = malloc(sizeof(uv_write_t)+1);
-                err = jl_write_copy(stream,(char*)&c,1,uvw,&jl_uv_writecb);
+                uv_write_t *uvw = (uv_write_t*)malloc(sizeof(uv_write_t)+1);
+                err = jl_write_copy(stream,(char*)&c,1,uvw, (void*)&jl_uv_writecb);
                 if (err < 0) {
                     free(uvw);
                     return 0;
@@ -537,7 +549,9 @@ DLLEXPORT int jl_putc(unsigned char c, uv_stream_t *stream)
 
 DLLEXPORT int jl_write_no_copy(uv_stream_t *stream, char *data, size_t n, uv_write_t *uvw, void *writecb)
 {
-    uv_buf_t buf[]  = {{.base = data,.len=n}};
+    uv_buf_t buf[1];
+    buf[0].base = data;
+    buf[0].len = n;
     JL_SIGATOMIC_BEGIN();
     int err = uv_write(uvw,stream,buf,1,(uv_write_cb)writecb);
     uvw->data = NULL;
@@ -547,7 +561,7 @@ DLLEXPORT int jl_write_no_copy(uv_stream_t *stream, char *data, size_t n, uv_wri
 
 DLLEXPORT int jl_putc_copy(unsigned char c, uv_stream_t *stream, void *uvw, void *writecb)
 {
-    return jl_write_copy(stream,(char *)&c,1,uvw,writecb);
+    return jl_write_copy(stream,(char *)&c,1,(uv_write_t*)uvw,writecb);
 }
 
 DLLEXPORT int jl_pututf8(uv_stream_t *s, uint32_t wchar )
@@ -565,7 +579,7 @@ DLLEXPORT int jl_pututf8_copy(uv_stream_t *s, uint32_t wchar, void *uvw, void *w
     if (wchar < 0x80)
         return jl_putc_copy((int)wchar, s, uvw, writecb);
     size_t n = u8_toutf8(buf, 8, &wchar, 1);
-    return jl_write_copy(s, buf, n, uvw, writecb);
+    return jl_write_copy(s, buf, n, (uv_write_t*)uvw, writecb);
 }
 
 DLLEXPORT size_t jl_write(uv_stream_t *stream, const char *str, size_t n)
@@ -585,8 +599,8 @@ DLLEXPORT size_t jl_write(uv_stream_t *stream, const char *str, size_t n)
             return err ? 0 : n;
         }
         else {
-            uv_write_t *uvw = malloc(sizeof(uv_write_t)+n);
-            err = jl_write_copy(stream,str,n,uvw,&jl_uv_writecb);
+            uv_write_t *uvw = (uv_write_t*)malloc(sizeof(uv_write_t)+n);
+            err = jl_write_copy(stream,str,n,uvw, (void*)&jl_uv_writecb);
             if (err < 0) {
                 free(uvw);
                 return 0;
@@ -706,7 +720,7 @@ DLLEXPORT struct sockaddr_in *jl_uv_interface_address_sockaddr(uv_interface_addr
 
 DLLEXPORT int jl_getaddrinfo(uv_loop_t *loop, const char *host, const char *service, jl_function_t *cb)
 {
-    uv_getaddrinfo_t *req = malloc(sizeof(uv_getaddrinfo_t));
+    uv_getaddrinfo_t *req = (uv_getaddrinfo_t*)malloc(sizeof(uv_getaddrinfo_t));
     struct addrinfo hints;
 
     memset (&hints, 0, sizeof (hints));
@@ -772,7 +786,7 @@ DLLEXPORT void jl_sockaddr_set_port(struct sockaddr_storage *addr,uint16_t port)
 DLLEXPORT int jl_tcp4_connect(uv_tcp_t *handle,uint32_t host, uint16_t port)
 {
     struct sockaddr_in addr;
-    uv_connect_t *req = malloc(sizeof(uv_connect_t));
+    uv_connect_t *req = (uv_connect_t*)malloc(sizeof(uv_connect_t));
     req->data = 0;
     memset(&addr, 0, sizeof(struct sockaddr_in));
     addr.sin_family = AF_INET;
@@ -784,7 +798,7 @@ DLLEXPORT int jl_tcp4_connect(uv_tcp_t *handle,uint32_t host, uint16_t port)
 DLLEXPORT int jl_tcp6_connect(uv_tcp_t *handle, void *host, uint16_t port)
 {
     struct sockaddr_in6 addr;
-    uv_connect_t *req = malloc(sizeof(uv_connect_t));
+    uv_connect_t *req = (uv_connect_t*)malloc(sizeof(uv_connect_t));
     req->data = 0;
     memset(&addr, 0, sizeof(struct sockaddr_in6));
     addr.sin6_family = AF_INET6;
@@ -795,7 +809,7 @@ DLLEXPORT int jl_tcp6_connect(uv_tcp_t *handle, void *host, uint16_t port)
 
 DLLEXPORT int jl_connect_raw(uv_tcp_t *handle,struct sockaddr_storage *addr)
 {
-    uv_connect_t *req = malloc(sizeof(uv_connect_t));
+    uv_connect_t *req = (uv_connect_t*)malloc(sizeof(uv_connect_t));
     req->data = 0;
     if (addr->ss_family==AF_INET) {
         return uv_tcp_connect(req,handle,*((struct sockaddr_in*)addr),&jl_uv_connectcb);
@@ -814,8 +828,12 @@ DLLEXPORT char *jl_ios_buf_base(ios_t *ios)
 
 DLLEXPORT uv_lib_t *jl_wrap_raw_dl_handle(void *handle)
 {
-    uv_lib_t *lib = malloc(sizeof(uv_lib_t));
+    uv_lib_t *lib = (uv_lib_t*)malloc(sizeof(uv_lib_t));
+    #ifdef _OS_WINDOWS_
+    lib->handle=(HMODULE)handle;
+    #else
     lib->handle=handle;
+    #endif
     lib->errmsg=NULL;
     return lib;
 }
@@ -864,7 +882,7 @@ DLLEXPORT void *jl_uv_handle_data(uv_handle_t *handle)
 #ifndef _OS_WINDOWS_
 #if defined(__APPLE__)
 int uv___stream_fd(uv_stream_t* handle);
-#define uv__stream_fd(handle) (uv___stream_fd((uv_stream_t*) (handle)))
+#define uv__stream_fd(handle) (uv___stream_fd((uv_stream_t*)(handle)))
 #else
 #define uv__stream_fd(handle) ((handle)->io_watcher.fd)
 #endif /* defined(__APPLE__) */

@@ -9,7 +9,6 @@ export
     BLAS,
 
 # Types
-    BunchKaufman,
     SymTridiagonal,
     Tridiagonal,
     Bidiagonal,
@@ -19,6 +18,7 @@ export
     Cholesky,
     CholeskyPivoted,
     Eigen,
+    GeneralizedEigen,
     GeneralizedSVD,
     GeneralizedSchur,
     Hessenberg,
@@ -66,7 +66,6 @@ export
     sqrtm,
     eye,
     factorize,
-    factorize!,
     givens,
     gradient,
     hessfact,
@@ -96,7 +95,6 @@ export
     qrp,
     qrpfact!,
     qrpfact,
-    randsym,
     rank,
     rref,
     scale,
@@ -110,8 +108,6 @@ export
     svdfact,
     svdvals!,
     svdvals,
-    symmetrize!,
-    symmetrize_conj!,
     trace,
     transpose,
     tril,
@@ -200,7 +196,6 @@ include("linalg/factorization.jl")
 
 include("linalg/bunchkaufman.jl")
 include("linalg/triangular.jl")
-include("linalg/hermitian.jl")
 include("linalg/symmetric.jl")
 include("linalg/woodbury.jl")
 include("linalg/tridiag.jl")

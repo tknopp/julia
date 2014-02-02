@@ -23,8 +23,8 @@
 /patchelf-*
 /pcre-*
 /readline-*
-/readline62-*
 !readline-win.h
 /root
 /SuiteSparse-*
 /zlib-*
+/utf8proc-*

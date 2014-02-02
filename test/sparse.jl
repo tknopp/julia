@@ -30,7 +30,7 @@ se33_i32 = speye(Int32, 3, 3)
 @test all([se44 sz42 sz41_f32; sz34 se33_i32] == se77)
 
 # check mixed sparse-dense concatenation
-sz33 = spzeros(3)
+sz33 = spzeros(3, 3)
 de33 = eye(3)
 @test  all([se33 de33; sz33 se33] == full([se33 se33; sz33 se33 ]))
 
@@ -186,3 +186,6 @@ mfe22 = eye(Float64, 2)
 # issue #5386
 I,J,V = findnz(SparseMatrixCSC(2,1,[1,3],[1,2],[1.0,0.0]))
 @test length(I) == length(J) == length(V) == 1
+
+# issue #5437
+@test nnz(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2

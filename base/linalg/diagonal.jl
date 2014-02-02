@@ -5,6 +5,8 @@ type Diagonal{T} <: AbstractMatrix{T}
 end
 Diagonal(A::Matrix) = Diagonal(diag(A))
 
+convert{T<:Number,S<:Number}(::Type{Diagonal{T}}, A::Diagonal{S}) = T == S ? A : Diagonal(convert(Vector{T}, A.diag))
+
 size(D::Diagonal) = (length(D.diag),length(D.diag))
 size(D::Diagonal,d::Integer) = d<1 ? error("dimension out of range") : (d<=2 ? length(D.diag) : 1)
 
@@ -79,7 +81,7 @@ function \{TD<:Number,TA<:Number}(D::Diagonal{TD}, A::AbstractArray{TA,1})
     for j = 1:n
         for i = 1:m
             di = D.diag[i]
-            di==0 && throw(SingularException())
+            di==0 && throw(SingularException(i))
             C[i,j] = A[i,j] / di
         end
     end

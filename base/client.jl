@@ -60,7 +60,7 @@ function repl_cmd(cmd)
         end
         println(pwd())
     else
-        run(@windows? cmd : `$shell -i -c "($(shell_escape(cmd))) && true"`)
+        run(ignorestatus(@windows? cmd : `$shell -i -c "($(shell_escape(cmd))) && true"`))
     end
     nothing
 end
@@ -292,6 +292,10 @@ function process_options(args::Vector{UTF8String})
                 error("invalid option: ", args[i])
             end
         elseif args[i][1]!='-'
+            if startup
+                load_juliarc()
+                startup = false
+            end
             # program
             repl = false
             # remove julia's arguments
@@ -313,10 +317,12 @@ isinteractive() = (is_interactive::Bool)
 
 function init_load_path()
     vers = "v$(VERSION.major).$(VERSION.minor)"
-    global const LOAD_PATH = ByteString[
-        abspath(JULIA_HOME,"..","local","share","julia","site",vers),
-        abspath(JULIA_HOME,"..","share","julia","site",vers)
-    ]
+    global const LOAD_PATH = ByteString[]
+    if haskey(ENV,"JULIA_LOAD_PATH")
+        prepend!(LOAD_PATH, split(ENV["JULIA_LOAD_PATH"], @windows? ';' : ':'))    
+    end
+    push!(LOAD_PATH,abspath(JULIA_HOME,"..","local","share","julia","site",vers))
+    push!(LOAD_PATH,abspath(JULIA_HOME,"..","share","julia","site",vers))
 end
 
 function init_sched()

@@ -13,16 +13,17 @@
 #endif
 
 static int lisp_prompt = 0;
+static int codecov=0;
 static char *program = NULL;
 char *image_file = NULL;
 int tab_width = 2;
-char *build_mode = NULL;
 
 static const char *usage = "julia [options] [program] [args...]\n";
 static const char *opts =
     " -v --version             Display version information\n"
+    " -h --help                Print this message\n"
     " -q --quiet               Quiet startup without banner\n"
-    " -H --home <dir>          Load files relative to <dir>\n"
+    " -H --home <dir>          Set location of julia executable\n"
     " -T --tab <size>          Set REPL tab width to <size>\n\n"
 
     " -e --eval <expr>         Evaluate <expr>\n"
@@ -39,17 +40,19 @@ static const char *opts =
     " -F                       Load ~/.juliarc.jl, then handle remaining inputs\n"
     " --color=yes|no           Enable or disable color text\n\n"
 
-    " -h --help                Print this message\n";
+    " --code-coverage          Count executions of source lines\n";
 
-void parse_opts(int *argcp, char ***argvp) {
+void parse_opts(int *argcp, char ***argvp)
+{
     static char* shortopts = "+H:T:hJ:";
     static struct option longopts[] = {
-        { "home",        required_argument, 0, 'H' },
-        { "tab",         required_argument, 0, 'T' },
-        { "build",       required_argument, 0, 'b' },
-        { "lisp",        no_argument,       &lisp_prompt, 1 },
-        { "help",        no_argument,       0, 'h' },
-        { "sysimage",    required_argument, 0, 'J' },
+        { "home",          required_argument, 0, 'H' },
+        { "tab",           required_argument, 0, 'T' },
+        { "build",         required_argument, 0, 'b' },
+        { "lisp",          no_argument,       &lisp_prompt, 1 },
+        { "help",          no_argument,       0, 'h' },
+        { "sysimage",      required_argument, 0, 'J' },
+        { "code-coverage", no_argument,       &codecov, 1 },
         { 0, 0, 0, 0 }
     };
     int c;
@@ -74,7 +77,7 @@ void parse_opts(int *argcp, char ***argvp) {
             tab_width = atoi(optarg);
             break;
         case 'b':
-            build_mode = strdup(optarg);
+            jl_compileropts.build_path = strdup(optarg);
             if (!imagepathspecified)
                 image_file = NULL;
             break;
@@ -91,6 +94,7 @@ void parse_opts(int *argcp, char ***argvp) {
             exit(1);
         }
     }
+    jl_compileropts.code_coverage = codecov;
     if (!julia_home) {
         julia_home = getenv("JULIA_HOME");
         if (julia_home) {
@@ -114,7 +118,7 @@ void parse_opts(int *argcp, char ***argvp) {
     }
     if (image_file) {
         if (image_file[0] != PATHSEP) {
-            struct stat stbuf;
+            uv_stat_t stbuf;
             char path[512];
             if (!imagepathspecified) {
                 // build time path relative to JULIA_HOME
@@ -151,8 +155,6 @@ static int exec_program(void)
  again: ;
     JL_TRY {
         if (err) {
-            //jl_lisp_prompt();
-            //return 1;
             jl_value_t *errs = jl_stderr_obj();
             jl_value_t *e = jl_exception_in_transit;
             if (errs != NULL) {
@@ -285,10 +287,9 @@ int main(int argc, char *argv[])
     libsupport_init();
     parse_opts(&argc, &argv);
     if (lisp_prompt) {
-        jl_init_frontend();
         jl_lisp_prompt();
         return 0;
     }
-    julia_init(lisp_prompt ? NULL : image_file, build_mode!=NULL);
-    return julia_trampoline(argc, argv, true_main, build_mode);
+    julia_init(lisp_prompt ? NULL : image_file);
+    return julia_trampoline(argc, argv, true_main);
 }

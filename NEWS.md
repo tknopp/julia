@@ -24,6 +24,9 @@ New language features
 
   * Structure fields can now be accessed by index ([#4806]).
 
+  * Unicode identifiers are normalized (NFC) so that different encodings
+    of equivalent strings are treated as the same identifier ([#5462]).
+
 New library functions
 ---------------------
 
@@ -33,7 +36,7 @@ New library functions
     a GitHub pull request to the package author.
 
   * `mod2pi` function ([#4799], [#4862]).
- 
+
   * New functions `minmax` and `extrema` ([#5275]).
 
 Library improvements
@@ -47,6 +50,19 @@ Library improvements
   * The `Sys` module now includes convenient functions for working with
     dynamic library handles; `Sys.dllist` will list out all paths currently
     loaded via `dlopen`, and `Sys.dlpath` will lookup a path from a handle
+
+  * `readdlm` treats multiple whitespace characters as a single delimiter
+    by default (when no delimiter is specified). This is useful for reading
+    fixed-width or messy whitespace-delimited data ([#5403]).
+
+  * The Airy, Bessel, Hankel, and related functions (`airy*`,
+    `bessel*`, `hankel*`) now detect errors returned by the underlying 
+    AMOS library, throwing an `AmosException` in that case ([#4967]).
+
+  * `methodswith` now returns an array of `Method`s ([#5464]) rather
+    than just printing its results.
+
+  * `errno([code])` function to get or set the C library's `errno`.
 
   * Collections improvements
 
@@ -68,6 +84,11 @@ Library improvements
 
   * `Number` improvements
 
+    * The `ImaginaryUnit` type no longer exists. Instead, `im` is of type
+      `Complex{Bool}`. Making this work required changing the semantics of
+      boolean multiplication to approximately, `true * x = x` and
+      `false * x = zero(x)`, which can itself be considered useful ([#5468]).
+
     * `big` is now vectorized ([#4766])
 
     * `nextpow` and `prevpow` now return the `a^n` values instead of the
@@ -86,6 +107,10 @@ Library improvements
     * `CharString` is renamed to `UTF32String` ([#4943]).
 
   * `LinAlg` (linear algebra) improvements
+
+      * Balancing options for eigenvector calculations for general matrices ([#5428]).
+
+      * Mutating linear algebra functions no longer promote ([#5526]).
 
     * Sparse linear algebra
 
@@ -120,6 +145,22 @@ Library improvements
       * new LAPACK wrappers
         - condition number estimate `cond(A::Triangular)` ([#5255])
 
+    * Dense linear algebra for generic matrix element types
+
+      * LU factorization ([#5381] and [#5430])
+
+      * QR factorization ([#5526])
+
+  * New function `deleteat!` deletes a specified index or indices and
+    returns the updated collection
+
+  * `prevfloat` and `nextfloat` now saturate at -Inf and Inf, respectively, and
+    have otherwise been fixed to follow the IEEE-754 standard functions `nextDown`
+    and `nextUp` ([#5025]).
+
+  * The `setenv` function for external processes now accepts a `dir` keyword
+    argument for specifying the directory to start the child process in ([#4888]).
+
 Deprecated or removed
 ---------------------
 
@@ -133,8 +174,14 @@ Deprecated or removed
     argument specifying the floating point type to which they apply. The old
     behaviour and `[get/set/with]_bigfloat_rounding` functions are deprecated ([#5007])
 
-  * cholpfact and qrpfact are deprecated in favor of keyword arguments in 
-    cholfact and qrfact.
+  * `cholpfact` and `qrpfact` are deprecated in favor of keyword arguments in 
+    `cholfact(...,pivot=true)` and `qrfact(...,pivot=true)` ([#5330]) 
+
+  * `symmetrize!` is deprecated in favor of `Base.LinAlg.copytri!` ([#5427])
+
+  * `myindexes` has been renamed to `localindexes` ([#5475])
+
+  * `factorize!` is deprecated in favor of `factorize`. ([#5526])
 
 [#4042]: https://github.com/JuliaLang/julia/issues/4042
 [#5164]: https://github.com/JuliaLang/julia/issues/5164
@@ -169,8 +216,17 @@ Deprecated or removed
 [#4882]: https://github.com/JuliaLang/julia/issues/4882
 [#4806]: https://github.com/JuliaLang/julia/issues/4806
 [#5358]: https://github.com/JuliaLang/julia/pull/5358
+[#5381]: https://github.com/JuliaLang/julia/pull/5381
+[#5430]: https://github.com/JuliaLang/julia/pull/5430
 [a448e080]: https://github.com/JuliaLang/julia/commit/a448e080dc736c7fb326426dfcb2528be36973d3
 [5e3f074b]: https://github.com/JuliaLang/julia/commit/5e3f074b9173044a0a4219f9b285879ff7cec041
+[#4967]: https://github.com/JuliaLang/julia/pull/4967
+[#5428]: https://github.com/JuliaLang/julia/pull/5428
+[#5468]: https://github.com/JuliaLang/julia/pull/5468
+[#5025]: https://github.com/JuliaLang/julia/pull/5025
+[#4888]: https://github.com/JuliaLang/julia/pull/4888
+[#5475]: https://github.com/JuliaLang/julia/pull/5475
+[#5526]: https://github.com/JuliaLang/julia/pull/5526
 
 Julia v0.2.0 Release Notes
 ==========================
@@ -463,6 +519,9 @@ Miscellaneous changes
 
   * `julia-release-*` executables renamed to `julia-*`,
     and `libjulia-release` renamed to `libjulia` ([#4177]).
+
+  * Packages will now be installed in `.julia/vX.Y`, where
+    X.Y is the current Julia version.
 
 Bugfixes and performance updates
 --------------------------------

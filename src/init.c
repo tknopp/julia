@@ -25,6 +25,7 @@
 #endif
 
 #include "julia.h"
+#include "julia_internal.h"
 #include <stdio.h>
 
 #ifdef _OS_WINDOWS_
@@ -58,6 +59,11 @@ extern BOOL (WINAPI *hSymRefreshModuleList)(HANDLE);
 //#define _GNU_SOURCE
 #include <sched.h>   // for setting CPU affinity
 #endif
+
+char *julia_home = NULL;
+jl_compileropts_t jl_compileropts = { NULL, // build_path
+                                      0     // code_coverage
+};
 
 int jl_boot_file_loaded = 0;
 
@@ -150,7 +156,7 @@ volatile sig_atomic_t jl_signal_pending = 0;
 volatile sig_atomic_t jl_defer_signal = 0;
 
 #ifdef _OS_WINDOWS_
-void restore_signals()
+void restore_signals(void)
 {
     SetConsoleCtrlHandler(NULL, 0); //turn on ctrl-c handler
 }
@@ -302,13 +308,13 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
     EXCEPTION_POINTERS ExceptionInfo;
     ExceptionInfo.ExceptionRecord = ExceptionRecord;
     ExceptionInfo.ContextRecord = ContextRecord;
-    return _exception_handler(&ExceptionInfo,0);
+    return (EXCEPTION_DISPOSITION)_exception_handler(&ExceptionInfo,0);
 } 
 #endif
 
 #else // #ifdef _OS_WINDOWS_
 
-void restore_signals()
+void restore_signals(void)
 {
     sigset_t sset;
     sigemptyset(&sset);
@@ -336,7 +342,7 @@ struct uv_shutdown_queue { struct uv_shutdown_queue_item *first; struct uv_shutd
 
 static void jl_uv_exitcleanup_add(uv_handle_t* handle, struct uv_shutdown_queue *queue)
 {
-    struct uv_shutdown_queue_item *item = malloc(sizeof(struct uv_shutdown_queue_item));
+    struct uv_shutdown_queue_item *item = (struct uv_shutdown_queue_item*)malloc(sizeof(struct uv_shutdown_queue_item));
     item->h = handle;
     item->next = NULL;
     if (queue->last) queue->last->next = item;
@@ -347,14 +353,18 @@ static void jl_uv_exitcleanup_add(uv_handle_t* handle, struct uv_shutdown_queue 
 static void jl_uv_exitcleanup_walk(uv_handle_t* handle, void *arg)
 {
     if (handle != (uv_handle_t*)jl_uv_stdout && handle != (uv_handle_t*)jl_uv_stderr)
-        jl_uv_exitcleanup_add(handle, arg);
+        jl_uv_exitcleanup_add(handle, (struct uv_shutdown_queue*)arg);
 }
+
+void jl_write_coverage_data(void);
 
 DLLEXPORT void uv_atexit_hook()
 {
 #if defined(JL_GC_MARKSWEEP) && defined(GC_FINAL_STATS)
     jl_print_gc_stats(JL_STDERR);
 #endif
+    if (jl_compileropts.code_coverage)
+        jl_write_coverage_data();
     if (jl_base_module) {
         jl_value_t *f = jl_get_global(jl_base_module, jl_symbol("_atexit"));
         if (f!=NULL && jl_is_function(f)) {
@@ -476,10 +486,10 @@ void *init_stdio_handle(uv_file fd,int readable)
                 abort();
             }
             ((uv_tty_t*)handle)->data=0;
-            uv_tty_set_mode((void*)handle,0); //cooked stdio
+            uv_tty_set_mode((uv_tty_t*)handle,0); //cooked stdio
             break;
         case UV_FILE: 
-            file = malloc(sizeof(jl_uv_file_t));
+            file = (jl_uv_file_t*)malloc(sizeof(jl_uv_file_t));
             file->loop = jl_io_loop;
             file->type = UV_FILE;
             file->file = fd;
@@ -521,9 +531,9 @@ void *init_stdio_handle(uv_file fd,int readable)
 
 void init_stdio()
 {   //order must be 2,1,0
-    JL_STDERR = init_stdio_handle(2,0);
-    JL_STDOUT = init_stdio_handle(1,0);
-    JL_STDIN = init_stdio_handle(0,1);
+    JL_STDERR = (uv_stream_t*)init_stdio_handle(2,0);
+    JL_STDOUT = (uv_stream_t*)init_stdio_handle(1,0);
+    JL_STDIN = (uv_stream_t*)init_stdio_handle(0,1);
 }
 
 #ifndef _OS_WINDOWS_
@@ -587,7 +597,7 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
     ret = thread_get_state(thread,x86_EXCEPTION_STATE64,(thread_state_t)&exc_state,&exc_count);
     HANDLE_MACH_ERROR("thread_get_state(1)",ret);
     uint64_t fault_addr = exc_state.__faultvaddr;
-    if (is_addr_on_stack((void*) fault_addr)) {
+    if (is_addr_on_stack((void*)fault_addr)) {
         ret = thread_get_state(thread,x86_THREAD_STATE64,(thread_state_t)&state,&count);
         HANDLE_MACH_ERROR("thread_get_state(2)",ret);
         old_state = state;
@@ -622,10 +632,10 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
 
 #endif
 
-void julia_init(char *imageFile, int build_mode)
+void julia_init(char *imageFile)
 {
-    if (build_mode)
-        jl_set_imaging_mode(1);
+    jl_io_loop = uv_default_loop(); // this loop will internal events (spawining process etc.),
+                                    // best to call this first, since it also initializes libuv
     jl_page_size = jl_getpagesize();
     jl_find_stack_bottom();
     jl_dl_handle = jl_load_dynamic_library(NULL, JL_RTLD_DEFAULT);
@@ -653,7 +663,6 @@ void julia_init(char *imageFile, int build_mode)
     if (uv_dlsym(&jl_dbghelp, "SymRefreshModuleList", (void**)&hSymRefreshModuleList))
         hSymRefreshModuleList = 0;
 #endif
-    jl_io_loop = uv_default_loop(); //this loop will internal events (spawining process etc.)
     init_stdio();
 
 #if defined(__linux__)
@@ -704,7 +713,7 @@ void julia_init(char *imageFile, int build_mode)
 
     if (imageFile) {
         JL_TRY {
-            jl_restore_system_image(imageFile, build_mode);
+            jl_restore_system_image(imageFile);
         }
         JL_CATCH {
             JL_PRINTF(JL_STDERR, "error during init:\n");
@@ -830,12 +839,12 @@ DLLEXPORT void jl_install_sigint_handler()
 extern int asprintf(char **str, const char *fmt, ...);
 extern void * __stack_chk_guard;
 
-DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *av[]), char *build_path)
+DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *av[]))
 {
 #if defined(_OS_WINDOWS_)
     SetUnhandledExceptionFilter(exception_handler);
 #endif
-    unsigned char * p = (unsigned char *) &__stack_chk_guard;
+    unsigned char *p = (unsigned char *)&__stack_chk_guard;
     char a = p[sizeof(__stack_chk_guard)-1];
     char b = p[sizeof(__stack_chk_guard)-2];
     char c = p[0];
@@ -851,6 +860,7 @@ DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *
     }
 #endif
     int ret = pmain(argc, argv);
+    char *build_path = jl_compileropts.build_path;
     if (build_path) {
         char *build_ji;
         if (asprintf(&build_ji, "%s.ji",build_path) > 0) {

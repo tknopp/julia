@@ -23,6 +23,7 @@ end
 include("base.jl")
 include("reflection.jl")
 include("build_h.jl")
+include("version_git.jl")
 include("c.jl")
 
 # core operations & types
@@ -165,6 +166,7 @@ include("combinatorics.jl")
 # distributed arrays and memory-mapped arrays
 include("darray.jl")
 include("mmap.jl")
+include("sharedarray.jl")
 
 # utilities - version, timing, help, edit, metaprogramming
 include("sysinfo.jl")

@@ -7,22 +7,7 @@
 #include <string.h>
 #include <assert.h>
 #include "julia.h"
-
-// with MEMDEBUG, every object is allocated explicitly with malloc, and
-// filled with 0xbb before being freed.
-//#define MEMDEBUG
-
-// MEMPROFILE prints pool summary statistics after every GC
-//#define MEMPROFILE
-
-// GCTIME prints time taken by each phase of GC
-//#define GCTIME
-
-// GC_FINAL_STATS prints total GC stats at exit
-// set in julia.h
-
-// OBJPROFILE counts objects by type
-//#define OBJPROFILE
+#include "julia_internal.h"
 
 #ifdef _P64
 #define GC_PAGE_SZ (1536*sizeof(void*))//bytes
@@ -313,7 +298,7 @@ static void run_finalizers(void)
         ff = (jl_value_t*)ptrhash_get(&finalizer_table, o);
         assert(ff != HT_NOTFOUND);
         ptrhash_remove(&finalizer_table, o);
-        run_finalizer(o, ff);
+        run_finalizer((jl_value_t*)o, ff);
     }
     JL_GC_POP();
 }
@@ -321,7 +306,7 @@ static void run_finalizers(void)
 void jl_gc_run_all_finalizers(void)
 {
     for(size_t i=0; i < finalizer_table.size; i+=2) {
-        jl_value_t *f = finalizer_table.table[i+1];
+        jl_value_t *f = (jl_value_t*)finalizer_table.table[i+1];
         if (f != HT_NOTFOUND && !jl_is_cpointer(f)) {
             schedule_finalization(finalizer_table.table[i]);
         }
@@ -402,7 +387,7 @@ void jl_gc_track_malloced_array(jl_array_t *a)
 {
     mallocarray_t *ma;
     if (mafreelist == NULL) {
-        ma = malloc(sizeof(mallocarray_t));
+        ma = (mallocarray_t*)malloc(sizeof(mallocarray_t));
     }
     else {
         ma = mafreelist;
@@ -462,7 +447,7 @@ static pool_t *pools = &norm_pools[0];
 
 static void add_page(pool_t *p)
 {
-    gcpage_t *pg = malloc_a16(sizeof(gcpage_t));
+    gcpage_t *pg = (gcpage_t*)malloc_a16(sizeof(gcpage_t));
     if (pg == NULL)
         jl_throw(jl_memory_exception);
     gcval_t *v = (gcval_t*)&pg->data[0];
@@ -867,9 +852,9 @@ static void gc_mark(void)
     // this must happen last.
     for(i=0; i < finalizer_table.size; i+=2) {
         if (finalizer_table.table[i+1] != HT_NOTFOUND) {
-            jl_value_t *v = finalizer_table.table[i];
+            jl_value_t *v = (jl_value_t*)finalizer_table.table[i];
             if (!gc_marked(v)) {
-                jl_value_t *fin = finalizer_table.table[i+1];
+                jl_value_t *fin = (jl_value_t*)finalizer_table.table[i+1];
                 if (gc_typeof(fin) == (jl_value_t*)jl_voidpointer_type) {
                     void *p = ((void**)fin)[1];
                     if (p)

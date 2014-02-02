@@ -366,6 +366,8 @@ end
 @test minimum([4., 3., NaN, 5., 2.]) == 2.
 @test extrema([4., 3., NaN, 5., 2.]) == (2., 5.)
 
+@test extrema(1:5) == (1,5)
+
 @test any([true false; false false], 2) == [true false]'
 @test any([true false; false false], 1) == [true false]
 
@@ -587,6 +589,34 @@ begin
 end
 
 @test (1:5)[[true,false,true,false,true]] == [1,3,5]
+@test [1:5][[true,false,true,false,true]] == [1,3,5]
+@test_throws (1:5)[[true,false,true,false]]
+@test_throws (1:5)[[true,false,true,false,true,false]]
+@test_throws [1:5][[true,false,true,false]]
+@test_throws [1:5][[true,false,true,false,true,false]]
+a = [1:5]
+a[[true,false,true,false,true]] = 6
+@test a == [6,2,6,4,6]
+a[[true,false,true,false,true]] = [7,8,9]
+@test a == [7,2,8,4,9]
+@test_throws (a[[true,false,true,false,true]] = [7,8,9,10])
+A = reshape(1:15, 3, 5)
+@test A[[true, false, true], [false, false, true, true, false]] == [7 10; 9 12]
+@test_throws A[[true, false], [false, false, true, true, false]]
+@test_throws A[[true, false, true], [false, true, true, false]]
+@test_throws A[[true, false, true, true], [false, false, true, true, false]]
+@test_throws A[[true, false, true], [false, false, true, true, false, true]]
+A = ones(Int, 3, 5)
+@test_throws A[2,[true, false, true, true, false]] = 2:5
+A[2,[true, false, true, true, false]] = 2:4
+@test A == [1 1 1 1 1; 2 1 3 4 1; 1 1 1 1 1]
+@test_throws A[[true,false,true], 5] = [19]
+@test_throws A[[true,false,true], 5] = 19:21
+A[[true,false,true], 5] = 7
+@test A == [1 1 1 1 7; 2 1 3 4 1; 1 1 1 1 7]
+
+B = cat(3, 1, 2, 3)
+@test B[:,:,[true, false, true]] == reshape([1,3], 1, 1, 2)  # issue #5454
 
 # issue #2342
 @test isequal(cumsum([1 2 3]), [1 2 3])
@@ -647,6 +677,26 @@ begin
     @test c1 == -a
     c2 = mapslices(x-> maximum(-x), a, [1,2])
     @test c2 == maximum(-a)
+    
+    # other types than Number
+    @test mapslices(prod,["1" "2"; "3" "4"],1) == ["13" "24"]
+    
+    # issue #5177
+    
+    c = ones(2,3,4)
+    m1 = mapslices(x-> ones(2,3), c, [1,2])
+    m2 = mapslices(x-> ones(2,4), c, [1,3])
+    m3 = mapslices(x-> ones(3,4), c, [2,3])
+    @test size(m1) == size(m2) == size(m3) == size(c)
+    
+    n1 = mapslices(x-> ones(6), c, [1,2])
+    n2 = mapslices(x-> ones(6), c, [1,3])
+    n3 = mapslices(x-> ones(6), c, [2,3])
+    n1a = mapslices(x-> ones(1,6), c, [1,2])
+    n2a = mapslices(x-> ones(1,6), c, [1,3])
+    n3a = mapslices(x-> ones(1,6), c, [2,3])
+    @test size(n1a) == (1,6,4) && size(n2a) == (1,3,6)  && size(n3a) == (2,1,6)  
+    @test size(n1) == (6,1,4) && size(n2) == (6,3,1)  && size(n3) == (2,6,1)  
 end
 
 
@@ -731,6 +781,16 @@ for idx in {1, 2, 5, 9, 10, 1:0, 2:1, 1:1, 2:2, 1:2, 2:4, 9:8, 10:9, 9:9, 10:10,
         @test a == [acopy[1:(first(idx)-1)], repl, acopy[(last(idx)+1):end]]
     end
 end
+
+# deleteat!
+for idx in {1, 2, 5, 9, 10, 1:0, 2:1, 1:1, 2:2, 1:2, 2:4, 9:8, 10:9, 9:9, 10:10,
+            8:9, 9:10, 6:9, 7:10}
+    a = [1:10]; acopy = copy(a)
+    @test deleteat!(a, idx) == [acopy[1:(first(idx)-1)], acopy[(last(idx)+1):end]]
+end
+a = [1:10]
+@test deleteat!(a, [1,3,5,7:10...]) == [2,4,6]
+
 
 # comprehensions
 X = [ i+2j for i=1:5, j=1:5 ]

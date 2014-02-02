@@ -72,9 +72,7 @@ function gethostname()
     hn = Array(Uint8, 256)
     @unix_only err=ccall(:gethostname, Int32, (Ptr{Uint8}, Uint), hn, length(hn))
     @windows_only err=ccall(:gethostname, stdcall, Int32, (Ptr{Uint8}, Uint32), hn, length(hn))
-    if err != 0
-        error("gethostname")
-    end
+    systemerror("gethostname", err != 0)
     bytestring(convert(Ptr{Uint8},hn))
 end
 
@@ -82,3 +80,5 @@ end
 
 c_free(p::Ptr) = ccall(:free, Void, (Ptr{Void},), p)
 c_malloc(size::Integer) = ccall(:malloc, Ptr{Void}, (Csize_t,), size)
+c_realloc(p::Ptr, size::Integer) = ccall(:realloc, Ptr{Void}, (Ptr{Void}, Csize_t), p, size)
+c_calloc(num::Integer, size::Integer) = ccall(:calloc, Ptr{Void}, (Csize_t, Csize_t), num, size)

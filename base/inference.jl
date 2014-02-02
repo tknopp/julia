@@ -598,7 +598,10 @@ function abstract_call_gf(f, fargs, argtypes, e)
     x::Array{Any,1} = applicable
     if isempty(x)
         # no methods match
-        return None
+        # TODO: it would be nice to return None here, but during bootstrap we
+        # often compile code that calls methods not defined yet, so it is much
+        # safer just to fall back on dynamic dispatch.
+        return Any
     end
     if isa(e,Expr)
         if length(x)==1
@@ -708,8 +711,11 @@ function abstract_call(f, fargs, argtypes, vtypes, sv::StaticVarInfo, e)
                 end
                 return Tuple
             end
+            if is(af,kwcall)
+                return Any
+            end
             # apply known function with unknown args => f(Any...)
-            return abstract_call(_ieval(af), (), Tuple, vtypes, sv, ())
+            return abstract_call(af, (), Tuple, vtypes, sv, ())
         end
     end
     if isgeneric(f)
@@ -1612,7 +1618,7 @@ function resolve_relative(sym, from, to, typ, orig)
         end
         m = _basemod()
         if is(from,m) || is(from,Core)
-            return tn(sym)
+            return TopNode(sym)
         end
     end
     return GetfieldNode(from, sym, typ)
@@ -1763,7 +1769,7 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
             return (e.args[3],())
         end
     end
-    if length(atypes)==2 && is(f,unbox) && isa(atypes[2],DataType)
+    if length(atypes)==2 && is(f,unbox) && isa(atypes[2],DataType) && !atypes[2].mutable && atypes[2].pointerfree
         # remove redundant unbox
         return (e.args[3],())
     end
@@ -1845,7 +1851,7 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
             return NF
         end
         if isa(spvals[i],Symbol)
-            spvals[i] = qn(spvals[i])
+            spvals[i] = QuoteNode(spvals[i])
         end
     end
     (ast, ty) = typeinf(linfo, meth[1], meth[2], linfo)
@@ -1896,9 +1902,19 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
         end
     end
 
+    conflicting = x->(isa(x,Symbol)&&!is_global(sv,x)&&!contains_is(args,x))
+
+    spnames = { sp[i].name for i=1:2:length(sp) }
+
+    if any(conflicting, spnames)
+        # replace static parameters in source function first if there are name conflicts
+        expr = sym_replace(expr, spnames, {}, spvals, {})
+        spnames = spvals = {}
+    end
+
     # avoid capture if the function has free variables with the same name
     # as our vars
-    if occurs_more(expr, x->(isa(x,Symbol)&&!is_global(sv,x)&&!contains_is(args,x)), 0) > 0
+    if occurs_more(expr, conflicting, 0) > 0
         return NF
     end
 
@@ -1926,7 +1942,6 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
     end
 
     # ok, substitute argument expressions for argument names in the body
-    spnames = { sp[i].name for i=1:2:length(sp) }
     if needcopy; expr = astcopy(expr); end
     mfrom = linfo.module; mto = (inference_stack::CallStack).mod
     if !is(mfrom, mto)
@@ -1935,12 +1950,8 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
     return (sym_replace(expr, args, spnames, argexprs, spvals), stmts)
 end
 
-tn(sym::Symbol) =
-    ccall(:jl_new_struct, Any, (Any,Any...), TopNode, sym, Any)
-qn(v) = ccall(:jl_new_struct, Any, (Any,Any...), QuoteNode, v)
-
-const top_tupleref = tn(:tupleref)
-const top_tuple = tn(:tuple)
+const top_tupleref = TopNode(:tupleref)
+const top_tuple = TopNode(:tuple)
 
 function mk_tupleref(texpr, i)
     e = :(($top_tupleref)($texpr, $i))
@@ -2025,10 +2036,10 @@ function inlining_pass(e::Expr, sv, ast)
                 if isa(a1,basenumtype) || ((isa(a1,Symbol) || isa(a1,SymbolNode)) &&
                                            exprtype(a1) <: basenumtype)
                     if e.args[3]==2
-                        e.args = {tn(:*), a1, a1}
+                        e.args = {TopNode(:*), a1, a1}
                         f = *
                     elseif e.args[3]==3
-                        e.args = {tn(:*), a1, a1, a1}
+                        e.args = {TopNode(:*), a1, a1, a1}
                         f = *
                     end
                 end
@@ -2350,6 +2361,16 @@ function code_typed(f::Callable, types)
         end
     end
     asts
+end
+
+function return_types(f::Callable, types)
+    rt = {}
+    for x in _methods(f,types,-1)
+        linfo = x[3].func.code
+        (tree, ty) = typeinf(linfo, x[1], x[2])
+        push!(rt, ty)
+    end
+    rt
 end
 
 #tfunc(f,t) = methods(f,t)[1].func.code.tfunc

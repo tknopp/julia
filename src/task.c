@@ -11,7 +11,7 @@
 #include <signal.h>
 #include <errno.h>
 #include "julia.h"
-#include "builtin_proto.h"
+#include "julia_internal.h"
 #if defined(_OS_WINDOWS_)
 #include <winbase.h>
 #include <malloc.h>
@@ -159,12 +159,12 @@ static void save_stack(jl_task_t *t)
     size_t nb = (char*)t->stackbase - (char*)&_x;
     char *buf;
     if (t->stkbuf == NULL || t->bufsz < nb) {
-        buf = allocb(nb);
+        buf = (char*)allocb(nb);
         t->stkbuf = buf;
         t->bufsz = nb;
     }
     else {
-        buf = t->stkbuf;
+        buf = (char*)t->stkbuf;
     }
     t->ssize = nb;
     memcpy(buf, (char*)&_x, nb);
@@ -180,7 +180,7 @@ void __attribute__((noinline)) restore_stack(jl_task_t *t, jl_jmp_buf *where, ch
     if (!p) {
         p = _x;
         if ((char*)&_x > _x) {
-            p = alloca((char*)&_x - _x);
+            p = (char*)alloca((char*)&_x - _x);
     	}
         restore_stack(t, where, p);
     }
@@ -238,10 +238,16 @@ static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
         jl_current_task->gcstack = jl_pgcstack;
         jl_pgcstack = t->gcstack;
 #endif
+        jl_current_task->current_module = jl_current_module;
         t->last = jl_current_task;
         // by default, parent is first task to switch to this one
-        if (t->parent == NULL)
+        if (t->parent == NULL) {
             t->parent = jl_current_task;
+            t->current_module = jl_current_module;
+        }
+        else {
+            jl_current_module = t->current_module;
+        }
         jl_current_task = t;
 
 #ifdef COPY_STACKS
@@ -506,7 +512,7 @@ static int frame_info_from_ip(const char **func_name, int *line_num, const char 
         }
 #else
         Dl_info dlinfo;
-        if (dladdr((void*) ip, &dlinfo) != 0) {
+        if (dladdr((void*)ip, &dlinfo) != 0) {
             *file_name = (dlinfo.dli_fname != NULL) ? dlinfo.dli_fname : name_unknown;
             if (dlinfo.dli_sname != NULL) {
                 *func_name = dlinfo.dli_sname;
@@ -647,7 +653,7 @@ DLLEXPORT jl_value_t *jl_backtrace_from_here(void)
                                             jl_tuple2(jl_voidpointer_type,
                                                       jl_box_long(1)));
     jl_array_t *bt = jl_alloc_array_1d(array_ptr_void_type, MAX_BT_SIZE);
-    size_t n = rec_backtrace(jl_array_data(bt), MAX_BT_SIZE);
+    size_t n = rec_backtrace((ptrint_t*)jl_array_data(bt), MAX_BT_SIZE);
     if (n < MAX_BT_SIZE)
         jl_array_del_end(bt, MAX_BT_SIZE-n);
     return (jl_value_t*)bt;
@@ -913,6 +919,7 @@ void jl_init_tasks(void *stack, size_t ssize)
 #endif
     jl_current_task->stkbuf = NULL;
     jl_current_task->parent = jl_current_task;
+    jl_current_task->current_module = jl_current_module;
     jl_current_task->last = jl_current_task;
     jl_current_task->tls = NULL;
     jl_current_task->consumers = NULL;

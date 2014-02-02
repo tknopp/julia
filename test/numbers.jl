@@ -1673,6 +1673,20 @@ end
 @test_throws powermod(1,-2,1)
 @test_throws powermod(big(1),-2,1)
 
+# other divide-by-zero errors
+@test_throws div(1,0)
+@test_throws rem(1,0)
+@test_throws mod(1,0)
+@test_throws div(-1,0)
+@test_throws rem(-1,0)
+@test_throws mod(-1,0)
+@test_throws div(uint(1),uint(0))
+@test_throws rem(uint(1),uint(0))
+@test_throws mod(uint(1),uint(0))
+@test_throws div(typemin(Int),-1)
+@test rem(typemin(Int),-1) == 0
+@test mod(typemin(Int),-1) == 0
+
 # prevpow2/nextpow2:
 @test nextpow2(0) == prevpow2(0) == 0
 for i = -2:2
@@ -1728,3 +1742,8 @@ for T = (Uint8,Int8,Uint16,Int16,Uint32,Int32,Uint64,Int64,Uint128,Int128)
         @test convert(T,n*(n^typemax(T))) == one(T)
     end
 end
+
+@test false*pi === 0.0
+@test pi*false === 0.0
+@test true*pi === float64(pi)
+@test pi*true === float64(pi)

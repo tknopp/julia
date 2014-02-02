@@ -462,10 +462,11 @@ function getindex_bool_1d(B::BitArray, I::AbstractArray{Bool})
     return X
 end
 
-getindex(B::BitVector, I::AbstractVector{Bool}) = getindex_bool_1d(B, I)
-getindex(B::BitVector, I::AbstractArray{Bool}) = getindex_bool_1d(B, I)
-getindex(B::BitArray, I::AbstractVector{Bool}) = getindex_bool_1d(B, I)
-getindex(B::BitArray, I::AbstractArray{Bool}) = getindex_bool_1d(B, I)
+# multiple signatures required for disambiguation
+# (see also getindex in multidimensional.jl)
+for BT in [BitVector, BitArray], IT in [Range1{Bool}, AbstractVector{Bool}, AbstractArray{Bool}]
+    @eval getindex(B::$BT, I::$IT) = getindex_bool_1d(B, I)
+end
 
 ## Indexing: setindex! ##
 
@@ -549,15 +550,6 @@ function setindex!(B::BitArray, x, i::Real, I::Real...)
     return B
 end
 
-# note: we can gain some performance if the first dimension is a range;
-#       currently this is mainly indended for the general cat case
-# TODO: extend to I:Indices... (i.e. not necessarily contiguous)
-function setindex!(B::BitArray, X::BitArray, I0::Range1{Int}, I::Union(Real, Range1{Int})...)
-    checkbounds(B, I0, I...)
-    I = map(x->(isa(x,Real) ? (to_index(x):to_index(x)) : x), I)
-    setindex_array2bitarray_ranges(B, X, I0, I...)
-end
-
 function setindex!{T<:Real}(B::BitArray, X::AbstractArray, I::AbstractVector{T})
     if length(X) != length(I); error("argument dimensions must match"); end
     count = 1
@@ -599,7 +591,7 @@ end
 
 # logical indexing
 
-function setindex_bool_scalar_1d(A::BitArray, x, I::AbstractArray{Bool})
+function setindex_bool_1d(A::BitArray, x, I::AbstractArray{Bool})
     if length(I) > length(A)
         throw(BoundsError())
     end
@@ -613,7 +605,7 @@ function setindex_bool_scalar_1d(A::BitArray, x, I::AbstractArray{Bool})
     A
 end
 
-function setindex_bool_vector_1d(A::BitArray, X::AbstractArray, I::AbstractArray{Bool})
+function setindex_bool_1d(A::BitArray, X::AbstractArray, I::AbstractArray{Bool})
     if length(I) > length(A)
         throw(BoundsError())
     end
@@ -629,40 +621,25 @@ function setindex_bool_vector_1d(A::BitArray, X::AbstractArray, I::AbstractArray
     A
 end
 
-setindex!(A::BitArray, X::AbstractArray, I::AbstractVector{Bool}) = setindex_bool_vector_1d(A, X, I)
-setindex!(A::BitArray, X::AbstractArray, I::AbstractArray{Bool}) = setindex_bool_vector_1d(A, X, I)
-setindex!(A::BitArray, x, I::AbstractVector{Bool}) = setindex_bool_scalar_1d(A, x, I)
-setindex!(A::BitArray, x, I::AbstractArray{Bool}) = setindex_bool_scalar_1d(A, x, I)
+# lots of definitions here are required just for disambiguation
+# (see also setindex! in multidimensional.jl)
+for XT in [BitArray, AbstractArray, Any]
+    for IT in [AbstractVector{Bool}, AbstractArray{Bool}]
+        @eval setindex!(A::BitArray, X::$XT, I::$IT) = setindex_bool_1d(A, X, I)
+    end
 
-setindex!(A::BitMatrix, x::AbstractArray, I::Real, J::AbstractVector{Bool}) =
-    (A[I,find(J)] = x)
+    for IT in [Range1{Bool}, AbstractVector{Bool}], JT in [Range1{Bool}, AbstractVector{Bool}]
+        @eval setindex!(A::BitMatrix, x::$XT, I::$IT, J::$JT) = (A[find(I),find(J)] = x; A)
+    end
 
-setindex!(A::BitMatrix, x, I::Real, J::AbstractVector{Bool}) =
-    (A[I,find(J)] = x)
+    for IT in [Range1{Bool}, AbstractVector{Bool}], JT in [Real, Range1]
+        @eval setindex!(A::BitMatrix, x::$XT, I::$IT, J::$JT) = (A[find(I),J] = x; A)
+    end
+    @eval setindex!{T<:Real}(A::BitMatrix, x::$XT, I::AbstractVector{Bool}, J::AbstractVector{T}) = (A[find(I),J] = x; A)
 
-setindex!(A::BitMatrix, x::AbstractArray, I::AbstractVector{Bool}, J::Real) =
-    (A[find(I),J] = x)
-
-setindex!(A::BitMatrix, x, I::AbstractVector{Bool}, J::Real) =
-    (A[find(I),J] = x)
-
-setindex!(A::BitMatrix, x::AbstractArray, I::AbstractVector{Bool}, J::AbstractVector{Bool}) =
-    (A[find(I),find(J)] = x)
-
-setindex!(A::BitMatrix, x, I::AbstractVector{Bool}, J::AbstractVector{Bool}) =
-    (A[find(I),find(J)] = x)
-
-setindex!{T<:Integer}(A::BitMatrix, x::AbstractArray, I::AbstractVector{T}, J::AbstractVector{Bool}) =
-    (A[I,find(J)] = x)
-
-setindex!{T<:Real}(A::BitMatrix, x, I::AbstractVector{T}, J::AbstractVector{Bool}) =
-    (A[I,find(J)] = x)
-
-setindex!{T<:Real}(A::BitMatrix, x::AbstractArray, I::AbstractVector{Bool}, J::AbstractVector{T}) =
-    (A[find(I),J] = x)
-
-setindex!{T<:Real}(A::BitMatrix, x, I::AbstractVector{Bool}, J::AbstractVector{T}) =
-    (A[find(I),J] = x)
+    @eval setindex!(A::BitMatrix, x::$XT, I::Real, J::AbstractVector{Bool}) = (A[I,find(J)] = x; A)
+    @eval setindex!{T<:Real}(A::BitMatrix, x::$XT, I::AbstractVector{T}, J::AbstractVector{Bool}) = (A[I,find(J)] = x; A)
+end
 
 ## Dequeue functionality ##
 
@@ -848,12 +825,7 @@ function insert!(B::BitVector, i::Integer, item)
     B[i] = item
 end
 
-function splice!(B::BitVector, i::Integer)
-    n = length(B)
-    if !(1 <= i <= n)
-        throw(BoundsError())
-    end
-    v = B[i]
+function _deleteat!(B::BitVector, i::Integer)
 
     k, j = get_chunks_id(i)
 
@@ -884,6 +856,91 @@ function splice!(B::BitVector, i::Integer)
 
     B.len -= 1
 
+    return B
+end
+
+function deleteat!(B::BitVector, i::Integer)
+    n = length(B)
+    if !(1 <= i <= n)
+        throw(BoundsError())
+    end
+
+    return _deleteat!(B, i)
+end
+
+function deleteat!(B::BitVector, r::Range1{Int})
+    n = length(B)
+    i_f = first(r)
+    i_l = last(r)
+    if !(1 <= i_f && i_l <= n)
+        throw(BoundsError())
+    end
+
+    Bc = B.chunks
+    new_l = length(B) - length(r)
+    delta_k = num_bit_chunks(new_l) - length(Bc)
+
+    copy_chunks(Bc, i_f, Bc, i_l+1, n-i_l)
+
+    if delta_k < 0
+        ccall(:jl_array_del_end, Void, (Any, Uint), Bc, -delta_k)
+    end
+
+    B.len = new_l
+
+    if new_l > 0
+        Bc[end] &= @_msk_end new_l
+    end
+
+    return B
+end
+
+function deleteat!(B::BitVector, inds)
+    n = new_l = length(B)
+    s = start(inds)
+    done(inds, s) && return B
+
+    Bc = B.chunks
+
+    (p, s) = next(inds, s)
+    q = p+1
+    new_l -= 1
+    while !done(inds, s)
+        (i,s) = next(inds, s)
+        if !(q <= i <= n)
+            i < q && error("indices must be unique and sorted")
+            throw(BoundsError())
+        end
+        new_l -= 1
+        if i > q
+            copy_chunks(Bc, p, Bc, q, i-q)
+            p += i-q
+        end
+        q = i+1
+    end
+
+    q <= n && copy_chunks(Bc, p, Bc, q, n-q+1)
+
+    delta_k = num_bit_chunks(new_l) - length(Bc)
+    delta_k < 0 && ccall(:jl_array_del_end, Void, (Any, Uint), Bc, -delta_k)
+
+    B.len = new_l
+
+    if new_l > 0
+        Bc[end] &= @_msk_end new_l
+    end
+
+    return B
+end
+
+function splice!(B::BitVector, i::Integer)
+    n = length(B)
+    if !(1 <= i <= n)
+        throw(BoundsError())
+    end
+
+    v = B[i]   # TODO: change to a copy if/when subscripting becomes an ArrayView
+    _deleteat!(B, i)
     return v
 end
 splice!(B::BitVector, i::Integer, ins::BitVector) = splice!(B, int(i):int(i), ins)
@@ -902,8 +959,11 @@ function splice!(B::BitVector, r::Range1{Int}, ins::BitVector = _default_bit_spl
         throw(BoundsError())
     end
     if (i_f > n)
-        return append!(B, ins)
+        append!(B, ins)
+        return BitVector(0)
     end
+
+    v = B[r]  # TODO: change to a copy if/when subscripting becomes an ArrayView
 
     Bc = B.chunks
 
@@ -928,7 +988,7 @@ function splice!(B::BitVector, r::Range1{Int}, ins::BitVector = _default_bit_spl
         Bc[end] &= @_msk_end new_l
     end
 
-    return B
+    return v
 end
 splice!(B::BitVector, r::Range1{Int}, ins::AbstractVector{Bool}) = splice!(B, r, bitpack(ins))
 
@@ -1695,17 +1755,6 @@ function findn(B::BitMatrix)
     return (I, J)
 end
 
-function findn_one(ivars)
-    s = { quote I[$i][count] = $(ivars[i]) end for i = 1:length(ivars)}
-    quote
-        Bind = B[$(ivars...)]
-        if Bind
-            $(s...)
-            count +=1
-        end
-    end
-end
-
 function findnz(B::BitMatrix)
     I, J = findn(B)
     return (I, J, trues(length(I)))
@@ -1904,48 +1953,13 @@ ctranspose(B::BitArray) = transpose(B)
 
 ## Permute array dims ##
 
-function permute_one_dim(ivars, stridenames)
-    len = length(ivars)
-    counts = { symbol(string("count",i)) for i=1:len}
-    toReturn = cell(len+1,2)
-    for i = 1:length(toReturn)
-        toReturn[i] = nothing
-    end
-
-    tmp = counts[end]
-    toReturn[len+1] = quote
-        ind = 1
-        $tmp = $(stridenames[len])
-    end
-
-    #inner most loop
-    toReturn[1] = quote
-        P[ind] = B[+($(counts...))+offset]
-        ind+=1
-        $(counts[1]) += $(stridenames[1])
-    end
-    for i = 1:len-1
-        tmp = counts[i]
-        val = i
-        toReturn[(i+1)] = quote
-            $tmp = $(stridenames[val])
-        end
-        tmp2 = counts[i+1]
-        val = i+1
-        toReturn[(i+1)+(len+1)] = quote
-            $tmp2 += $(stridenames[val])
-        end
-    end
-    toReturn
-end
-
 function permutedims(B::Union(BitArray,StridedArray), perm)
     dimsB = size(B)
     ndimsB = length(dimsB)
     (ndimsB == length(perm) && isperm(perm)) || error("no valid permutation of dimensions")
     dimsP = ntuple(ndimsB, i->dimsB[perm[i]])::typeof(dimsB)
     P = similar(B, dimsP)
-	permutedims!(P,B,perm)
+    permutedims!(P, B, perm)
 end
 
 

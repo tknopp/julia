@@ -1,5 +1,5 @@
 ## Triangular
-type Triangular{T<:Number} <: AbstractMatrix{T}
+immutable Triangular{T<:Number} <: AbstractMatrix{T}
     UL::Matrix{T}
     uplo::Char
     unitdiag::Char
@@ -89,8 +89,8 @@ getindex{T}(A::Triangular{T}, i::Integer, j::Integer) = i == j ? (A.unitdiag == 
 istril(A::Triangular) = A.uplo == 'L' || istriu(A.UL)
 istriu(A::Triangular) = A.uplo == 'U' || istril(A.UL)
 
-transpose(A::Triangular) = Triangular(A.UL, A.uplo=='U':'L':'U', A.unitdiag)
-ctranspose(A::Triangular) = conj(transpose(A))
+transpose(A::Triangular) = Triangular(copytri!(A.UL, A.uplo), A.uplo=='U'?'L':'U', A.unitdiag)
+ctranspose(A::Triangular) = Triangular(copytri!(A.UL, A.uplo, true), A.uplo=='U'?'L':'U', A.unitdiag)
 diag(A::Triangular) = diag(A.UL)
 big(A::Triangular) = Triangular(big(A.UL), A.uplo, A.unitdiag)
 
@@ -99,6 +99,26 @@ for func in (:*, :Ac_mul_B, :A_mul_Bc, :/, :A_rdiv_Bc)
     @eval begin
         ($func){T}(A::Triangular{T}, B::AbstractVector{T}) = ($func)(full(A), B)
         #($func){T}(A::AbstractArray{T}, B::Triangular{T}) = ($func)(full(A), B)
+    end
+end
+
+function sqrtm{T}(A::Triangular{T})
+    n = size(A, 1)
+    R = zeros(T, n, n)
+    if A.uplo == 'U'
+        for j = 1:n
+            (T<:Complex || A[j,j]>=0) ? (R[j,j]=sqrt(A[j,j])) : throw(SingularException(j))
+            for i = j-1:-1:1
+                r = A[i,j]
+                for k = i+1:j-1
+                    r -= R[i,k]*R[k,j]
+                end
+                r==0 || (R[i,j] = r / (R[i,i] + R[j,j]))
+            end
+        end
+        return Triangular(R)
+    else #A.uplo == 'L' #Not the usual case
+        return sqrtm(A.').'
     end
 end
 

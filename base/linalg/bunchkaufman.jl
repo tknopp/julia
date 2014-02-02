@@ -2,7 +2,7 @@
 ## LD for BunchKaufman, UL for CholeskyDense, LU for LUDense and
 ## define size methods for Factorization types using it.
 
-type BunchKaufman{T<:BlasFloat} <: Factorization{T}
+immutable BunchKaufman{T} <: Factorization{T}
     LD::Matrix{T}
     ipiv::Vector{BlasInt}
     uplo::Char
@@ -18,22 +18,22 @@ function bkfact!{T<:BlasComplex}(A::StridedMatrix{T}, uplo::Symbol=:U, symmetric
     LD, ipiv = (symmetric ? LAPACK.sytrf! : LAPACK.hetrf!)(string(uplo)[1] , A)
     BunchKaufman(LD, ipiv, string(uplo)[1], symmetric)
 end
-bkfact!(A::StridedMatrix, args...) = bkfact!(float(A), args...)
-bkfact{T<:BlasFloat}(A::StridedMatrix{T}, args...) = bkfact!(copy(A), args...)
-bkfact(A::StridedMatrix, args...) = bkfact(float(A), args...)
+bkfact{T<:BlasFloat}(A::StridedMatrix{T}, uplo::Symbol=:U, symmetric::Bool=issym(A)) = bkfact!(copy(A), uplo, symmetric)
+bkfact{T}(A::StridedMatrix{T}, uplo::Symbol=:U, symmetric::Bool=issym(A)) = bkfact!(convert(Matrix{promote_type(Float32,typeof(sqrt(one(T))))},A),uplo,symmetric)
 
+convert{T}(::Type{BunchKaufman{T}},B::BunchKaufman) = BunchKaufman(convert(Matrix{T},B.LD),B.ipiv,B.uplo,B.symmetric)
 size(B::BunchKaufman) = size(B.LD)
 size(B::BunchKaufman,d::Integer) = size(B.LD,d)
 issym(B::BunchKaufman) = B.symmetric
 ishermitian(B::BunchKaufman) = !B.symmetric
 
-inv{T<:BlasReal}(B::BunchKaufman{T})=symmetrize_conj!(LAPACK.sytri!(B.uplo, copy(B.LD), B.ipiv), B.uplo)
+inv{T<:BlasReal}(B::BunchKaufman{T})=copytri!(LAPACK.sytri!(B.uplo, copy(B.LD), B.ipiv), B.uplo, true)
 
 function inv{T<:BlasComplex}(B::BunchKaufman{T})
     if issym(B)
-        symmetrize!(LAPACK.sytri!(B.uplo, copy(B.LD), B.ipiv), B.uplo)
+        copytri!(LAPACK.sytri!(B.uplo, copy(B.LD), B.ipiv), B.uplo)
     else
-        symmetrize_conj!(LAPACK.hetri!(B.uplo, copy(B.LD), B.ipiv), B.uplo)
+        copytri!(LAPACK.hetri!(B.uplo, copy(B.LD), B.ipiv), B.uplo, true)
     end
 end
 

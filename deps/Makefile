@@ -15,7 +15,7 @@ endif
 CONFIGURE_COMMON += F77="$(FC)" CC="$(CC)" CXX="$(CXX)"
 
 #autoconf configure-driven scripts: llvm readline pcre arpack fftw unwind gmp mpfr patchelf uv
-#custom Makefile rules: openlibm Rmath double-conversion random suitesparse-wrapper suitesparse lapack openblas
+#custom Makefile rules: openlibm Rmath double-conversion random suitesparse-wrapper suitesparse lapack openblas utf8proc
 
 # prevent installing libs into usr/lib64 on opensuse
 unexport CONFIG_SITE
@@ -115,6 +115,10 @@ ifeq ($(USE_SYSTEM_SUITESPARSE), 0)
 STAGE2_DEPS += suitesparse
 endif
 
+ifeq ($(USE_SYSTEM_UTF8PROC), 0)
+STAGE2_DEPS += utf8proc
+endif
+
 # Only compile standalone LAPACK if we are not using OpenBLAS.
 # OpenBLAS otherwise compiles LAPACK as part of its build.
 # This is useful where one wants to use the vendor BLAS, but 
@@ -144,7 +148,7 @@ install: $(addprefix install-, $(LIBS))
 cleanall: $(addprefix clean-, $(LIBS))
 distclean: $(addprefix distclean-, $(LIBS))
 	rm -rf $(BUILD)
-getall: get-llvm get-readline get-uv get-pcre get-double-conversion get-openlibm get-openspecfun get-random get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-zlib get-patchelf
+getall: get-llvm get-readline get-uv get-pcre get-double-conversion get-openlibm get-openspecfun get-random get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-zlib get-patchelf get-utf8proc
 
 ## PATHS ##
 DIRS = $(addprefix $(BUILD)/,lib include bin share etc)
@@ -182,7 +186,6 @@ LLVM_TAR=llvm-$(LLVM_VER).tar.gz
 else
 LLVM_TAR=llvm-$(LLVM_VER).src.tar.gz
 endif
-endif
 
 ifeq ($(BUILD_LLVM_CLANG),1)
 ifeq ($(LLVM_VER), 3.0)
@@ -201,6 +204,7 @@ else
 LLVM_CLANG_TAR=
 LLVM_COMPILER_RT_TAR=
 LLVM_LIBCXX_TAR=
+endif
 endif
 
 LLVM_TARGET_FLAGS= --enable-targets=host
@@ -279,6 +283,7 @@ llvm-$(LLVM_VER)/tools/lldb:
 llvm-$(LLVM_VER)/configure: llvm-$(LLVM_VER)/tools/lldb
 endif
 
+ifeq ($(LLVM_VER), 3.2)
 ## LLVM needs python 2.x, but doesn't check for it, so we have to use an ugly workaround to make it compile
 llvm-$(LLVM_VER)/python2_path:
 	mkdir -p llvm-$(LLVM_VER)/python2_path
@@ -286,12 +291,14 @@ llvm-$(LLVM_VER)/python2_path:
 	/usr/bin/python2 -c 'import sys; sys.exit(not sys.version_info < (3, 0))' && \
 	ln -sf /usr/bin/python2 "llvm-$(LLVM_VER)/python2_path/python"
 llvm_python_workaround=llvm-$(LLVM_VER)/python2_path
-
+else
+  LLVM_FLAGS += --with-python="$(shell ./find_python_for_llvm)"
+endif
 
 llvm-$(LLVM_VER)/configure: $(LLVM_TAR) $(LLVM_CLANG_TAR) $(LLVM_COMPILER_RT_TAR) $(LLVM_LIBCXX_TAR)
 ifneq ($(LLVM_VER),svn)
 	mkdir -p llvm-$(LLVM_VER) && \
-	tar -C llvm-$(LLVM_VER) --strip-components 1 -xf $(LLVM_TAR)
+	$(TAR) -C llvm-$(LLVM_VER) --strip-components 1 -xf $(LLVM_TAR)
 else
 	([ ! -d llvm-$(LLVM_VER) ] && \
 		git clone http://llvm.org/git/llvm.git llvm-$(LLVM_VER) ) || \
@@ -305,7 +312,7 @@ endif
 ifneq ($(LLVM_VER),svn)
 ifneq ($(LLVM_CLANG_TAR),)
 	mkdir -p llvm-$(LLVM_VER)/tools/clang && \
-	tar -C llvm-$(LLVM_VER)/tools/clang --strip-components 1 -xf $(LLVM_CLANG_TAR)
+	$(TAR) -C llvm-$(LLVM_VER)/tools/clang --strip-components 1 -xf $(LLVM_CLANG_TAR)
 endif
 else
 ifneq ($(BUILD_LLVM_CLANG),)
@@ -318,11 +325,11 @@ endif
 ifneq ($(LLVM_VER),svn)
 ifneq ($(LLVM_COMPILER_RT_TAR),)
 	mkdir -p llvm-$(LLVM_VER)/projects/compiler-rt && \
-	tar -C llvm-$(LLVM_VER)/projects/compiler-rt --strip-components 1 -xf $(LLVM_COMPILER_RT_TAR)
+	$(TAR) -C llvm-$(LLVM_VER)/projects/compiler-rt --strip-components 1 -xf $(LLVM_COMPILER_RT_TAR)
 endif
 ifneq ($(LLVM_LIBCXX_TAR),)
 	mkdir -p llvm-$(LLVM_VER)/projects/libcxx && \
-	tar -C llvm-$(LLVM_VER)/projects/libcxx --strip-components 1 -xf $(LLVM_LIBCXX_TAR)
+	$(TAR) -C llvm-$(LLVM_VER)/projects/libcxx --strip-components 1 -xf $(LLVM_LIBCXX_TAR)
 endif
 else
 ifneq ($(BUILD_LLVM_CLANG),)
@@ -413,7 +420,7 @@ readline-$(READLINE_VER).tar.gz:
 	touch -c $@
 readline-$(READLINE_VER)/configure: readline-$(READLINE_VER).tar.gz
 	mkdir readline-$(READLINE_VER)
-	tar -C readline-$(READLINE_VER) --strip-components 1 -xf $<
+	$(TAR) -C readline-$(READLINE_VER) --strip-components 1 -xf $<
 	touch -c $@
 $(READLINE_OBJ_TARGET): $(READLINE_OBJ_SOURCE) readline-$(READLINE_VER)/checked
 	$(MAKE) -C readline-$(READLINE_VER) $(READLINE_CFLAGS) install
@@ -429,14 +436,10 @@ READLINE_URL = ftp://ftp.gnu.org/gnu/readline/readline-$(READLINE_VER).tar.gz
 READLINE_OPTS = --enable-shared --enable-static --with-curses
 READLINE_CFLAGS = 
 readline-$(READLINE_VER).tar.gz:
-	$(JLDOWNLOAD) readline62-001 http://ftp.gnu.org/gnu/readline/readline-6.2-patches/readline62-001
-	#$(JLDOWNLOAD) readline62-002 http://ftp.gnu.org/gnu/readline/readline-6.2-patches/readline62-002
-	$(JLDOWNLOAD) readline62-003 http://ftp.gnu.org/gnu/readline/readline-6.2-patches/readline62-003
-	$(JLDOWNLOAD) readline62-004 http://ftp.gnu.org/gnu/readline/readline-6.2-patches/readline62-004
 	$(JLDOWNLOAD) $@ http://ftp.gnu.org/gnu/readline/$@
 	touch -c $@
 readline-$(READLINE_VER)/configure: readline-$(READLINE_VER).tar.gz
-	tar zxf $<
+	$(TAR) zxf $<
 	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-001
 	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-002
 	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-003
@@ -545,7 +548,7 @@ PCRE_OBJ_TARGET = $(BUILD)/$(JL_LIBDIR)/libpcre.$(SHLIB_EXT)
 pcre-$(PCRE_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://sourceforge.net/projects/pcre/files/pcre/$(PCRE_VER)/$@/download
 pcre-$(PCRE_VER)/configure: pcre-$(PCRE_VER).tar.bz2
-	tar jxf $<
+	$(TAR) jxf $<
 	touch -c $@
 pcre-$(PCRE_VER)/config.status: pcre-$(PCRE_VER)/configure
 	cd pcre-$(PCRE_VER) && \
@@ -587,7 +590,7 @@ double-conversion-$(GRISU_VER).tar.gz:
 	touch -c $@
 double-conversion-$(GRISU_VER)/Makefile: double-conversion-$(GRISU_VER).tar.gz
 	mkdir -p double-conversion-$(GRISU_VER) && \
-	tar -C double-conversion-$(GRISU_VER) --strip-components 1 -xf double-conversion-$(GRISU_VER).tar.gz
+	$(TAR) -C double-conversion-$(GRISU_VER) --strip-components 1 -xf double-conversion-$(GRISU_VER).tar.gz
 	touch -c $@
 
 ifeq ($(USE_SYSTEM_GRISU), 0)
@@ -654,6 +657,7 @@ clean-openlibm:
 	-$(MAKE) -C openlibm distclean $(OPENLIBM_FLAGS)
 	-rm $(OPENLIBM_OBJ_TARGET)
 distclean-openlibm: clean-openlibm
+	-cd openlibm && git clean -fdx
 
 get-openlibm: openlibm/Makefile
 configure-openlibm: get-openlibm
@@ -692,6 +696,7 @@ clean-openspecfun:
 	-$(MAKE) -C openspecfun distclean $(OPENSPECFUN_FLAGS)
 	-rm $(OPENSPECFUN_OBJ_TARGET)
 distclean-openspecfun: clean-openspecfun
+	-cd openspecfun && git clean -fdx
 
 get-openspecfun: openspecfun/Makefile
 configure-openspecfun: get-openspecfun
@@ -717,7 +722,7 @@ random/dsfmt-$(DSFMT_VER).tar.gz:
 random/dsfmt-$(DSFMT_VER)/config.status: random/dsfmt-$(DSFMT_VER).tar.gz
 	cd random && \
 	mkdir -p dsfmt-$(DSFMT_VER) && \
-	tar -C dsfmt-$(DSFMT_VER) --strip-components 1 -xf dsfmt-$(DSFMT_VER).tar.gz && \
+	$(TAR) -C dsfmt-$(DSFMT_VER) --strip-components 1 -xf dsfmt-$(DSFMT_VER).tar.gz && \
 	cd dsfmt-$(DSFMT_VER) && patch < ../dSFMT.h.patch && patch < ../dSFMT.c.patch
 	echo 1 > $@
 $(LIBRANDOM_OBJ_SOURCE): random/jl_random.c random/randmtzig.c random/dsfmt-$(DSFMT_VER)/config.status
@@ -767,6 +772,7 @@ clean-Rmath:
 	-$(MAKE) -C Rmath/src clean
 	-rm $(RMATH_OBJ_TARGET)
 distclean-Rmath: clean-Rmath
+	-cd Rmath && git clean -fdx
 
 get-Rmath: Rmath/Make.inc
 configure-Rmath: get-Rmath
@@ -852,7 +858,7 @@ openblas-$(OPENBLAS_VER).tar.gz:
 	$(JLDOWNLOAD) $@ https://github.com/xianyi/OpenBLAS/tarball/$(OPENBLAS_VER) 
 openblas-$(OPENBLAS_VER)/config.status: openblas-$(OPENBLAS_VER).tar.gz
 	mkdir -p openblas-$(OPENBLAS_VER) && \
-	tar -C openblas-$(OPENBLAS_VER) --strip-components 1 -xf $<
+	$(TAR) -C openblas-$(OPENBLAS_VER) --strip-components 1 -xf $<
 	perl -i -ple 's/^\s*(EXTRALIB\s*\+=\s*-lSystemStubs)\s*$$/# $$1/g' $@.system
 ifeq  ($(OPENBLAS_VER),v0.2.8)
 	cd openblas-$(OPENBLAS_VER)/lapack-netlib/SRC && \
@@ -983,7 +989,7 @@ endif
 lapack-$(LAPACK_VER).tgz:
 	$(JLDOWNLOAD) $@ http://www.netlib.org/lapack/$@
 lapack-$(LAPACK_VER)/Makefile: lapack-$(LAPACK_VER).tgz
-	tar zxf $<
+	$(TAR) zxf $<
 	cd lapack-$(LAPACK_VER)/SRC && patch < ../../dlasd4-lapack-3.4.2.patch && patch < ../../slasd4-lapack-3.4.2.patch
 	touch -c $@
 ifeq ($(USE_SYSTEM_BLAS), 0)
@@ -1045,7 +1051,7 @@ arpack-ng-$(ARPACK_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://forge.scilab.org/index.php/p/arpack-ng/downloads/get/arpack-ng-$(ARPACK_VER).tar.gz
 	touch -c $@
 arpack-ng-$(ARPACK_VER)/configure: arpack-ng-$(ARPACK_VER).tar.gz
-	tar zxf $< 
+	$(TAR) zxf $< 
 	touch -c $@
 
 ifeq ($(USE_ATLAS), 1)
@@ -1125,7 +1131,7 @@ fftw-$(FFTW_VER).tar.gz:
 
 fftw-$(FFTW_VER)-single/configure: fftw-$(FFTW_VER).tar.gz
 	mkdir -p fftw-$(FFTW_VER)-single && \
-	tar -C fftw-$(FFTW_VER)-single --strip-components 1 -xf $<
+	$(TAR) -C fftw-$(FFTW_VER)-single --strip-components 1 -xf $<
 ifeq ($(OS),WINNT)
 	patch fftw-$(FFTW_VER)-single/configure < fftw-config-nopthreads.patch
 	patch fftw-$(FFTW_VER)-single/kernel/ifftw.h < ifftw.h.patch
@@ -1162,7 +1168,7 @@ endif
 
 fftw-$(FFTW_VER)-double/configure: fftw-$(FFTW_VER).tar.gz
 	mkdir -p fftw-$(FFTW_VER)-double && \
-	tar -C fftw-$(FFTW_VER)-double --strip-components 1 -xf $<
+	$(TAR) -C fftw-$(FFTW_VER)-double --strip-components 1 -xf $<
 ifeq ($(OS),WINNT)
 	patch fftw-$(FFTW_VER)-double/configure < fftw-config-nopthreads.patch
 	patch fftw-$(FFTW_VER)-double/kernel/ifftw.h < ifftw.h.patch
@@ -1205,7 +1211,7 @@ clean-fftw-double:
 	-$(MAKE) -C fftw-$(FFTW_VER)-double clean
 	-rm -f $(FFTW_DOUBLE_OBJ_TARGET)
 distclean-fftw:
-	-rm -rf fftw-$(FFTW_VER).tar.gz fftw-$(FFTW_VER)-{single,double}
+	-rm -rf fftw-$(FFTW_VER).tar.gz fftw-$(FFTW_VER)-single fftw-$(FFTW_VER)-double
 
 get-fftw: get-fftw-single get-fftw-double
 configure-fftw: configure-fftw-single configure-fftw-double
@@ -1225,6 +1231,40 @@ compile-fftw-double: $(FFTW_DOUBLE_OBJ_TARGET)
 check-fftw-double: fftw-$(FFTW_VER)-double/checked
 install-fftw-double: $(FFTW_DOUBLE_OBJ_TARGET)
 
+## UTF8PROC ##
+
+UTF8PROC_OBJ_SOURCE = utf8proc-v$(UTF8PROC_VER)/libutf8proc.a
+UTF8PROC_OBJ_LIB = $(BUILD)/$(JL_LIBDIR)/libutf8proc.a
+UTF8PROC_OBJ_HEADER = $(BUILD)/include/utf8proc.h
+UTF8PROC_OBJ_TARGET = $(UTF8PROC_OBJ_LIB) $(UTF8PROC_OBJ_HEADER)
+
+utf8proc-v$(UTF8PROC_VER).tar.gz:
+	$(JLDOWNLOAD) $@ http://www.public-software-group.org/pub/projects/utf8proc/v$(UTF8PROC_VER)/$@
+
+utf8proc-v$(UTF8PROC_VER)/Makefile: utf8proc-v$(UTF8PROC_VER).tar.gz
+	$(TAR) -xzf $<
+	patch $@ < utf8proc_Makefile.patch
+	touch -c $@
+
+$(UTF8PROC_OBJ_SOURCE): utf8proc-v$(UTF8PROC_VER)/Makefile
+	$(MAKE) -C utf8proc-v$(UTF8PROC_VER) cc="$(CC) -O2 -std=c99 $(fPIC)" AR="$(AR)" libutf8proc.a
+
+$(UTF8PROC_OBJ_LIB): $(UTF8PROC_OBJ_SOURCE)
+	cp -f $< $@
+
+$(UTF8PROC_OBJ_HEADER): utf8proc-v$(UTF8PROC_VER)/Makefile
+	cp -f utf8proc-v$(UTF8PROC_VER)/utf8proc.h $@
+
+clean-utf8proc:
+	-$(MAKE) -C utf8proc-v$(UTF8PROC_VER) clean
+distclean-utf8proc: clean-utf8proc
+	-rm -rf utf8proc-v$(UTF8PROC_VER).tar.gz utf8proc-v$(UTF8PROC_VER)
+
+get-utf8proc: utf8proc-v$(UTF8PROC_VER).tar.gz
+configure-utf8proc: get-utf8proc
+compile-utf8proc: $(UTF8PROC_OBJ_SOURCE)
+check-utf8proc: 
+install-utf8proc: $(UTF8PROC_OBJ_TARGET)
 
 ## SUITESPARSE ##
 
@@ -1253,7 +1293,7 @@ SuiteSparse-$(SUITESPARSE_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://www.cise.ufl.edu/research/sparse/SuiteSparse/$@ 
 SuiteSparse-$(SUITESPARSE_VER)/Makefile: SuiteSparse-$(SUITESPARSE_VER).tar.gz
 	mkdir -p SuiteSparse-$(SUITESPARSE_VER)
-	tar -C SuiteSparse-$(SUITESPARSE_VER) --strip-components 1 -zxf $<
+	$(TAR) -C SuiteSparse-$(SUITESPARSE_VER) --strip-components 1 -zxf $<
 	touch -c $@
 
 ifeq ($(USE_ATLAS), 1)
@@ -1341,7 +1381,7 @@ LIBUNWIND_CFLAGS = $(CFLAGS) -U_FORTIFY_SOURCE $(fPIC)
 libunwind-$(UNWIND_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://download.savannah.gnu.org/releases/libunwind/$@ 
 libunwind-$(UNWIND_VER)/configure: libunwind-$(UNWIND_VER).tar.gz
-	tar xfz $<
+	$(TAR) xfz $<
 	touch -c $@
 libunwind-$(UNWIND_VER)/config.status: libunwind-$(UNWIND_VER)/configure
 	cd libunwind-$(UNWIND_VER) && \
@@ -1386,7 +1426,7 @@ libosxunwind-$(OSXUNWIND_VER).tar.gz:
 	$(JLDOWNLOAD) $@ https://github.com/JuliaLang/libosxunwind/archive/v$(OSXUNWIND_VER).tar.gz
 
 libosxunwind-$(OSXUNWIND_VER)/Makefile: libosxunwind-$(OSXUNWIND_VER).tar.gz
-	tar xfz $<
+	$(TAR) xfz $<
 	touch -c $@
 
 $(OSXUNWIND_OBJ_SOURCE): libosxunwind-$(OSXUNWIND_VER)/Makefile
@@ -1417,7 +1457,7 @@ GMP_OBJ_TARGET = $(BUILD)/$(JL_LIBDIR)/libgmp.$(SHLIB_EXT)
 gmp-$(GMP_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ ftp://ftp.gmplib.org/pub/gmp-$(GMP_VER)/$@
 gmp-$(GMP_VER)/configure: gmp-$(GMP_VER).tar.bz2
-	tar jxf $<
+	$(TAR) jxf $<
 	touch -c $@
 gmp-$(GMP_VER)/config.status: gmp-$(GMP_VER)/configure
 	cd gmp-$(GMP_VER) && \
@@ -1466,7 +1506,7 @@ endif
 mpfr-$(MPFR_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://www.mpfr.org/mpfr-current/$@
 mpfr-$(MPFR_VER)/configure: mpfr-$(MPFR_VER).tar.bz2
-	tar jxf $<
+	$(TAR) jxf $<
 	touch -c $@
 mpfr-$(MPFR_VER)/config.status: mpfr-$(MPFR_VER)/configure $(MPFR_DEPS)
 	cd mpfr-$(MPFR_VER) && \
@@ -1514,7 +1554,7 @@ endif
 zlib-$(ZLIB_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://zlib.net/$@
 zlib-$(ZLIB_VER)/configure: zlib-$(ZLIB_VER).tar.gz
-	tar zxf $<
+	$(TAR) zxf $<
 	touch -c $@
 zlib-$(ZLIB_VER)/config.status: zlib-$(ZLIB_VER)/configure
 ifeq ($(OS), WINNT)
@@ -1566,7 +1606,7 @@ install-patchelf: $(PATCHELF_TARGET)
 patchelf-$(PATCHELF_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://hydra.nixos.org/build/1524660/download/2/$@
 patchelf-$(PATCHELF_VER)/configure: patchelf-$(PATCHELF_VER).tar.bz2
-	tar jxf $<
+	$(TAR) jxf $<
 	touch -c $@
 patchelf-$(PATCHELF_VER)/config.status: patchelf-$(PATCHELF_VER)/configure
 	cd patchelf-$(PATCHELF_VER) && \
@@ -1605,7 +1645,7 @@ GIT_TARGET = $(BUILD)/git
 git-$(GIT_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://git-core.googlecode.com/files/$@
 git-$(GIT_VER)/configure: git-$(GIT_VER).tar.gz
-	tar zxf $<
+	$(TAR) zxf $<
 	touch -c $@
 git-$(GIT_VER)/config.status: git-$(GIT_VER)/configure
 	cd git-$(GIT_VER) && \

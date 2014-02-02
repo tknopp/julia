@@ -1,7 +1,5 @@
 #### Specialized matrix types ####
 
-import Base.conj, Base.transpose, Base.ctranspose, Base.convert
-
 ## Hermitian tridiagonal matrices
 type SymTridiagonal{T} <: AbstractMatrix{T}
     dv::Vector{T}                        # diagonal
@@ -15,7 +13,7 @@ end
 SymTridiagonal{T}(dv::Vector{T}, ev::Vector{T}) = SymTridiagonal{T}(copy(dv), copy(ev))
 
 function SymTridiagonal{Td,Te}(dv::Vector{Td}, ev::Vector{Te})
-    T = promote(Td,Te)
+    T = promote_type(Td,Te)
     SymTridiagonal(convert(Vector{T}, dv), convert(Vector{T}, ev))
 end
 
@@ -23,37 +21,22 @@ SymTridiagonal(A::AbstractMatrix) = diag(A,1)==diag(A,-1)?SymTridiagonal(diag(A)
 full{T}(M::SymTridiagonal{T}) = convert(Matrix{T}, M)
 convert{T}(::Type{Matrix{T}}, M::SymTridiagonal{T})=diagm(M.dv)+diagm(M.ev,-1)+conj(diagm(M.ev,1))
 
-function show(io::IO, S::SymTridiagonal)
-    println(io, summary(S), ":")
-    print(io, "diag: ")
-    print_matrix(io, (S.dv)')
-    print(io, "\n sub: ")
-    print_matrix(io, (S.ev)')
-end
-
 size(m::SymTridiagonal) = (length(m.dv), length(m.dv))
 size(m::SymTridiagonal, d::Integer) = d<1 ? error("dimension out of range") : (d<=2 ? length(m.dv) : 1)
 
 #Elementary operations
-copy(S::SymTridiagonal) = SymTridiagonal(copy(S.dv), copy(S.ev))
-round(M::SymTridiagonal) = SymTridiagonal(round(M.dv), round(M.ev))
-iround(M::SymTridiagonal) = SymTridiagonal(iround(M.dv), iround(M.ev))
+for func in (:copy, :round, :iround, :conj)
+    @eval begin
+        ($func)(M::SymTridiagonal) = SymTridiagonal(($func)(M.dv), ($func)(M.ev))
+    end
+end
 
-conj(M::SymTridiagonal) = SymTridiagonal(conj(M.dv), conj(M.ev))
 transpose(M::SymTridiagonal) = M #Identity operation
 ctranspose(M::SymTridiagonal) = conj(M)
 
 function diag{T}(M::SymTridiagonal{T}, n::Integer=0)
     absn = abs(n)
-    if absn==0
-        return M.dv
-    elseif absn==1
-        return M.ev
-    elseif absn<size(M,1)
-        return zeros(T,size(M,1)-absn)
-    else
-        throw(BoundsError())
-    end
+    absn==0 ? M.dv : absn==1 ? M.ev : absn<size(M,1) ? zeros(T,size(M,1)-absn) : throw(BoundsError())
 end
 
 +(A::SymTridiagonal, B::SymTridiagonal) = SymTridiagonal(A.dv+B.dv, A.ev+B.ev)
@@ -147,6 +130,11 @@ end
 inv(A::SymTridiagonal) = inv_usmani(A.ev, A.dv, A.ev)
 det(A::SymTridiagonal) = det_usmani(A.ev, A.dv, A.ev)
 
+function getindex{T}(A::SymTridiagonal{T}, i::Integer, j::Integer)
+    (1<=i<=size(A,2) && 1<=j<=size(A,2)) || throw(BoundsError())
+    i==j ? A.dv[i] : i==j+1 ? A.ev[j] : i+1==j ? A.ev[i] : zero(T)
+end
+
 ## Tridiagonal matrices ##
 type Tridiagonal{T} <: AbstractMatrix{T}
     dl::Vector{T}    # sub-diagonal
@@ -173,22 +161,12 @@ end
 Tridiagonal{T}(dl::Vector{T}, d::Vector{T}, du::Vector{T}) = Tridiagonal{T}(dl, d, du)
 
 function Tridiagonal{Tl, Td, Tu}(dl::Vector{Tl}, d::Vector{Td}, du::Vector{Tu})
-    R = promote(Tl, Td, Tu)
-    Tridiagonal(convert(Vector{R}, dl), convert(Vector{R}, d), convert(Vector{R}, du))
+    Tridiagonal(map(v->copy(convert(Vector{promote_type(Tl,Td,Tu)}, v)), (dl, d, du))...)
 end
 
 size(M::Tridiagonal) = (length(M.d), length(M.d))
 size(M::Tridiagonal, d::Integer) = d<1 ? error("dimension out of range") : (d<=2 ? length(M.d) : 1)
 
-function show(io::IO, M::Tridiagonal)
-    println(io, summary(M), ":")
-    print(io, " sub: ")
-    print_matrix(io, (M.dl)')
-    print(io, "\ndiag: ")
-    print_matrix(io, (M.d)')
-    print(io, "\n sup: ")
-    print_matrix(io, (M.du)')
-end
 full{T}(M::Tridiagonal{T}) = convert(Matrix{T}, M)
 function convert{T}(::Type{Matrix{T}}, M::Tridiagonal{T})
     A = zeros(T, size(M))
@@ -210,27 +188,24 @@ end
 
 # Operations on Tridiagonal matrices
 copy!(dest::Tridiagonal, src::Tridiagonal) = Tridiagonal(copy!(dest.dl, src.dl), copy!(dest.d, src.d), copy!(dest.du, src.du))
-# copy(A::Tridiagonal) = Tridiagonal(copy(A.dl), copy(A.d), copy(A.du))
-round(M::Tridiagonal) = Tridiagonal(round(M.dl), round(M.d), round(M.du))
-iround(M::Tridiagonal) = Tridiagonal(iround(M.dl), iround(M.d), iround(M.du))
 
-conj(M::Tridiagonal) = Tridiagonal(conj(M.dl), conj(M.d), conj(M.du))
+#Elementary operations
+for func in (:copy, :round, :iround, :conj) 
+    @eval begin
+        ($func)(M::Tridiagonal) = Tridiagonal(map(($func), (M.dl, M.d, M.du))...)
+    end
+end
+
 transpose(M::Tridiagonal) = Tridiagonal(M.du, M.d, M.dl)
 ctranspose(M::Tridiagonal) = conj(transpose(M))
 
-function diag{T}(M::Tridiagonal{T}, n::Integer=0)
-    if n==0
-        return M.d 
-    elseif n==-1
-        return M.dl
-    elseif n==1
-        return M.du
-    elseif -size(M,1)n<size(M,1)
-        return zeros(T,size(M,1)-abs(n))
-    else 
-        throw(BoundsError())
-    end
+diag{T}(M::Tridiagonal{T}, n::Integer=0) = n==0 ? M.d : n==-1 ? M.dl : n==1 ? M.du : abs(n)<size(M,1) ? zeros(T,size(M,1)-abs(n)) : throw(BoundsError()) 
+
+function getindex{T}(A::Tridiagonal{T}, i::Integer, j::Integer)
+    (1<=i<=size(A,2) && 1<=j<=size(A,2)) || throw(BoundsError())
+    i==j ? A.d[i] : i==j+1 ? A.dl[j] : i+1==j ? A.du[i] : zero(T)
 end
+
 
 ###################
 # Generic methods #
@@ -239,12 +214,12 @@ end
 +(A::Tridiagonal, B::Tridiagonal) = Tridiagonal(A.dl+B.dl, A.d+B.d, A.du+B.du)
 -(A::Tridiagonal, B::Tridiagonal) = Tridiagonal(A.dl-B.dl, A.d-B.d, A.du+B.du)
 *(A::Tridiagonal, B::Number) = Tridiagonal(A.dl*B, A.d*B, A.du*B)
-*(B::Number, A::SymTridiagonal) = A*B
+*(B::Number, A::Tridiagonal) = A*B
 /(A::Tridiagonal, B::Number) = Tridiagonal(A.dl/B, A.d/B, A.du/B)
 
 ==(A::Tridiagonal, B::Tridiagonal) = (A.dl==B.dl) && (A.d==B.d) && (A.du==B.du)
 ==(A::Tridiagonal, B::SymTridiagonal) = (A.dl==A.du==B.ev) && (A.d==B.dv)
-==(A::SymTridiagonal, B::SymTridiagonal) = B==A
+==(A::SymTridiagonal, B::Tridiagonal) = (B.dl==B.du==A.ev) && (B.d==A.dv)
 
 inv(A::Tridiagonal) = inv_usmani(A.dl, A.d, A.du)
 det(A::Tridiagonal) = det_usmani(A.dl, A.d, A.du)
@@ -256,9 +231,11 @@ convert(::Type{Tridiagonal}, A::SymTridiagonal) = Tridiagonal(A.ev, A.dv, A.ev)
 -(A::Tridiagonal, B::SymTridiagonal) = Tridiagonal(A.dl-B.ev, A.d-B.dv, A.du-B.ev)
 -(A::SymTridiagonal, B::Tridiagonal) = Tridiagonal(A.ev-B.dl, A.dv-B.d, A.ev-B.du)
 
+convert{T}(::Type{Tridiagonal{T}},M::Tridiagonal) = Tridiagonal(convert(Vector{T}, M.dl), convert(Vector{T}, M.d), convert(Vector{T}, M.du))
 convert{T}(::Type{Tridiagonal{T}}, M::SymTridiagonal{T}) = Tridiagonal(M)
 convert{T}(::Type{SymTridiagonal{T}}, M::Tridiagonal) = M.dl==M.du ? (SymTridiagonal(M.dl, M.d)) :
     error("Tridiagonal is not symmetric, cannot convert to SymTridiagonal")
+convert{T}(::Type{SymTridiagonal{T}},M::SymTridiagonal) = SymTridiagonal(convert(Vector{T}, M.dv), convert(Vector{T}, M.ev))
 
 ## Solvers
 
@@ -392,9 +369,9 @@ end
 LDLTTridiagonal{S<:BlasFloat,T<:BlasFloat}(D::Vector{S}, E::Vector{T}) = LDLTTridiagonal{T,S}(D, E)
 
 ldltd!{T<:BlasFloat}(A::SymTridiagonal{T}) = LDLTTridiagonal(LAPACK.pttrf!(real(A.dv),A.ev)...)
-ldltd!{T<:Integer}(A::SymTridiagonal{T}) = ldltd!(SymTridiagonal(float(A.dv),float(A.ev)))
-ldltd(A::SymTridiagonal) = ldltd!(copy(A))
-factorize!(A::SymTridiagonal) = ldltd(A)
+ldltd{T<:BlasFloat}(A::SymTridiagonal{T}) = ldltd!(copy(A))
+ldltd{T}(A::SymTridiagonal{T}) = (S = promote_type(typeof(sqrt(one(T))),Float32); S != T ? ldltd!(convert(SymTridiagonal{S},A)) : ldltd!(copy(A)))
+factorize(A::SymTridiagonal) = ldltd(A)
 
 A_ldiv_B!{T<:BlasReal}(C::LDLTTridiagonal{T}, B::StridedVecOrMat{T}) = LAPACK.pttrs!(C.D, C.E, B)
 A_ldiv_B!{T<:BlasComplex}(C::LDLTTridiagonal{T}, B::StridedVecOrMat{T}) = LAPACK.pttrs!('L', C.D, C.E, B)
@@ -416,9 +393,9 @@ type LUTridiagonal{T} <: Factorization{T}
     # end
 end
 lufact!{T<:BlasFloat}(A::Tridiagonal{T}) = LUTridiagonal{T}(LAPACK.gttrf!(A.dl,A.d,A.du)...)
-lufact!{T<:Union(Rational,Integer)}(A::Tridiagonal{T}) = lufact!(float(A))
-lufact(A::Tridiagonal) = lufact!(copy(A))
-factorize!(A::Tridiagonal) = lufact!(A)
+lufact{T<:BlasFloat}(A::Tridiagonal{T}) = lufact!(copy(A))
+lufact{T}(A::Tridiagonal{T}) = (S = promote_type(typeof(sqrt(one(T))),Float32); S != T ? lufact!(convert(Tridiagonal{S},A)) : lufact!(copy(A)))
+factorize(A::Tridiagonal) = lufact(A)
 #show(io, lu::LUTridiagonal) = print(io, "LU decomposition of ", summary(lu.lu))
 
 function det{T}(lu::LUTridiagonal{T})

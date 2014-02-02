@@ -43,44 +43,93 @@ diag(A::AbstractVector) = error("use diagm instead of diag to construct a diagon
 
 #diagm{T}(v::AbstractVecOrMat{T})
 
-function norm{T}(x::AbstractVector{T}, p::Number)
-    if length(x) == 0
-        a = zero(T)
-    elseif p == Inf
-        a = maximum(abs(x))
-    elseif p == -Inf
-        a = minimum(abs(x))
-    else
-        absx = abs(x)
-        dx = maximum(absx)
-        if dx != zero(T)
-            scale!(absx, 1/dx)
-            a = dx * (sum(absx.^p).^(1/p))
-        else
-            a = sum(absx.^p).^(1/p)
+function normMinusInf(x::AbstractVector)
+    n = length(x)
+    n > 0 || return real(zero(eltype(x)))
+    a = abs(x[1])
+    @inbounds for i = 2:n
+        a = min(a, abs(x[i]))
+    end
+    return a
+end
+function normInf(x::AbstractVector)
+    a = real(zero(eltype(x)))
+    @inbounds for i = 1:length(x)
+        a = max(a, abs(x[i]))
+    end
+    return a
+end
+function norm1(x::AbstractVector)
+    a = real(zero(eltype(x)))
+    @inbounds for i = 1:length(x)
+        a += abs(x[i])
+    end
+    return a
+end
+function norm2(x::AbstractVector)
+    nrmInfInv = inv(norm(x,Inf))
+    isinf(nrmInfInv) && return zero(nrmInfInv)
+    a = abs2(x[1]*nrmInfInv)
+    @inbounds for i = 2:length(x)
+        a += abs2(x[i]*nrmInfInv)
+    end
+    return sqrt(a)/nrmInfInv
+end
+function normp(x::AbstractVector,p::Number)
+    absx = convert(Vector{typeof(sqrt(abs(x[1])))}, abs(x))
+    dx = maximum(absx)
+    dx == 0 && return zero(typeof(absx))
+    scale!(absx, 1/dx)
+    pp = convert(eltype(absx), p)
+    return dx*sum(absx.^pp)^inv(pp)
+end
+function norm(x::AbstractVector, p::Number=2)
+    p == 0 && return nnz(x)
+    p == Inf && return normInf(x)
+    p == -Inf && return normMinusInf(x)
+    p == 1 && return norm1(x)
+    p == 2 && return norm2(x)
+    normp(x,p)
+end
+
+function norm1{T}(A::AbstractMatrix{T})
+    m,n = size(A)
+    nrm = zero(real(zero(T)))
+    @inbounds begin
+        for j = 1:n
+            nrmj = zero(real(zero(T)))
+            for i = 1:m
+                nrmj += abs(A[i,j])
+            end
+            nrm = max(nrm,nrmj)
         end
     end
-    float(a)
+    return nrm
 end
-norm{T<:Integer}(x::AbstractVector{T}, p::Number) = norm(float(x), p)
-norm(x::AbstractVector) = norm(x, 2)
-
-function norm(A::AbstractMatrix, p::Number=2)
-    m, n = size(A)
-    if m == 0 || n == 0
-        a = zero(eltype(A))
-    elseif m == 1 || n == 1
-        a = norm(reshape(A, length(A)), p)
-    elseif p == 1
-        a = maximum(sum(abs(A),1))
-    elseif p == 2
-        a = maximum(svdvals(A))
-    elseif p == Inf
-        a = maximum(sum(abs(A),2))
-    else
-        throw(ArgumentError("invalid p-norm p=$p. Valid: 1, 2, Inf"))
+function norm2(A::AbstractMatrix)
+    m,n = size(A)
+    if m == 0 || n == 0 return real(zero(eltype(A))) end
+    svdvals(A)[1]
+end
+function normInf{T}(A::AbstractMatrix{T})
+    m,n = size(A)
+    nrm = zero(real(zero(T)))
+    @inbounds begin
+        for i = 1:m
+            nrmi = zero(real(zero(T)))
+            for j = 1:n
+                nrmi += abs(A[i,j])
+            end
+            nrm = max(nrm,nrmi)
+        end
     end
-    float(a)
+    return nrm
+end
+function norm{T}(A::AbstractMatrix{T}, p::Number=2)
+    p == 1 && return norm1(A)
+    p == 2 && return norm2(A)
+    p == Inf && return normInf(A)
+    throw(ArgumentError("invalid p-norm p=$p. Valid: 1, 2, Inf"))
 end
 
 norm(x::Number, p=nothing) = abs(x)
@@ -109,10 +158,11 @@ trace(x::Number) = x
 #det(a::AbstractMatrix)
 
 inv(a::AbstractVector) = error("argument must be a square matrix")
+inv{T}(A::AbstractMatrix{T}) = A_ldiv_B!(A,eye(T, chksquare(A)))
 
 function \{TA<:Number,TB<:Number}(A::AbstractMatrix{TA}, B::AbstractVecOrMat{TB})
     TC = typeof(one(TA)/one(TB))
-    return TB == TC ? A_ldiv_B!(A, copy(B)) : A_ldiv_B!(A, convert(Array{TC}, B))
+    A_ldiv_B!(convert(typeof(A).name.primary{TC}, A), TB == TC ? copy(B) : convert(typeof(B).name.primary{TC}, B))
 end
 \(a::AbstractVector, b::AbstractArray) = reshape(a, length(a), 1) \ b
 /(A::AbstractVecOrMat, B::AbstractVecOrMat) = (B' \ A')'
@@ -224,3 +274,67 @@ function axpy!{Ti<:Integer,Tj<:Integer}(alpha, x::AbstractArray, rx::AbstractArr
     y
 end
 
+# Elementary reflection similar to LAPACK. The reflector is not Hermitian but ensures that tridiagonalization of Hermitian matrices become real. See lawn72
+function elementaryLeft!(A::AbstractMatrix, row::Integer, col::Integer)
+    m, n = size(A)
+    1 <= row <= m || throw(BoundsError("row cannot be less than one or larger than $(size(A,1))"))
+    1 <= col <= n || throw(BoundsError("col cannot be less than one or larger than $(size(A,2))"))
+    @inbounds begin
+        ξ1 = A[row,col]
+        normu = abs2(ξ1)
+        for i = row+1:m
+            normu += abs2(A[i,col])
+        end
+        normu = sqrt(normu)
+        ν = copysign(normu,real(ξ1))
+        A[row,col] += ν
+        ξ1 += ν
+        A[row,col] = -ν
+        for i = row+1:m
+            A[i,col] /= ξ1
+        end
+    end
+    ξ1/ν
+end
+function elementaryRight!(A::AbstractMatrix, row::Integer, col::Integer)
+    m, n = size(A)
+    1 <= row <= m || throw(BoundsError("row cannot be less than one or larger than $(size(A,1))"))
+    1 <= col <= n || throw(BoundsError("col cannot be less than one or larger than $(size(A,2))"))
+    row <= col || error("col cannot be larger than row")
+    @inbounds begin
+        ξ1 = A[row,col]
+        normu = abs2(ξ1)
+        for i = col+1:n
+            normu += abs2(A[row,i])
+        end
+        normu = sqrt(normu)
+        ν = copysign(normu,real(ξ1))
+        A[row,col] += ν
+        ξ1 += ν
+        A[row,col] = -ν
+        for i = col+1:n
+            A[row,i] /= ξ1
+        end
+    end
+    conj(ξ1/ν)
+end
+function elementaryRightTrapezoid!(A::AbstractMatrix, row::Integer)
+    m, n = size(A)
+    1 <= row <= m || throw(BoundsError("row cannot be less than one or larger than $(size(A,1))"))
+    @inbounds begin
+        ξ1 = A[row,row]
+        normu = abs2(A[row,row])
+        for i = m+1:n
+            normu += abs2(A[row,i])
+        end
+        normu = sqrt(normu)
+        ν = copysign(normu,real(ξ1))
+        A[row,row] += ν
+        ξ1 += ν
+        A[row,row] = -ν
+        for i = m+1:n
+            A[row,i] /= ξ1
+        end
+    end
+    conj(ξ1/ν)
+end

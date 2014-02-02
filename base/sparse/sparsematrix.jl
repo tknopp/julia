@@ -119,7 +119,7 @@ copy(S::SparseMatrixCSC) =
 similar(S::SparseMatrixCSC, Tv::NonTupleType) =
     SparseMatrixCSC(S.m, S.n, similar(S.colptr), similar(S.rowval), Array(Tv, length(S.rowval)))
 
-similar(S::SparseMatrixCSC, Tv::Type, d::(Int,Int)) = spzeros(Tv, d[1], d[2])
+similar(S::SparseMatrixCSC, Tv::Type, d::(Integer,Integer)) = spzeros(Tv, d[1], d[2])
 
 function similar(A::SparseMatrixCSC, Tv::Type, Ti::Type)
     colptrA = A.colptr; rowvalA = A.rowval; nzvalA = A.nzval
@@ -146,6 +146,17 @@ function convert{Tv,Ti,TvS,TiS}(::Type{SparseMatrixCSC{Tv,Ti}}, S::SparseMatrixC
         return SparseMatrixCSC(S.m, S.n, 
                                convert(Vector{Ti},S.colptr), 
                                convert(Vector{Ti},S.rowval), 
+                               convert(Vector{Tv},S.nzval))
+    end
+end
+
+function convert{Tv,TvS,TiS}(::Type{SparseMatrixCSC{Tv}}, S::SparseMatrixCSC{TvS,TiS})
+    if Tv == TvS
+        return S
+    else
+        return SparseMatrixCSC(S.m, S.n,
+                               S.colptr,
+                               S.rowval,
                                convert(Vector{Tv},S.nzval))
     end
 end
@@ -393,9 +404,7 @@ sprandbool(m::Integer, n::Integer, density::FloatingPoint) = sprand(m,n,density,
 spones{T}(S::SparseMatrixCSC{T}) =
      SparseMatrixCSC(S.m, S.n, copy(S.colptr), copy(S.rowval), ones(T, S.colptr[end]-1))
 
-spzeros(m::Integer) = spzeros(m, m)
 spzeros(m::Integer, n::Integer) = spzeros(Float64, m, n)
-spzeros(Tv::Type, m::Integer) = spzeros(Tv, m, m)
 spzeros(Tv::Type, m::Integer, n::Integer) =
     SparseMatrixCSC(m, n, ones(Int, n+1), Array(Int, 0), Array(Tv, 0))
 spzeros(Tv::Type, Ti::Type, m::Integer, n::Integer) =
