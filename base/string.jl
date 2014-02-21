@@ -17,6 +17,7 @@ next(s::String, i::Integer) = next(s,int(i))
 ## conversion of general objects to strings ##
 
 function print_to_string(xs...)
+    # specialized for performance reasons
     s = IOBuffer(Array(Uint8,isa(xs[1],String) ? endof(xs[1]) : 0), true, true)
     truncate(s,0)
     for x in xs
@@ -53,7 +54,6 @@ convert(::Type{Symbol}, s::String) = symbol(s)
 
 start(s::String) = 1
 done(s::String,i) = (i > endof(s))
-isempty(s::String) = done(s,start(s))
 getindex(s::String, i::Int) = next(s,i)[1]
 getindex(s::String, i::Integer) = s[int(i)]
 getindex(s::String, x::Real) = s[to_index(x)]
@@ -184,7 +184,7 @@ function search(s::String, c::Chars, i::Integer)
     i = nextind(s,i-1)
     while !done(s,i)
         d, j = next(s,i)
-        if in(d,c)
+        if d in c
             return i
         end
         i = j
@@ -321,8 +321,12 @@ function search(s::String, t::String, i::Integer=start(s))
     end
 end
 
-rsearch(s::String, c::Chars, i::Integer=endof(s)) =
-    endof(s)-search(RevString(s), c, endof(s)-i+1)+1
+function rsearch(s::String, c::Chars, i::Integer=endof(s))
+    e = endof(s)
+    j = search(RevString(s), c, e-i+1)
+    j == 0 && return 0
+    e-j+1
+end
 
 function _rsearchindex(s, t, i)
     if isempty(t)
@@ -561,28 +565,29 @@ next(s::GenericString, i::Int) = next(s.string, i)
 ## plain old character arrays ##
 
 immutable UTF32String <: DirectIndexString
-    chars::Array{Char,1}
+    data::Array{Char,1}
 
     UTF32String(a::Array{Char,1}) = new(a)
     UTF32String(c::Char...) = new([ c[i] for i=1:length(c) ])
 end
 UTF32String(x...) = UTF32String(map(char,x)...)
 
-next(s::UTF32String, i::Int) = (s.chars[i], i+1)
-endof(s::UTF32String) = length(s.chars)
-length(s::UTF32String) = length(s.chars)
+next(s::UTF32String, i::Int) = (s.data[i], i+1)
+endof(s::UTF32String) = length(s.data)
+length(s::UTF32String) = length(s.data)
 
 utf32(x) = convert(UTF32String, x)
+convert(::Type{UTF32String}, s::UTF32String) = s
 convert(::Type{UTF32String}, s::String) = UTF32String(Char[c for c in s])
 convert{T<:String}(::Type{T}, v::Vector{Char}) = convert(T, UTF32String(v))
-convert(::Type{Array{Char,1}}, s::UTF32String) = s.chars
-convert(::Type{Array{Char}}, s::UTF32String) = s.chars
+convert(::Type{Array{Char,1}}, s::UTF32String) = s.data
+convert(::Type{Array{Char}}, s::UTF32String) = s.data
 
-reverse(s::UTF32String) = UTF32String(reverse(s.chars))
+reverse(s::UTF32String) = UTF32String(reverse(s.data))
 
-sizeof(s::UTF32String) = sizeof(s.chars)
+sizeof(s::UTF32String) = sizeof(s.data)
 convert{T<:Union(Int32,Uint32,Char)}(::Type{Ptr{T}}, s::UTF32String) =
-    convert(Ptr{T}, s.chars)
+    convert(Ptr{T}, s.data)
 
 ## substrings reference original strings ##
 
@@ -593,7 +598,7 @@ immutable SubString{T<:String} <: String
 
     function SubString(s::T, i::Int, j::Int)
         if i > endof(s) || j<i
-            return new(s, i, 0)
+            return new(s, i-1, 0)
         else
             if !isvalid(s,i)
                 error("invalid SubString indexes")
@@ -627,9 +632,12 @@ function next(s::SubString, i::Int)
     c, i-s.offset
 end
 
-getindex(s::SubString, i::Int) = getindex(s.string, i+s.offset)
-
-isempty(s::SubString) = s.endof == 0
+function getindex(s::SubString, i::Int)
+    if i < 1 || i > s.endof
+        error(BoundsError)
+    end
+    getindex(s.string, i+s.offset)
+end
 
 endof(s::SubString) = s.endof
 # TODO: length(s::SubString) = ??
@@ -844,7 +852,7 @@ function print_escaped(io, s::String, esc::String)
         c == '\0'       ? print(io, escape_nul(s,j)) :
         c == '\e'       ? print(io, "\\e") :
         c == '\\'       ? print(io, "\\\\") :
-        in(c,esc)       ? print(io, '\\', c) :
+        c in esc        ? print(io, '\\', c) :
         7 <= c <= 13    ? print(io, '\\', "abtnvfr"[int(c-6)]) :
         isprint(c)      ? print(io, c) :
         c <= '\x7f'     ? print(io, "\\x", hex(c, 2)) :
@@ -864,13 +872,13 @@ end
 # bare minimum unescaping function unescapes only given characters
 
 function print_unescaped_chars(io, s::String, esc::String)
-    if !in('\\',esc)
+    if !('\\' in esc)
         esc = string("\\", esc)
     end
     i = start(s)
     while !done(s,i)
         c, i = next(s,i)
-        if c == '\\' && !done(s,i) && in(s[i],esc)
+        if c == '\\' && !done(s,i) && s[i] in esc
             c, i = next(s,i)
         end
         print(io, c)
@@ -1398,7 +1406,7 @@ function lstrip(s::String, chars::Chars=_default_delims)
     i = start(s)
     while !done(s,i)
         c, j = next(s,i)
-        if !in(c, chars)
+        if !(c in chars)
             return s[i:end]
         end
         i = j
@@ -1411,7 +1419,7 @@ function rstrip(s::String, chars::Chars=_default_delims)
     i = start(r)
     while !done(r,i)
         c, j = next(r,i)
-        if !in(c, chars)
+        if !(c in chars)
             return s[1:end-i+1]
         end
         i = j
@@ -1655,3 +1663,12 @@ function repr(x)
     showall(s, x)
     takebuf_string(s)
 end
+
+# pointer conversions of ASCII/UTF8/UTF16/UTF32 strings:
+pointer(x::Union(ByteString,UTF16String,UTF32String)) = pointer(x.data)
+pointer{T<:ByteString}(x::SubString{T}) = pointer(x.string.data) + x.offset
+pointer(x::ByteString, i::Integer) = pointer(x.data)+(i-1)
+pointer{T<:ByteString}(x::SubString{T}, i::Integer) = pointer(x.string.data) + x.offset + (i-1)
+pointer(x::Union(UTF16String,UTF32String), i::Integer) = pointer(x)+(i-1)*sizeof(eltype(x.data))
+pointer{T<:Union(UTF16String,UTF32String)}(x::SubString{T}) = pointer(x.string.data) + x.offset*sizeof(eltype(x.data))
+pointer{T<:Union(UTF16String,UTF32String)}(x::SubString{T}, i::Integer) = pointer(x.string.data) + (x.offset + (i-1))*sizeof(eltype(x.data))

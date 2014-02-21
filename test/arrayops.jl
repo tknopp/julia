@@ -2,6 +2,9 @@
 
 ## basics
 
+@test length([1, 2, 3]) == 3
+@test nfilled([1, 2, 3]) == 3
+
 a = ones(4)
 b = a+a
 @test b[1]==2. && b[2]==2. && b[3]==2. && b[4]==2.
@@ -50,12 +53,10 @@ a = reshape(b, (2, 2, 2, 2, 2))
 
 sz = (5,8,7)
 A = reshape(1:prod(sz),sz...)
-tmp = A[2:6]
-@test tmp == [2:6]
+@test A[2:6] == [2:6]
 tmp = A[1:3,2,2:4]
 @test tmp == cat(3,46:48,86:88,126:128)
-tmp = A[:,7:-3:1,5]
-@test tmp == [191 176 161; 192 177 162; 193 178 163; 194 179 164; 195 180 165]
+@test A[:,7:-3:1,5] == [191 176 161; 192 177 162; 193 178 163; 194 179 164; 195 180 165]
 tmp = A[:,3:9]
 @test tmp == reshape(11:45,5,7)
 rng = (2,2:3,2:2:5)
@@ -89,6 +90,9 @@ a = [3, 5, -7, 6]
 b = [4, 6, 2, -7, 1]
 ind = findin(a, b)
 @test ind == [3,4]
+
+rt = Base.return_types(setindex!, (Array{Int32, 3}, Uint8, Vector{Int}, Float64, Range1{Int}))
+@test length(rt) == 1 && rt[1] == Array{Int32, 3}
 
 # sub
 A = reshape(1:120, 3, 5, 8)
@@ -327,6 +331,32 @@ for i = tensors
     @test isequal(i,permutedims(ipermutedims(i,perm),perm))
 end
 
+## unique across dim ##
+
+# All rows and columns unique
+A = ones(10, 10)
+A[diagind(A)] = shuffle!([1:10])
+@test unique(A, 1) == A
+@test unique(A, 2) == A
+
+# 10 repeats of each row
+B = A[shuffle!(repmat(1:10, 10)), :]
+C = unique(B, 1)
+@test sortrows(C) == sortrows(A)
+@test unique(B, 2) == B
+@test unique(B.', 2).' == C
+
+# Along third dimension
+D = cat(3, B, B)
+@test unique(D, 1) == cat(3, C, C)
+@test unique(D, 3) == cat(3, B)
+
+# With hash collisions
+immutable HashCollision
+    x::Float64
+end
+Base.hash(::HashCollision) = uint(0)
+@test map(x->x.x, unique(map(HashCollision, B), 1)) == C
 
 ## reduce ##
 
@@ -771,6 +801,8 @@ fill!(S, 2)
 S = sub(A, 1:2, 3)
 fill!(S, 3)
 @test A == [1 1 3; 2 2 3; 1 1 1]
+rt = Base.return_types(fill!, (Array{Int32, 3}, Uint8))
+@test length(rt) == 1 && rt[1] == Array{Int32, 3}
 
 # splice!
 for idx in {1, 2, 5, 9, 10, 1:0, 2:1, 1:1, 2:2, 1:2, 2:4, 9:8, 10:9, 9:9, 10:10,
@@ -831,6 +863,7 @@ end
 @test isequal(flipdim(1:10, 1), 10:-1:1)
 @test isequal(flipdim(1:10, 2), 1:10)
 @test_throws flipdim(1:10, -1)
+@test isequal(flipdim(Array(Int,0,0),1), Array(Int,0,0))  # issue #5872
 
 # issue 4228
 A = [[i i; i i] for i=1:2]
@@ -861,4 +894,17 @@ A = [NaN]; B = [NaN]
 # complete testsuite for reducedim
 
 include("reducedim.jl")
-
+# Inferred types
+Nmax = 3 # TODO: go up to CARTESIAN_DIMS+2 (currently this exposes problems)
+for N = 1:Nmax
+    #indexing with (Range1, Range1, Range1)
+    args = ntuple(N, d->Range1{Int})
+    @test Base.return_types(getindex, tuple(Array{Float32, N}, args...)) == {Array{Float32, N}}
+    @test Base.return_types(getindex, tuple(BitArray{N}, args...)) == {BitArray{N}}
+    @test Base.return_types(setindex!, tuple(Array{Float32, N}, Array{Int, 1}, args...)) == {Array{Float32, N}}
+    # Indexing with (Range1, Range1, Float64)
+    args = ntuple(N, d->d<N ? Range1{Int} : Float64)
+    N > 1 && @test Base.return_types(getindex, tuple(Array{Float32, N}, args...)) == {Array{Float32, N-1}}
+    N > 1 && @test Base.return_types(getindex, tuple(BitArray{N}, args...)) == {BitArray{N-1}}
+    N > 1 && @test Base.return_types(setindex!, tuple(Array{Float32, N}, Array{Int, 1}, args...)) == {Array{Float32, N}}
+end

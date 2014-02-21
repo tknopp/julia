@@ -538,15 +538,15 @@ begin
     @test_throws getfield(z, 3)
 
     strct = LoadError("", 0, "")
-    setfield(strct, 2, 8)
+    setfield!(strct, 2, 8)
     @test strct.line == 8
-    setfield(strct, 3, "hi")
+    setfield!(strct, 3, "hi")
     @test strct.error == "hi"
-    setfield(strct, 1, "yo")
+    setfield!(strct, 1, "yo")
     @test strct.file == "yo"
     @test_throws getfield(strct, 10)
-    @test_throws setfield(strct, 0, "")
-    @test_throws setfield(strct, 4, "")
+    @test_throws setfield!(strct, 0, "")
+    @test_throws setfield!(strct, 4, "")
 end
 
 # allow typevar in Union to match as long as the arguments contain
@@ -857,7 +857,7 @@ function i2619()
 end
 i2619()
 @test !bad2619
-@test isa(e2619,ErrorException) && e2619.msg == "f not defined"
+@test isa(e2619,UndefVarError) && e2619.var === :f
 
 # issue #2919
 typealias Foo2919 Int
@@ -1355,3 +1355,19 @@ function f5584()
     end
 end
 f5584()
+
+# issue #5884
+
+type Polygon5884{T<:Real}
+    points::Vector{Complex{T}}
+end
+
+function test5884()
+    star = Array(Polygon5884,(3,))
+    star[1] = Polygon5884([Complex(1.0,1.0)])
+    p1 = star[1].points[1]
+    @test p1 == Complex(1.0,1.0)
+    @test p1.re == 1.0
+    @test star[1].points[1].re == 1.0
+end
+test5884()

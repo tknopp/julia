@@ -265,7 +265,7 @@ comparisons can be arbitrarily chained:
 
 Chaining comparisons is often quite convenient in numerical code.
 Chained comparisons use the ``&&`` operator for scalar comparisons,
-and the ``&`` operator for element-wise comparisons, which allows them to
+and the ``&`` operator for elementwise comparisons, which allows them to
 work on arrays. For example, ``0 .< A .< 1`` gives a boolean array whose
 entries are true where the corresponding elements of ``A`` are between 0
 and 1.
@@ -350,6 +350,7 @@ Function        Description
 ``div(x,y)``    truncated division; quotient rounded towards zero
 ``fld(x,y)``    floored division; quotient rounded towards ``-Inf``
 ``rem(x,y)``    remainder; satisfies ``x == div(x,y)*y + rem(x,y)``; sign matches ``x``
+``divrem(x,y)`` returns ``(div(x,y),rem(x,y))``
 ``mod(x,y)``    modulus; satisfies ``x == fld(x,y)*y + mod(x,y)``; sign matches ``y``
 ``mod2pi(x)``   modulus with respect to 2pi;  ``0 <= mod2pi(x)  < 2pi``
 ``gcd(x,y...)`` greatest common divisor of ``x``, ``y``,...; sign matches ``x``

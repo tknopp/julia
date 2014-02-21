@@ -22,18 +22,24 @@ type SharedArray{T,N} <: DenseArray{T,N}
     SharedArray(d,p,r,sn) = new(d,p,r,sn)
 end
 
-function SharedArray(T::Type, dims::NTuple; init=false, pids=workers())
+function SharedArray(T::Type, dims::NTuple; init=false, pids=Int[])
     N = length(dims)
 
     !isbits(T) ? error("Type of Shared Array elements must be bits types") : nothing
     @windows_only error(" SharedArray is not supported on Windows yet.")
     
+    if isempty(pids)
+        # only use workers on the current host
+        pids = procs(myid())
+        onlocalhost = true
+    else
+        onlocalhost = assert_same_host(pids)
+    end
+    
     len_S = prod(dims)
     if length(pids) > len_S
         pids = pids[1:len_S]
     end
-    
-    onlocalhost = assert_same_host(pids)
 
     local shm_seg_name = ""
     local s 
@@ -104,10 +110,20 @@ SharedArray(T, I::Int...; kwargs...) = SharedArray(T, I; kwargs...)
 
 length(S::SharedArray) = prod(S.dims)
 size(S::SharedArray) = S.dims
+
 procs(S::SharedArray) = S.pids
-sdata(S::SharedArray) = S.s
 indexpids(S::SharedArray) = S.pididx
 
+sdata(S::SharedArray) = S.s
+sdata(A::AbstractArray) = A
+
+localindexes(S::SharedArray) = S.pidx > 0 ? range_1dim(S, S.pidx) : error("SharedArray is not mapped to this process")
+
+convert{T}(::Type{Ptr{T}}, S::SharedArray) = convert(Ptr{T}, sdata(S))
+
+convert(::Type{SharedArray}, A::Array) = (S = SharedArray(eltype(A), size(A)); copy!(S, A))
+convert{T}(::Type{SharedArray{T}}, A::Array) = (S = SharedArray(T, size(A)); copy!(S, A))
+convert{TS,TA,N}(::Type{SharedArray{TS,N}}, A::Array{TA,N}) = (S = SharedArray(TS, size(A)); copy!(S, A))
 
 function range_1dim(S::SharedArray, n) 
     l = length(S)
@@ -163,16 +179,12 @@ convert(::Type{Array}, S::SharedArray) = S.s
 getindex(S::SharedArray) = getindex(S.s)
 getindex(S::SharedArray, I::Real) = getindex(S.s, I)
 getindex(S::SharedArray, I::AbstractArray) = getindex(S.s, I)
-getindex(S::SharedArray, I) = getindex(S.s, I)
-getindex(S::SharedArray, I, J) = getindex(S.s, I, J)
-getindex(S::SharedArray, I...) = getindex(S.s, I...)
+@nsplat N 1:5 getindex(S::SharedArray, I::NTuple{N,Any}...) = getindex(S.s, I...)
 
 setindex!(S::SharedArray, x) = (setindex!(S.s, x); S)
 setindex!(S::SharedArray, x, I::Real) = (setindex!(S.s, x, I); S)
 setindex!(S::SharedArray, x, I::AbstractArray) = (setindex!(S.s, x, I); S)
-setindex!(S::SharedArray, x, I) = (setindex!(S.s, x, I); S)
-setindex!(S::SharedArray, x, I, J) = (setindex!(S.s, x, I, J); S)
-setindex!(S::SharedArray, x, I...) = (setindex!(S.s, x, I...); S)
+@nsplat N 1:5 setindex!(S::SharedArray, x, I::NTuple{N,Any}...) = (setindex!(S.s, x, I...); S)
 
 # convenience constructors
 function shmem_fill(v, dims; kwargs...) 
@@ -239,7 +251,7 @@ function shm_mmap_array(T, dims, shm_seg_name, mode)
             systemerror("ftruncate() failed for shm segment " * shm_seg_name, rc != 0)
         end
         
-        A = mmap_array(T, dims, s, 0, grow=false)
+        A = mmap_array(T, dims, s, zero(FileOffset), grow=false)
     catch e
         print_shmem_limits(prod(dims)*sizeof(T))
         rethrow(e)
@@ -264,17 +276,11 @@ end
 
 
 function assert_same_host(procs)
-    resp = Array(Any, length(procs))
-    
-    @sync begin
-        for (i, p) in enumerate(procs)
-            @async resp[i] = remotecall_fetch(p, () -> getipaddr())
-        end
-    end
-    
-    if !all(x->x==resp[1], resp) 
+    first_privip = getprivipaddr(procs[1])
+    if !all(x -> getprivipaddr(x) == first_privip, procs) 
         error("SharedArray requires all requested processes to be on the same machine.")
     end
     
-    return (resp[1] != getipaddr()) ? false : true
+    return (first_privip != getipaddr()) ? false : true
 end
+

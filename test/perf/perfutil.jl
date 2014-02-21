@@ -3,13 +3,8 @@ print_output = isempty(ARGS)
 codespeed = length(ARGS) > 0 && ARGS[1] == "codespeed"
 
 if codespeed
-    try
-        Pkg.init()
-        Pkg.add("JSON")
-        Pkg.add("Curl")
-    end
     using JSON
-    using Curl
+    using HTTPClient.HTTPC
 
     # Ensure that we've got the environment variables we want:
     if !haskey(ENV, "JULIA_FLAVOR")
@@ -43,9 +38,9 @@ function submit_to_codespeed(vals,name,desc,unit,test_group,lessisbetter=true)
     csdata["lessisbetter"] = lessisbetter
 
     println( "$name: $(mean(vals))" )
-    ret = Curl.post( "http://$codespeed_host/result/add/json/", {:json => json([csdata])} )
-    if( !ismatch(r".*202 ACCEPTED.*", ret.headers[1][1]) )
-        error("Error submitting $name, dumping headers and text: $(ret.headers[1])\n$(ret.text)\n\n")
+    ret = post( "http://$codespeed_host/result/add/json/", {"json" => json([csdata])} )
+    if ret.http_code != 200 && ret.http_code != 202
+        error("Error submitting $name [HTTP code $(ret.http_code)], dumping headers and text: $(ret.headers)\n$(bytestring(ret.body))\n\n")
         return false
     end
     return true

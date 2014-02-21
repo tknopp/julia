@@ -639,7 +639,7 @@ static void gc_mark_module(jl_module_t *m, int d)
 static void gc_mark_task(jl_task_t *ta, int d)
 {
     if (ta->parent) gc_push_root(ta->parent, d);
-    gc_push_root(ta->last, d);
+    if (ta->last) gc_push_root(ta->last, d);
     gc_push_root(ta->tls, d);
     gc_push_root(ta->consumers, d);
     gc_push_root(ta->donenotify, d);
@@ -801,6 +801,7 @@ static void gc_mark_uv_state(uv_loop_t *loop)
 }
 
 extern jl_module_t *jl_old_base_module;
+extern jl_array_t *typeToTypeId;
 
 static void gc_mark(void)
 {
@@ -812,6 +813,7 @@ static void gc_mark(void)
 
     // modules
     gc_push_root(jl_main_module, 0);
+    gc_push_root(jl_internal_main_module, 0);
     gc_push_root(jl_current_module, 0);
     if (jl_old_base_module) gc_push_root(jl_old_base_module, 0);
 
@@ -823,6 +825,7 @@ static void gc_mark(void)
     gc_push_root(jl_bottom_func, 0);
     gc_push_root(jl_typetype_type, 0);
     gc_push_root(jl_tupletype_type, 0);
+    gc_push_root(typeToTypeId, 0);
 
     // constants
     gc_push_root(jl_null, 0);

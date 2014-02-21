@@ -1,4 +1,4 @@
-type DArray{T,N,A} <: AbstractArray{T,N}
+type DArray{T,N,A} <: StoredArray{T,N}
     dims::NTuple{N,Int}
 
     chunks::Array{RemoteRef,N}
@@ -160,13 +160,11 @@ drandn(d::Int...) = drandn(d)
 function distribute(a::AbstractArray)
     owner = myid()
     rr = RemoteRef()
-    put(rr, a)
+    put!(rr, a)
     DArray(size(a)) do I
         remotecall_fetch(owner, ()->fetch(rr)[I...])
     end
 end
-
-convert{T,N}(::Type{Array}, d::SubOrDArray{T,N}) = convert(Array{T,N}, d)
 
 function convert{S,T,N}(::Type{Array{S,N}}, d::DArray{T,N})
     a = Array(S, size(d))

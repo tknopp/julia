@@ -30,9 +30,9 @@ Juila has lots of build dependencies where we use patched versions that has not
 yet been included by the popular package managers. These dependencies will usually
 be automatically downloaded when you build, but if you want to be able to build
 Julia on a computer without internet access you should create a source-dist archive
-with the special make targed
+with the special make target
 
-   make source-dist
+    make source-dist
 
 that creates a julia-version-commit.tar.gz archive with all required dependencies.
 
@@ -56,17 +56,17 @@ for Debian and Ubuntu-based systems. Although we have not yet experimented
 with it, [Alien](https://wiki.debian.org/Alien) could be used to
 generate Julia packages for various Linux distributions.
 
-By default, Julia loads `$PREFIX/etc/julia/juliarc.jl` as an
+By default, Julia loads `$prefix/etc/julia/juliarc.jl` as an
 installation-wide initialization file. This file can be used by
 distribution managers to provide paths to various binaries such as a
 bundled `git` executable (as we do on OS X), or to setup paths (as
-we do on Windows).  For Linux distribution packages, if `$PREFIX` is
+we do on Windows).  For Linux distribution packages, if `$prefix` is
 set to `/usr`, there is no `/usr/etc` to look into. This requires
 the path to Julia's private `etc` directory to be changed.  This can
-be done via the `SYSCONFDIR` make variable when building.  Simply
-pass `SYSCONFDIR=/etc` to `make` when building and Julia will first
+be done via the `sysconfdir` make variable when building.  Simply
+pass `sysconfdir=/etc` to `make` when building and Julia will first
 check `/etc/julia/juliarc.jl` before trying
-`$PREFIX/etc/julia/juliarc.jl`.
+`$prefix/etc/julia/juliarc.jl`.
 
 OS X
 ----

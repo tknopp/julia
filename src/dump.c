@@ -94,6 +94,8 @@ static jl_value_t *jl_deserialize_value(ios_t *s);
 static jl_value_t *jl_deserialize_value_internal(ios_t *s);
 static jl_value_t ***sysimg_gvars = NULL;
 
+extern int globalUnique;
+
 static void jl_load_sysimg_so(char *fname)
 {
     // attempt to load the pre-compiled sysimg at fname
@@ -102,6 +104,7 @@ static void jl_load_sysimg_so(char *fname)
     uv_lib_t *sysimg_handle = jl_load_dynamic_library_e(fname, JL_RTLD_DEFAULT);
     if (sysimg_handle != 0) {
         sysimg_gvars = (jl_value_t***)jl_dlsym(sysimg_handle, "jl_sysimg_gvars");
+        globalUnique = *(size_t*)jl_dlsym(sysimg_handle, "jl_globalUnique");
     }
     else {
         sysimg_gvars = 0;
@@ -985,7 +988,7 @@ extern jl_function_t *jl_typeinf_func;
 extern int jl_boot_file_loaded;
 extern void jl_get_builtin_hooks(void);
 extern void jl_get_system_hooks(void);
-extern void jl_get_uv_hooks(void);
+extern void jl_get_uv_hooks(int);
 
 DLLEXPORT
 void jl_restore_system_image(char *fname)
@@ -1019,6 +1022,7 @@ void jl_restore_system_image(char *fname)
     jl_array_type->env = jl_deserialize_value(&f);
     
     jl_main_module = (jl_module_t*)jl_deserialize_value(&f);
+    jl_internal_main_module = jl_main_module;
     jl_core_module = (jl_module_t*)jl_get_global(jl_main_module,
                                                  jl_symbol("Core"));
     jl_base_module = (jl_module_t*)jl_get_global(jl_main_module,
@@ -1047,7 +1051,7 @@ void jl_restore_system_image(char *fname)
 
     jl_get_builtin_hooks();
     jl_get_system_hooks();
-    jl_get_uv_hooks();
+    jl_get_uv_hooks(1);
     jl_boot_file_loaded = 1;
     jl_typeinf_func = (jl_function_t*)jl_get_global(jl_base_module,
                                                     jl_symbol("typeinf_ext"));
@@ -1187,7 +1191,7 @@ void jl_init_serializer(void)
                      jl_symbol("arrayset"), jl_symbol("arrayref"),
                      jl_symbol("arraylen"), jl_symbol("boundscheck"),
                      jl_symbol("convert"), jl_symbol("typeassert"),
-                     jl_symbol("getfield"), jl_symbol("setfield"),
+                     jl_symbol("getfield"), jl_symbol("setfield!"),
                      jl_symbol("tupleref"), jl_symbol("tuplelen"),
                      jl_symbol("apply_type"), tuple_sym,
 

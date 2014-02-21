@@ -13,8 +13,8 @@ id_other = filter(x -> x != id_me, procs())[rand(1:(nprocs()-1))]
 @fetch begin myid() end
 
 d = drand((200,200), [id_me, id_other])
-s = convert(Array, d[1:150, 1:150])
-a = convert(Array, d)
+s = convert(Matrix{Float64}, d[1:150, 1:150])
+a = convert(Matrix{Float64}, d)
 @test a[1:150,1:150] == s
 
 @test fetch(@spawnat id_me localpart(d)[1,1]) == d[1,1]
@@ -79,6 +79,11 @@ a = d[1,1,1:3:end]
 d[2:4] = 7
 d[5,1:2:4,8] = 19
 
+AA = rand(4,2)
+A = convert(SharedArray, AA)
+B = convert(SharedArray, AA')
+@test B*A == AA'*AA
+
 end # @unix_only(SharedArray tests)
 
 
@@ -98,9 +103,9 @@ rr1 = RemoteRef()
 rr2 = RemoteRef()
 rr3 = RemoteRef()
 
-@async begin sleep(0.5); put(rr1, :ok) end
-@async begin sleep(1.0); put(rr2, :ok) end
-@async begin sleep(2.0); put(rr3, :ok) end
+@async begin sleep(0.5); put!(rr1, :ok) end
+@async begin sleep(1.0); put!(rr2, :ok) end
+@async begin sleep(2.0); put!(rr3, :ok) end
 
 tic()
 timedwait(1.0) do

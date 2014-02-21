@@ -24,6 +24,9 @@ sz34 = spzeros(3, 4)
 se77 = speye(7)
 @test all([se44 sz42 sz41; sz34 se33] == se77)
 
+# check blkdiag concatenation
+@test all(blkdiag(se33, se33) == sparse([1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6], ones(6)))
+
 # check concatenation promotion
 sz41_f32 = spzeros(Float32, 4, 1)
 se33_i32 = speye(Int32, 3, 3)
@@ -181,11 +184,23 @@ mfe22 = eye(Float64, 2)
 @test_throws sparsevec([3,5,7],[0.1,0.0,3.2],4)
 
 # issue #5169
-@test nnz(sparse([1,1],[1,2],[0.0,-0.0])) == 0
+@test nfilled(sparse([1,1],[1,2],[0.0,-0.0])) == 0
 
 # issue #5386
 I,J,V = findnz(SparseMatrixCSC(2,1,[1,3],[1,2],[1.0,0.0]))
 @test length(I) == length(J) == length(V) == 1
 
 # issue #5437
-@test nnz(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2
+@test nfilled(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2
+
+# issue 5824
+@test sprand(4,5,0.5).^0 == sparse(ones(4,5))
+
+# issue 5853, sparse diff
+for i=1:2, a={[1 2 3], [1 2 3]', speye(3)}
+    @test all(diff(sparse(a),i) == diff(a,i))
+end
+
+# test for "access to undefined error" types that initially allocate elements as #undef
+@test all(sparse(1:2, 1:2, Any[1,2])^2 == sparse(1:2, 1:2, [1,4]))
+sd1 = diff(sparse([1,1,1], [1,2,3], Any[1,2,3]), 1)

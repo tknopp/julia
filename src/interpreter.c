@@ -32,15 +32,18 @@ jl_value_t *jl_interpret_toplevel_expr_in(jl_module_t *m, jl_value_t *e,
 {
     jl_value_t *v=NULL;
     jl_module_t *last_m = jl_current_module;
+    jl_module_t *task_last_m = jl_current_task->current_module;
     JL_TRY {
-        jl_current_module = m;
+        jl_current_task->current_module = jl_current_module = m;
         v = eval(e, locals, nl);
     }
     JL_CATCH {
         jl_current_module = last_m;
+        jl_current_task->current_module = task_last_m;
         jl_rethrow();
     }
     jl_current_module = last_m;
+    jl_current_task->current_module = task_last_m;
     assert(v);
     return v;
 }
@@ -64,7 +67,7 @@ jl_value_t *jl_eval_global_var(jl_module_t *m, jl_sym_t *e)
 {
     jl_value_t *v = jl_get_global(m, e);
     if (v == NULL)
-        jl_errorf("%s not defined", e->name);
+        jl_undefined_var_error(e);
     return v;
 }
 
@@ -112,7 +115,7 @@ static jl_value_t *eval(jl_value_t *e, jl_value_t **locals, size_t nl)
             v = jl_get_global(jl_current_module, (jl_sym_t*)e);
         }
         if (v == NULL) {
-            jl_errorf("%s not defined", ((jl_sym_t*)e)->name);
+            jl_undefined_var_error((jl_sym_t*)e);
         }
         return v;
     }
@@ -126,7 +129,7 @@ static jl_value_t *eval(jl_value_t *e, jl_value_t **locals, size_t nl)
         jl_sym_t *s = (jl_sym_t*)jl_fieldref(e,0);
         jl_value_t *v = jl_get_global(jl_base_relative_to(jl_current_module),s);
         if (v == NULL)
-            jl_errorf("%s not defined", s->name);
+            jl_undefined_var_error(s);
         return v;
     }
     if (!jl_is_expr(e)) {

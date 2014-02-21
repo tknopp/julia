@@ -1,3 +1,6 @@
+import Core.Intrinsics.ccall
+ccall(:jl_new_main_module, Any, ())
+
 baremodule Base
 
 eval(x) = Core.eval(Base,x)
@@ -75,6 +78,8 @@ include("utf8.jl")
 include("utf16.jl")
 include("iobuffer.jl")
 include("string.jl")
+include("utf8proc.jl")
+importall .UTF8proc
 include("regex.jl")
 include("base64.jl")
 importall .Base64
@@ -101,7 +106,7 @@ include("process.jl")
 include("multimedia.jl")
 importall .Multimedia
 reinit_stdio()
-ccall(:jl_get_uv_hooks, Void, ())
+ccall(:jl_get_uv_hooks, Void, (Cint,), 0)
 include("grisu.jl")
 import .Grisu.print_shortest
 include("printf.jl")
@@ -244,3 +249,8 @@ begin
 end
 
 end # baremodule Base
+
+using Base
+importall Base.Operators
+
+Base.isfile("userimg.jl") && Base.include("userimg.jl")

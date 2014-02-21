@@ -84,7 +84,7 @@ function normp(x::AbstractVector,p::Number)
     return dx*sum(absx.^pp)^inv(pp)
 end
 function norm(x::AbstractVector, p::Number=2)
-    p == 0 && return nnz(x)
+    p == 0 && return countnz(x)
     p == Inf && return normInf(x)
     p == -Inf && return normMinusInf(x)
     p == 1 && return norm1(x)
@@ -132,7 +132,11 @@ function norm{T}(A::AbstractMatrix{T}, p::Number=2)
     throw(ArgumentError("invalid p-norm p=$p. Valid: 1, 2, Inf"))
 end
 
-norm(x::Number, p=nothing) = abs(x)
+function norm(x::Number, p=2)
+    if p == 1 || p == Inf || p == -Inf return abs(x) end
+    p == 0 && return ifelse(x != 0, 1, 0)
+    float(abs(x))
+end
 
 normfro(A::AbstractMatrix) = norm(reshape(A, length(A)))
 normfro(x::Number) = abs(x)
@@ -169,6 +173,12 @@ end
 
 cond(x::Number) = x == 0 ? Inf : 1.0
 cond(x::Number, p) = cond(x)
+
+#Skeel condition numbers
+condskeel(A::AbstractMatrix, p::Real=Inf) = norm(abs(inv(A))*abs(A), p)
+condskeel{T<:Integer}(A::AbstractMatrix{T}, p::Real=Inf) = norm(abs(inv(float(A)))*abs(A), p)
+condskeel(A::AbstractMatrix, x::AbstractVector, p::Real=Inf) = norm(abs(inv(A))*abs(A)*abs(x), p)
+condskeel{T<:Integer}(A::AbstractMatrix{T}, x::AbstractVector, p::Real=Inf) = norm(abs(inv(float(A)))*abs(A)*abs(x), p)
 
 function issym(A::AbstractMatrix)
     m, n = size(A)

@@ -60,7 +60,7 @@ function repl_cmd(cmd)
         end
         println(pwd())
     else
-        run(ignorestatus(@windows? cmd : `$shell -i -c "($(shell_escape(cmd))) && true"`))
+        run(ignorestatus(@windows? cmd : (isa(STDIN, TTY) ? `$shell -i -c "($(shell_escape(cmd))) && true"` : `$shell -c "($(shell_escape(cmd))) && true"`)))
     end
     nothing
 end
@@ -140,7 +140,7 @@ end
 function repl_callback(ast::ANY, show_value)
     global _repl_enough_stdin = true
     stop_reading(STDIN)
-    put(repl_channel, (ast, show_value))
+    put!(repl_channel, (ast, show_value))
 end
 
 _eval_done = Condition()
@@ -161,7 +161,7 @@ function run_repl()
                 wait(_eval_done)
             end
         end
-        put(repl_channel,(nothing,-1))
+        put!(repl_channel,(nothing,-1))
     end
 
     while true
@@ -173,7 +173,7 @@ function run_repl()
         ccall(:repl_callback_enable, Void, (Ptr{Uint8},), prompt_string)
         global _repl_enough_stdin = false
         start_reading(STDIN)
-        (ast, show_value) = take(repl_channel)
+        (ast, show_value) = take!(repl_channel)
         if show_value == -1
             # exit flag
             break
@@ -315,9 +315,9 @@ const roottask = current_task()
 is_interactive = false
 isinteractive() = (is_interactive::Bool)
 
+const LOAD_PATH = ByteString[]
 function init_load_path()
     vers = "v$(VERSION.major).$(VERSION.minor)"
-    global const LOAD_PATH = ByteString[]
     if haskey(ENV,"JULIA_LOAD_PATH")
         prepend!(LOAD_PATH, split(ENV["JULIA_LOAD_PATH"], @windows? ';' : ':'))    
     end
@@ -325,21 +325,15 @@ function init_load_path()
     push!(LOAD_PATH,abspath(JULIA_HOME,"..","share","julia","site",vers))
 end
 
-function init_sched()
-    global const Workqueue = Any[]
-end
+global const Workqueue = Any[]
 
 function init_head_sched()
     # start in "head node" mode
-    global const Scheduler = Task(()->event_loop(true), 1024*1024)
     global PGRP
     global LPROC
     LPROC.id = 1
     assert(length(PGRP.workers) == 0)
     register_worker(LPROC)
-    # make scheduler aware of current (root) task
-    unshift!(Workqueue, roottask)
-    yield()
 end
 
 function init_profiler()
@@ -348,7 +342,7 @@ function init_profiler()
 end
 
 function load_juliarc()
-    # If the user built us with a specifi Base.SYSCONFDIR, check that location first for a juliarc.jl file
+    # If the user built us with a specific Base.SYSCONFDIR, check that location first for a juliarc.jl file
     #   If it is not found, then continue on to the relative path based on JULIA_HOME
     if !isempty(Base.SYSCONFDIR) && isfile(joinpath(Base.SYSCONFDIR,"julia","juliarc.jl"))
         include(abspath(Base.SYSCONFDIR,"julia","juliarc.jl"))
@@ -376,29 +370,39 @@ function _start()
     LinAlg.init()
     GMP.gmp_init()
     init_profiler()
+    start_gc_msgs_task()
 
     #atexit(()->flush(STDOUT))
     try
-        init_sched()
         any(a->(a=="--worker"), ARGS) || init_head_sched()
         init_load_path()
         (quiet,repl,startup,color_set,history) = process_options(copy(ARGS))
         global _use_history = history
+
+        if repl
+            if !isa(STDIN,TTY)
+                global is_interactive = !isa(STDIN,Union(File,IOStream))
+                color_set || (global have_color = false)
+            else
+                global is_interactive = true
+                if !color_set
+                    @windows_only global have_color = true
+                    @unix_only global have_color =
+                        (beginswith(get(ENV,"TERM",""),"xterm") || success(`tput setaf 0`))
+                end
+            end
+        end
+
         startup && load_juliarc()
 
         if repl
             if !isa(STDIN,TTY)
-                if !color_set
-                    global have_color = false
-                end
                 # note: currently IOStream is used for file STDIN
                 if isa(STDIN,File) || isa(STDIN,IOStream)
                     # reading from a file, behave like include
-                    global is_interactive = false
                     eval(parse_input_line(readall(STDIN)))
                 else
                     # otherwise behave repl-like
-                    global is_interactive = true
                     while !eof(STDIN)
                         eval_user_input(parse_input_line(STDIN), true)
                     end
@@ -408,20 +412,7 @@ function _start()
                 end
                 quit()
             end
-
-            if !color_set
-                @unix_only global have_color = (beginswith(get(ENV,"TERM",""),"xterm") || success(`tput setaf 0`))
-                @windows_only global have_color = true
-            end
-
-            global is_interactive = true
             quiet || banner()
-
-            if haskey(ENV,"JL_ANSWER_COLOR")
-                warn("JL_ANSWER_COLOR is deprecated, use JULIA_ANSWER_COLOR instead.")
-                ENV["JULIA_ANSWER_COLOR"] = ENV["JL_ANSWER_COLOR"]
-            end
-
             run_repl()
         end
     catch err

@@ -17,11 +17,11 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 .. function:: \\(A, B)
    :noindex:
 
-   Matrix division using a polyalgorithm. For input matrices ``A`` and ``B``, the result ``X`` is such that ``A*X == B`` when ``A`` is square.  The solver that is used depends upon the structure of ``A``.  A direct solver is used for upper- or lower triangular ``A``.  For Hermitian ``A`` (equivalent to symmetric ``A`` for non-complex ``A``) the BunchKaufman factorization is used.  Otherwise an LU factorization is used. For rectangular ``A`` the result is the minimum-norm least squares solution computed by reducing ``A`` to bidiagonal form and solving the bidiagonal least squares problem.  For sparse, square ``A`` the LU factorization (from UMFPACK) is used.
+   Matrix division using a polyalgorithm. For input matrices ``A`` and ``B``, the result ``X`` is such that ``A*X == B`` when ``A`` is square.  The solver that is used depends upon the structure of ``A``.  A direct solver is used for upper- or lower triangular ``A``.  For Hermitian ``A`` (equivalent to symmetric ``A`` for non-complex ``A``) the ``BunchKaufman`` factorization is used.  Otherwise an LU factorization is used. For rectangular ``A`` the result is the minimum-norm least squares solution computed by reducing ``A`` to bidiagonal form and solving the bidiagonal least squares problem.  For sparse, square ``A`` the LU factorization (from UMFPACK) is used.
 
 .. function:: dot(x, y)
 
-   Compute the dot product. For complex vectors the first vector is conjugated.
+   Compute the dot product. For complex vectors, the first vector is conjugated.
 
 .. function:: cross(x, y)
 
@@ -95,9 +95,9 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
    ``sqrtm`` uses a polyalgorithm, computing the matrix square root using Schur factorizations (:func:`schurfact`) unless it detects the matrix to be Hermitian or real symmetric, in which case it computes the matrix square root from an eigendecomposition (:func:`eigfact`). In the latter situation for positive definite matrices, the matrix square root has ``Real`` elements, otherwise it has ``Complex`` elements.
 
-.. function:: eig(A,[balance=:balance]) -> D, V
+.. function:: eig(A,[permute=true,][scale=true]) -> D, V
 
-   Compute eigenvalues and eigenvectors of ``A``. See :func:`eigfact` for details on the ``balance`` keyword argument.
+   Compute eigenvalues and eigenvectors of ``A``. See :func:`eigfact` for details on the ``permute`` and ``scale`` keyword arguments.
 
 .. function:: eig(A, B) -> D, V
 
@@ -115,18 +115,18 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
    Returns the smallest eigenvalue of ``A``.
 
-.. function:: eigvecs(A, [eigvals,][balance=:balance])
+.. function:: eigvecs(A, [eigvals,][permute=true,][scale=true])
 
    Returns the eigenvectors of ``A``.
-   The ``balance`` keyword is the same as for :func:`eigfact`.
+   The ``permute`` and ``scale`` keywords are the same as for :func:`eigfact`.
 
    For ``SymTridiagonal`` matrices, if the optional vector of eigenvalues ``eigvals`` is specified, returns the specific corresponding eigenvectors.
 
-.. function:: eigfact(A,[balance=:balance])
+.. function:: eigfact(A,[permute=true,][scale=true])
 
    Compute the eigenvalue decomposition of ``A`` and return an ``Eigen`` object. If ``F`` is the factorization object, the eigenvalues can be accessed with ``F[:values]`` and the eigenvectors with ``F[:vectors]``. The following functions are available for ``Eigen`` objects: ``inv``, ``det``.
    
-   For general non-symmetric matrices it is possible to specify how the matrix is balanced before the eigenvector calculation. Possible values are: ``:nobalance`` (do not balance), ``:permute`` (permute the matrix to become closer to upper triangular), ``:diagonal`` (scale the matrix by its diagonal elements to make rows and columns more equal in norm), and ``:balance`` (The default, i.e. both permute and scale the matrix).
+   For general non-symmetric matrices it is possible to specify how the matrix is balanced before the eigenvector calculation. The option ``permute=true`` permutes the matrix to become closer to upper triangular, and ``scale=true`` scales the matrix by its diagonal elements to make rows and columns more equal in norm. The default is ``true`` for both options.
 
 .. function:: eigfact(A, B)
 
@@ -164,17 +164,17 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
    See :func:`schurfact`
 
-.. function:: svdfact(A, [thin]) -> SVD
+.. function:: svdfact(A, [thin=true]) -> SVD
 
    Compute the Singular Value Decomposition (SVD) of ``A`` and return an ``SVD`` object. ``U``, ``S``, ``V`` and ``Vt`` can be obtained from the factorization ``F`` with ``F[:U]``, ``F[:S]``, ``F[:V]`` and ``F[:Vt]``, such that ``A = U*diagm(S)*Vt``. If ``thin`` is ``true``, an economy mode decomposition is returned. The algorithm produces ``Vt`` and hence ``Vt`` is more efficient to extract than ``V``. The default is to produce a thin decomposition.
 
-.. function:: svdfact!(A, [thin]) -> SVD
+.. function:: svdfact!(A, [thin=true]) -> SVD
 
    ``svdfact!`` is the same as :func:`svdfact`, but saves space by overwriting the input A, instead of creating a copy. If ``thin`` is ``true``, an economy mode decomposition is returned. The default is to produce a thin decomposition.
 
-.. function:: svd(A, [thin]) -> U, S, V
+.. function:: svd(A, [thin=true]) -> U, S, V
 
-   Compute the SVD of A, returning ``U``, vector ``S``, and ``V`` such that ``A == U*diagm(S)*V'``. If ``thin`` is ``true``, an economy mode decomposition is returned.
+   Compute the SVD of A, returning ``U``, vector ``S``, and ``V`` such that ``A == U*diagm(S)*V'``. If ``thin`` is ``true``, an economy mode decomposition is returned. The default is to produce a thin decomposition.
 
 .. function:: svdvals(A)
 
@@ -202,7 +202,7 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
 .. function:: triu!(M)
 
-   Upper triangle of a matrix, overwriting M in the process.
+   Upper triangle of a matrix, overwriting ``M`` in the process.
 
 .. function:: tril(M)
 
@@ -210,7 +210,7 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
 .. function:: tril!(M)
 
-   Lower triangle of a matrix, overwriting M in the process.
+   Lower triangle of a matrix, overwriting ``M`` in the process.
 
 .. function:: diagind(M[, k])
 
@@ -253,8 +253,8 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
 .. function:: Bidiagonal(dv, ev, isupper)
 
-   Constructs an upper (isupper=true) or lower (isupper=false) bidiagonal matrix
-   using the given diagonal (dv) and off-diagonal (ev) vectors.  The result is of type ``Bidiagonal`` and provides efficient specialized linear solvers, but may be converted into a regular matrix with ``full``.
+   Constructs an upper (``isupper=true``) or lower (``isupper=false``) bidiagonal matrix
+   using the given diagonal (``dv``) and off-diagonal (``ev``) vectors.  The result is of type ``Bidiagonal`` and provides efficient specialized linear solvers, but may be converted into a regular matrix with ``full``.
 
 .. function:: SymTridiagonal(d, du)
 
@@ -272,7 +272,7 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
    Compute the ``p``-norm of a vector or the operator norm of a matrix ``A``, defaulting to the ``p=2``-norm.
 
-   For vectors, ``p`` can assume any numeric value (even though not all values produce a mathematically valid vector norm). In particular, `norm(A, Inf)`` returns the largest value in ``abs(A)``, whereas ``norm(A, -Inf)`` returns the smallest.
+   For vectors, ``p`` can assume any numeric value (even though not all values produce a mathematically valid vector norm). In particular, ``norm(A, Inf)`` returns the largest value in ``abs(A)``, whereas ``norm(A, -Inf)`` returns the smallest.
 
    For matrices, valid values of ``p`` are ``1``, ``2``, or ``Inf``. Use :func:`normfro` to compute the Frobenius norm.
 
@@ -282,7 +282,17 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 
 .. function:: cond(M, [p])
 
-   Matrix condition number, computed using the ``p``-norm. ``p`` is 2 by default, if not provided. Valid values for ``p`` are ``1``, ``2``, or ``Inf``.
+   Condition number of the matrix ``M``, computed using the operator ``p``-norm. Valid values for ``p`` are ``1``, ``2`` (default), or ``Inf``.
+
+.. function:: condskeel(M, [x, p])
+
+   .. math::
+      \kappa_S(M, p) & = & \left\Vert \left\vert M \right\vert \left\vert M^{-1} \right\vert  \right\Vert_p \\
+      \kappa_S(M, x, p) & = & \left\Vert \left\vert M \right\vert \left\vert M^{-1} \right\vert \left\vert x \right\vert \right\Vert_p
+
+   Skeel condition number :math:`\kappa_S` of the matrix ``M``, optionally with respect to the vector ``x``, as computed using the operator ``p``-norm. ``p`` is ``Inf`` by default, if not provided. Valid values for ``p`` are ``1``, ``2``, or ``Inf``.
+
+   This quantity is also known in the literature as the Bauer condition number, relative condition number, or componentwise relative condition number.
 
 .. function:: trace(M)
 
@@ -319,6 +329,10 @@ Linear algebra functions in Julia are largely implemented by calling functions f
 .. function:: kron(A, B)
 
    Kronecker tensor product of two vectors or two matrices.
+
+.. function:: blkdiag(A...)
+
+   Concatenate matrices block-diagonally. Currently only implemented for sparse matrices.
 
 .. function:: linreg(x, y)
 

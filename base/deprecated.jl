@@ -179,6 +179,9 @@ export PipeString
 @deprecate symmetrize!(A)      Base.LinAlg.copytri!(A, 'U')
 @deprecate symmetrize!(A, uplo)      Base.LinAlg.copytri!(A, uplo)
 @deprecate factorize!(A)       factorize(A)
+@deprecate svdfact(A,thin)      svdfact(A,thin=thin)
+@deprecate svdfact!(A,thin)     svdfact(A,thin=thin)
+@deprecate svd(A,thin)          svd(A,thin=thin)
 
 deprecated_ls() = run(`ls -l`)
 deprecated_ls(args::Cmd) = run(`ls -l $args`)
@@ -388,5 +391,16 @@ eval(Sys, :(@deprecate shlib_list dllist))
 
 @deprecate myindexes localindexes
 
+@deprecate setfield setfield!
+@deprecate put      put!
+@deprecate take     take!
+
 # 0.3 discontinued functions
+
+function nnz(X)
+    depwarn("nnz has been renamed to countnz and is no longer computed in constant time for sparse matrices. Instead, use nfilled() for the number of elements in a sparse matrix.", :nnz)
+    countnz(X)
+end
+export nnz
+
 

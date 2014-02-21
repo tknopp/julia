@@ -22,7 +22,7 @@ for arr in (identity, as_sub)
     @test broadcast(+, arr([1, 0]), arr([1  4])) == [2 5; 1 4]
     @test broadcast(+, arr([1, 0]), arr([1, 4])) == [2, 4]
 
-    @test arr(eye(2)) .+ arr([1, 4]) == arr([2 1; 4 5])
+    @test @inferred(arr(eye(2)) .+ arr([1, 4])) == arr([2 1; 4 5])
     @test arr(eye(2)) .+ arr([1  4]) == arr([2 4; 1 5])
     @test arr([1  0]) .+ arr([1, 4]) == arr([2 1; 5 4])
     @test arr([1, 0]) .+ arr([1  4]) == arr([2 5; 1 4])
@@ -58,3 +58,21 @@ for arr in (identity, as_sub)
     @test A == diagm(10:12)
     @test_throws broadcast_setindex!(A, 7, [1,-1], [1 2])
 end
+
+r1 = 1:1
+r2 = 1:5
+ratio = [1,1/2,1/3,1/4,1/5]
+@test r1.*r2 == 1:5
+@test r1./r2 == ratio
+m = [1:2]'
+@test m.*r2 == [1:5 2:2:10]
+@test_approx_eq m./r2 [ratio 2ratio]
+@test_approx_eq m./[r2] [ratio 2ratio]
+
+@test @inferred([0,1.2].+reshape([0,-2],1,1,2)) == reshape([0 -2; 1.2 -0.8],2,1,2)
+rt = Base.return_types(.+, (Array{Float64, 3}, Array{Int, 1}))
+@test length(rt) == 1 && rt[1] == Array{Float64, 3}
+rt = Base.return_types(broadcast, (Function, Array{Float64, 3}, Array{Int, 1}))
+@test length(rt) == 1 && rt[1] == Array{Float64, 3}
+rt = Base.return_types(broadcast!, (Function, Array{Float64, 3}, Array{Float64, 3}, Array{Int, 1}))
+@test length(rt) == 1 && rt[1] == Array{Float64, 3}

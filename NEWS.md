@@ -27,20 +27,12 @@ New language features
   * Unicode identifiers are normalized (NFC) so that different encodings
     of equivalent strings are treated as the same identifier ([#5462]).
 
-New library functions
----------------------
-
-  * `GitHub` module for interacting with the GitHub API
-
-  * `Pkg.submit(pkg[,commit])` function to automatically submit
-    a GitHub pull request to the package author.
+Library improvements
+--------------------
 
   * `mod2pi` function ([#4799], [#4862]).
 
   * New functions `minmax` and `extrema` ([#5275]).
-
-Library improvements
---------------------
 
   * `consume(p)` extended to `consume(p, args...)`, allowing it
     to optionally pass `args...` back to the producer ([#4775]).
@@ -64,6 +56,19 @@ Library improvements
 
   * `errno([code])` function to get or set the C library's `errno`.
 
+  * `GitHub` module for interacting with the GitHub API
+
+  * Package improvements
+
+    * Packages are now installed into `.julia/v0.3` by default (or
+      whatever the current Julia version is), so that different
+      versions of Julia can co-exist with incompatible packages.
+      Existing `.julia` installations are unaffected unless `Pkg.init()`
+      is run to re-create the package directories ([#3344], [#5737]).
+
+    * `Pkg.submit(pkg[,commit])` function to automatically submit
+      a GitHub pull request to the package author.
+
   * Collections improvements
 
     * `Array` assignment (e.g. `x[:] = y`) ignores singleton dimensions
@@ -81,6 +86,12 @@ Library improvements
       iterable rows, in addition to `AbstractArray` arguments, and the
       ``writedlm`` delimiter can be any printable object (e.g. a
       ``String``) instead of just a ``Char``.
+
+    * `isempty` now works for any iterable collection ([#5827]).
+
+    * `unique` now accepts an optional `dim` argument for finding
+      unique rows or columns of a matrix or regions of a
+      multidimensional array ([#5811]).
 
   * `Number` improvements
 
@@ -106,11 +117,22 @@ Library improvements
 
     * `CharString` is renamed to `UTF32String` ([#4943]).
 
+    * `normalize_string` function to perform Unicode normalization,
+      case-folding, and other transformations ([#5576]).
+
+    * `pointer(s, i=1)` for `ByteString`, `UTF16String`, `UTF32String`,
+      and `SubString`s thereof ([#5703]).
+
+    * `bytestring` is automatically called on `String` arguments for
+      conversion to `Ptr{Uint8}` in `ccall` ([#5677]).
+
   * `LinAlg` (linear algebra) improvements
 
       * Balancing options for eigenvector calculations for general matrices ([#5428]).
 
       * Mutating linear algebra functions no longer promote ([#5526]).
+
+      * `condskeel` for Skeel condition numbers ([#5726]).
 
     * Sparse linear algebra
 
@@ -182,6 +204,14 @@ Deprecated or removed
   * `myindexes` has been renamed to `localindexes` ([#5475])
 
   * `factorize!` is deprecated in favor of `factorize`. ([#5526])
+  
+  * `nnz` is removed. Use `countnz` or `nfilled` instead ([#5538])
+
+  * `setfield` is renamed `setfield!` ([#5748])
+
+  * `put` and `take` are renamed `put!` and `take!` ([#5511])
+
+  * `put!` now returns its first argument, the remote reference ([#5819])
 
 [#4042]: https://github.com/JuliaLang/julia/issues/4042
 [#5164]: https://github.com/JuliaLang/julia/issues/5164
@@ -227,6 +257,19 @@ Deprecated or removed
 [#4888]: https://github.com/JuliaLang/julia/pull/4888
 [#5475]: https://github.com/JuliaLang/julia/pull/5475
 [#5526]: https://github.com/JuliaLang/julia/pull/5526
+[#5538]: https://github.com/JuliaLang/julia/pull/5538
+[#5726]: https://github.com/JuliaLang/julia/pull/5726
+[#5811]: https://github.com/JuliaLang/julia/pull/5811
+[#5462]: https://github.com/JuliaLang/julia/pull/5462
+[#5403]: https://github.com/JuliaLang/julia/pull/5403
+[#5464]: https://github.com/JuliaLang/julia/pull/5464
+[#5827]: https://github.com/JuliaLang/julia/pull/5827
+[#5576]: https://github.com/JuliaLang/julia/pull/5576
+[#5703]: https://github.com/JuliaLang/julia/pull/5703
+[#5427]: https://github.com/JuliaLang/julia/pull/5427
+[#5748]: https://github.com/JuliaLang/julia/issues/5748
+[#5511]: https://github.com/JuliaLang/julia/issues/5511
+[#5819]: https://github.com/JuliaLang/julia/issues/5819
 
 Julia v0.2.0 Release Notes
 ==========================
@@ -606,6 +649,9 @@ Too numerous to mention.
 [#4284]: https://github.com/JuliaLang/julia/issues/4284
 [#4412]: https://github.com/JuliaLang/julia/issues/4412
 [#5214]: https://github.com/JuliaLang/julia/issues/5214
+[#3605]: https://github.com/JuliaLang/julia/pull/3605
+[#3233]: https://github.com/JuliaLang/julia/pull/3233
+[#4811]: https://github.com/JuliaLang/julia/pull/4811
 
 [packages chapter]: http://docs.julialang.org/en/latest/manual/packages/
 [sorting functions]: http://docs.julialang.org/en/latest/stdlib/sort/

@@ -167,8 +167,8 @@ function *{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti})
         colptrC[nB+1] = ip
     end
 
-    splice!(rowvalC, colptrC[end]:length(rowvalC))
-    splice!(nzvalC, colptrC[end]:length(nzvalC))
+    deleteat!(rowvalC, colptrC[end]:length(rowvalC))
+    deleteat!(nzvalC, colptrC[end]:length(nzvalC))
 
     # The Gustavson algorithm does not guarantee the product to have sorted row indices.
     Cunsorted = SparseMatrixCSC(mA, nB, colptrC, rowvalC, nzvalC)
@@ -326,9 +326,9 @@ end
 
 function sparse_diff1{Tv,Ti}(S::SparseMatrixCSC{Tv,Ti})
     m,n = size(S)
-    m > 1 && return SparseMatrixCSC{Tv,Ti}(0, n, ones(n+1), Ti[], Tv[])
+    m > 1 || return SparseMatrixCSC{Tv,Ti}(0, n, ones(n+1), Ti[], Tv[])
     colptr = Array(Ti, n+1)
-    numnz = 2 * nnz(S) # upper bound; will shrink later
+    numnz = 2 * nfilled(S) # upper bound; will shrink later
     rowval = Array(Ti, numnz)
     nzval = Array(Tv, numnz)
     numnz = 0
@@ -359,8 +359,8 @@ function sparse_diff1{Tv,Ti}(S::SparseMatrixCSC{Tv,Ti})
         end
         colptr[col+1] = numnz+1
     end
-    splice!(rowval, numnz+1:length(rowval))
-    splice!(nzval, numnz+1:length(nzval))
+    deleteat!(rowval, numnz+1:length(rowval))
+    deleteat!(nzval, numnz+1:length(nzval))
     return SparseMatrixCSC{Tv,Ti}(m-1, n, colptr, rowval, nzval)
 end
 
@@ -368,7 +368,7 @@ function sparse_diff2{Tv,Ti}(a::SparseMatrixCSC{Tv,Ti})
 
     m,n = size(a)
     colptr = Array(Ti, max(n,1))
-    numnz = 2 * nnz(a) # upper bound; will shrink later
+    numnz = 2 * nfilled(a) # upper bound; will shrink later
     rowval = Array(Ti, numnz)
     nzval = Array(Tv, numnz)
 
@@ -381,7 +381,7 @@ function sparse_diff2{Tv,Ti}(a::SparseMatrixCSC{Tv,Ti})
     ptrS = 1
     colptr[1] = 1
 
-    n == 0 || return SparseMatrixCSC{Tv,Ti}(m, n, colptr, rowval, nzval)
+    n == 0 && return SparseMatrixCSC{Tv,Ti}(m, n, colptr, rowval, nzval)
 
     startA = colptr_a[1]
     stopA = colptr_a[2]
@@ -449,22 +449,50 @@ function sparse_diff2{Tv,Ti}(a::SparseMatrixCSC{Tv,Ti})
 
         colptr[col+1] = ptrS
     end
-    splice!(rowval, ptrS:length(rowval))
-    splice!(nzval, ptrS:length(nzval))
+    deleteat!(rowval, ptrS:length(rowval))
+    deleteat!(nzval, ptrS:length(nzval))
     return SparseMatrixCSC{Tv,Ti}(m, n-1, colptr, rowval, nzval)
 end
 
 diff(a::SparseMatrixCSC, dim::Integer)= dim==1 ? sparse_diff1(a) : sparse_diff2(a)
 
 ## norm and rank
+normfro(A::SparseMatrixCSC) = norm(A.nzval,2)
+
+function norm(A::SparseMatrixCSC,p::Number=1)
+    m, n = size(A)
+    if m == 0 || n == 0 || isempty(A)
+        return real(zero(eltype(A))) 
+    elseif m == 1 || n == 1
+        return norm(reshape(full(A), length(A)), p)
+    elseif p==1
+        nA = real(zero(eltype(A))) 
+        for j=1:n
+            colSum = real(zero(eltype(A))) 
+            for i = A.colptr[j]:A.colptr[j+1]-1
+                colSum += abs(A.nzval[i])
+            end
+            nA = max(nA, colSum)
+        end
+    elseif p==Inf
+        rowSum = zeros(typeof(real(A[1])),m)
+        for i=1:length(A.nzval)
+            rowSum[A.rowval[i]] += abs(A.nzval[i])
+        end
+        nA = maximum(rowSum)
+    else
+        throw(ArgumentError("invalid p-norm p=$p. Valid: 1, Inf"))
+    end
+    return nA
+end
 
 # TODO
 
 # kron
 
 function kron{Tv,Ti}(a::SparseMatrixCSC{Tv,Ti}, b::SparseMatrixCSC{Tv,Ti})
-    numnzA = nnz(a)
-    numnzB = nnz(b)
+    numnzA = nfilled(a)
+    numnzB = nfilled(b)
 
     numnz = numnzA * numnzB
 
@@ -529,7 +557,7 @@ inv(A::SparseMatrixCSC) = error("The inverse of a sparse matrix can often be den
 function scale!{Tv,Ti}(C::SparseMatrixCSC{Tv,Ti}, A::SparseMatrixCSC, b::Vector)
     m, n = size(A)
     (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch(""))
-    numnz = nnz(A)
+    numnz = nfilled(A)
     C.colptr = convert(Array{Ti}, A.colptr)
     C.rowval = convert(Array{Ti}, A.rowval)
     C.nzval = Array(Tv, numnz)
@@ -542,7 +570,7 @@ end
 function scale!{Tv,Ti}(C::SparseMatrixCSC{Tv,Ti}, b::Vector, A::SparseMatrixCSC)
     m, n = size(A)
     (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch(""))
-    numnz = nnz(A)
+    numnz = nfilled(A)
     C.colptr = convert(Array{Ti}, A.colptr)
     C.rowval = convert(Array{Ti}, A.rowval)
     C.nzval = Array(Tv, numnz)

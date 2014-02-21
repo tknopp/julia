@@ -24,7 +24,7 @@
 ##
 ## RemoteRef(p) - ...or on a particular processor
 ##
-## put(r, val) - store a value to an uninitialized RemoteRef
+## put!(r, val) - store a value to an uninitialized RemoteRef
 ##
 ## @spawn expr -
 ##     evaluate expr somewhere. returns a RemoteRef. all variables in expr
@@ -42,8 +42,8 @@
 
 # todo:
 # - more indexing
-# * take() to empty a Ref (full/empty variables)
-# * have put() wait on non-empty Refs
+# * take!() to empty a Ref (full/empty variables)
+# * have put!() wait on non-empty Refs
 # - removing nodes
 # - more dynamic scheduling
 # * fetch/wait latency seems to be excessive
@@ -87,6 +87,14 @@ end
 
 abstract ClusterManager
 
+type WorkerLocalInfo
+    # Currently only one field, in the future we may add more fields like 
+    # local OS pid, system info like RAM, CPU type, etc.
+    #
+    privipaddr::IpAddr
+    WorkerLocalInfo() = new(getipaddr())
+end
+
 type Worker
     host::ByteString
     port::Uint16
@@ -99,6 +107,7 @@ type Worker
     privhost::ByteString
     manage::Function
     config::Dict
+    winfo::WorkerLocalInfo
     
     Worker(host::String, port::Integer, sock::TcpSocket, id::Int) =
         new(bytestring(host), uint16(port), sock, IOBuffer(), {}, {}, id, false, "")
@@ -173,9 +182,10 @@ end
 
 type LocalProcess
     id::Int
+    winfo::WorkerLocalInfo
 end
 
-const LPROC = LocalProcess(0)
+const LPROC = LocalProcess(1, WorkerLocalInfo())
 
 const map_pid_wrkr = Dict{Int, Union(Worker, LocalProcess)}()
 const map_sock_wrkr = ObjectIdDict()
@@ -201,6 +211,18 @@ type ProcessGroup
 end
 const PGRP = ProcessGroup({})
 
+getprivipaddr(pid::Integer) = getprivipaddr(worker_from_id(pid))
+getprivipaddr(w::Union(Worker, LocalProcess)) = fetchwinfo(w).privipaddr
+
+fetchwinfo(pid::Integer) = fetchwinfo(worker_from_id(pid))
+function fetchwinfo(w::Union(Worker, LocalProcess))
+    # retrieve and cache upon first access
+    if !isdefined(w, :winfo)
+        w.winfo = remotecall_fetch(w.id, fetchwinfo, w.id)
+    end
+    w.winfo
+end
+
 function add_workers(pg::ProcessGroup, ws::Array{Any,1})
     # NOTE: currently only node 1 can add new nodes, since nobody else
     # has the full list of address:port
@@ -211,6 +233,7 @@ function add_workers(pg::ProcessGroup, ws::Array{Any,1})
         create_message_handler_loop(w.socket) 
     end
     all_locs = map(x -> isa(x, Worker) ? (x.privhost, x.port, x.id) : ("", 0, x.id), pg.workers)
+    
     for w in ws
         send_msg_now(w, :join_pgrp, w.id, all_locs)
     end
@@ -231,6 +254,10 @@ function nworkers()
 end
 
 procs() = Int[x.id for x in PGRP.workers]
+function procs(pid::Integer)
+    ipatpid = getprivipaddr(pid)
+    Int[x.id for x in filter(w -> getprivipaddr(w) == ipatpid, PGRP.workers)]
+end
 
 function workers()
     allp = procs()
@@ -288,7 +315,7 @@ function worker_from_id(pg::ProcessGroup, i)
     end
     start = time()
     while (!haskey(map_pid_wrkr, i) && ((time() - start) < 60.0))
-        sleep(0.1)		
+        sleep(0.1)
         yield()
     end
     map_pid_wrkr[i]
@@ -394,24 +421,6 @@ type RemoteRef
     RemoteRef(w::Worker) = RemoteRef(w.id)
     RemoteRef() = RemoteRef(myid())
 
-    global WeakRemoteRef
-    function WeakRemoteRef(w, wh, id)
-        return new(w, wh, id)
-    end
-
-    function WeakRemoteRef(pid::Integer)
-        rr = WeakRemoteRef(pid, myid(), REQ_ID)
-        REQ_ID += 1
-        if mod(REQ_ID,200) == 0
-            gc()
-        end
-        rr
-    end
-
-    WeakRemoteRef(w::LocalProcess) = WeakRemoteRef(myid())
-    WeakRemoteRef(w::Worker) = WeakRemoteRef(w.id)
-    WeakRemoteRef() = WeakRemoteRef(myid())
-
     global next_id
     next_id() = (id=(myid(),REQ_ID); REQ_ID+=1; id)
 end
@@ -467,7 +476,13 @@ function del_clients(pairs::(Any,Any)...)
     end
 end
 
-any_gc_flag = false
+any_gc_flag = Condition()
+function start_gc_msgs_task()
+    @schedule while true
+        wait(any_gc_flag)
+        flush_gc_msgs()
+    end
+end
 
 function send_del_client(rr::RemoteRef)
     if rr.where == myid()
@@ -480,7 +495,7 @@ function send_del_client(rr::RemoteRef)
         w = worker_from_id(rr.where)
         push!(w.del_msgs, (rr2id(rr), myid()))
         w.gcflag = true
-        global any_gc_flag = true
+        notify(any_gc_flag)
     end
 end
 
@@ -508,7 +523,7 @@ function send_add_client(rr::RemoteRef, i)
         #println("$(myid()) adding $((rr2id(rr), i)) for $(rr.where)")
         push!(w.add_msgs, (rr2id(rr), i))
         w.gcflag = true
-        global any_gc_flag = true
+        notify(any_gc_flag)
     end
 end
 
@@ -566,7 +581,7 @@ function wait_empty(rv::RemoteValue)
     return nothing
 end
 
-## core messages: do, call, fetch, wait, ref, put ##
+## core messages: do, call, fetch, wait, ref, put! ##
 
 
 function run_work_thunk(thunk)
@@ -581,14 +596,15 @@ function run_work_thunk(thunk)
     result
 end
 function run_work_thunk(rv::RemoteValue, thunk)
-    put(rv, run_work_thunk(thunk))
+    put!(rv, run_work_thunk(thunk))
+    nothing
 end
 
 function schedule_call(rid, thunk)
     rv = RemoteValue()
     (PGRP::ProcessGroup).refs[rid] = rv
     push!(rv.clientset, rid[1])
-    enq_work(@task(run_work_thunk(rv,thunk)))
+    schedule(@task(run_work_thunk(rv,thunk)))
     rv
 end
 
@@ -684,7 +700,7 @@ function remote_do(w::LocalProcess, f, args...)
     # does when it gets a :do message.
     # same for other messages on LocalProcess.
     thk = local_remotecall_thunk(f, args)
-    enq_work(Task(thk))
+    schedule(Task(thk))
     nothing
 end
 
@@ -713,17 +729,18 @@ fetch(r::RemoteRef) = call_on_owner(fetch_ref, r)
 fetch(x::ANY) = x
 
 # storing a value to a Ref
-function put(rv::RemoteValue, val::ANY)
+function put!(rv::RemoteValue, val::ANY)
     wait_empty(rv)
     rv.result = val
     rv.done = true
     notify_full(rv)
+    rv
 end
 
-put_ref(rid, v) = put(lookup_ref(rid), v)
-put(rr::RemoteRef, val::ANY) = (call_on_owner(put_ref, rr, val); val)
+put_ref(rid, v) = put!(lookup_ref(rid), v)
+put!(rr::RemoteRef, val::ANY) = (call_on_owner(put_ref, rr, val); rr)
 
-function take(rv::RemoteValue)
+function take!(rv::RemoteValue)
     wait_full(rv)
     val = rv.result
     rv.done = false
@@ -732,37 +749,8 @@ function take(rv::RemoteValue)
     val
 end
 
-take_ref(rid) = take(lookup_ref(rid))
-take(rr::RemoteRef) = call_on_owner(take_ref, rr)
-
-## work queue ##
-
-function enq_work(t::Task)
-    ccall(:uv_stop,Void,(Ptr{Void},),eventloop())
-    unshift!(Workqueue, t)
-end
-
-function perform_work()
-    perform_work(pop!(Workqueue))
-end
-
-function perform_work(t::Task)
-    if !istaskstarted(t)
-        # starting new task
-        yieldto(t)
-    else
-        # continuing interrupted work item
-        arg = t.result
-        t.result = nothing
-        t.runnable = true
-        yieldto(t, arg)
-    end
-    t = current_task().last
-    if t.runnable
-        # still runnable; return to queue
-        enq_work(t)
-    end
-end
+take_ref(rid) = take!(lookup_ref(rid))
+take!(rr::RemoteRef) = call_on_owner(take_ref, rr)
 
 function deliver_result(sock::IO, msg, oid, value)
     #print("$(myid()) sending result $oid\n")
@@ -806,7 +794,7 @@ function accept_handler(server::TcpServer, status::Int32)
 end
 
 function create_message_handler_loop(sock::AsyncStream) #returns immediately
-    enq_work(@task begin
+    schedule(@task begin
         global PGRP
         #println("message_handler_loop")
         start_reading(sock)
@@ -856,7 +844,7 @@ function create_message_handler_loop(sock::AsyncStream) #returns immediately
                     oid = deserialize(sock)
                     #print("$(myid()) got $msg $oid\n")
                     val = deserialize(sock)
-                    put(lookup_ref(oid), val)
+                    put!(lookup_ref(oid), val)
                 elseif is(msg, :identify_socket)
                     otherid = deserialize(sock)
                     register_worker(Worker("", 0, sock, otherid))
@@ -956,11 +944,9 @@ function start_worker(out::IO)
 
     ccall(:jl_install_sigint_handler, Void, ())
 
-    global const Scheduler = current_task()
-
     try
         check_master_connect(60.0)
-        event_loop(false)
+        while true; wait(); end
     catch err
         print(STDERR, "unhandled exception on $(myid()): $(err)\nexiting.\n")
     end
@@ -1216,37 +1202,6 @@ end
 
 ## higher-level functions: spawn, pmap, pfor, etc. ##
 
-sync_begin() = task_local_storage(:SPAWNS, ({}, get(task_local_storage(), :SPAWNS, ())))
-
-function sync_end()
-    spawns = get(task_local_storage(), :SPAWNS, ())
-    if is(spawns,())
-        error("sync_end() without sync_begin()")
-    end
-    refs = spawns[1]
-    task_local_storage(:SPAWNS, spawns[2])
-    for r in refs
-        wait(r)
-    end
-end
-
-macro sync(block)
-    quote
-        sync_begin()
-        v = $(esc(block))
-        sync_end()
-        v
-    end
-end
-
-function sync_add(r)
-    spawns = get(task_local_storage(), :SPAWNS, ())
-    if !is(spawns,())
-        push!(spawns[1], r)
-    end
-    r
-end
-
 let nextidx = 1
     global chooseproc
     function chooseproc(thunk::Function)
@@ -1295,23 +1250,6 @@ end
 macro fetchfrom(p, expr)
     expr = localize_vars(:(()->($expr)), false)
     :(remotecall_fetch($(esc(p)), $(esc(expr))))
-end
-
-function spawnlocal(thunk)
-    t = Task(thunk)
-    sync_add(t)
-    enq_work(t)
-    t
-end
-
-macro async(expr)
-    expr = localize_vars(:(()->($expr)), false)
-    :(spawnlocal($(esc(expr))))
-end
-
-macro spawnlocal(expr)
-    warn_once("@spawnlocal is deprecated, use @async instead.")
-    :(@async $(esc(expr)))
 end
 
 function at_each(f, args...)
@@ -1531,75 +1469,6 @@ end
 #     2/(nc/niter)
 # end
 
-## event processing, I/O and work scheduling ##
-
-function yield(args...)
-    ct = current_task()
-    # preserve Task.last across calls to the scheduler
-    prev = ct.last
-    v = yieldto(Scheduler, args...)
-    ct.last = prev
-    return v
-end
-
-function pause()
-    @unix_only    ccall(:pause, Void, ())
-    @windows_only ccall(:Sleep,stdcall, Void, (Uint32,), 0xffffffff)
-end
-
-function event_loop(isclient)
-    iserr, lasterr, bt = false, nothing, {}
-    while true
-        try
-            if iserr
-                display_error(lasterr, bt)
-                println(STDERR)
-                iserr, lasterr, bt = false, nothing, {}
-            else
-                while true
-                    if isempty(Workqueue)
-                        if any_gc_flag
-                            flush_gc_msgs()
-                        end
-                        c = process_events(true)
-                        if c==0 && eventloop()!=C_NULL && isempty(Workqueue) && !any_gc_flag
-                            # if there are no active handles and no runnable tasks, just
-                            # wait for signals.
-                            pause()
-                        end
-                    else
-                        perform_work()
-                        process_events(false)
-                    end
-                end
-            end
-        catch err
-            if iserr
-                ccall(:jl_, Void, (Any,), (
-                    "\n!!!An ERROR occurred while printing the last error!!!\n",
-                    lasterr,
-                    bt
-                ))
-            end
-            iserr, lasterr = true, err
-            bt = catch_backtrace()
-            if isclient && isa(err,InterruptException)
-                # root task is waiting for something on client. allow C-C
-                # to interrupt.
-                interrupt_waiting_task(roottask,err)
-                iserr, lasterr = false, nothing
-            end
-        end
-    end
-end
-
-# force a task to stop waiting with an exception
-function interrupt_waiting_task(t::Task, err)
-    if !t.runnable
-        t.exception = err
-        enq_work(t)
-    end
-end
 
 function check_master_connect(timeout)
     # If we do not have at least process 1 connect to us within timeout
@@ -1624,14 +1493,14 @@ function timedwait(testcb::Function, secs::Float64; pollint::Float64=0.1)
     timercb(aw, status) = begin
         try
             if testcb()
-                put(done, :ok)
+                put!(done, :ok)
             elseif (time() - start) > secs
-                put(done, :timed_out)
+                put!(done, :timed_out)
             elseif status != 0
-                put(done, :error)
+                put!(done, :error)
             end
         catch e
-            put(done, :error)
+            put!(done, :error)
         finally
             isready(done) && stop_timer(aw)
         end
@@ -1665,3 +1534,4 @@ function interrupt(pids::AbstractVector=workers())
         end
     end
 end
+

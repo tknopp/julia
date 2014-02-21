@@ -88,21 +88,11 @@ end
 
 # searching definitions
 
-function whicht(f, types)
-    for m in methods(f, types)
-        lsd = m.func.code::LambdaStaticData
-        d = f.env.defs
-        while !is(d,())
-            if is(d.func.code, lsd)
-                display(d)
-                return
-            end
-            d = d.next
-        end
-    end
+function which(f::Callable, args...)
+    ms = methods(f, map(a->(isa(a,Type) ? Type{a} : typeof(a)), args))
+    isempty(ms) && throw(MethodError(f, args))
+    ms[1]
 end
-
-which(f, args...) = whicht(f, map(a->(isa(a,Type) ? Type{a} : typeof(a)), args))
 
 macro which(ex0)
     if isa(ex0,Expr) &&
@@ -259,7 +249,7 @@ end
 end
 
 @windows_only begin
-    function clipboard(x::ByteString)
+    function clipboard(x::String)
         ccall((:OpenClipboard, "user32"), stdcall, Bool, (Ptr{Void},), C_NULL)
         ccall((:EmptyClipboard, "user32"), stdcall, Bool, ())
         p = ccall((:GlobalAlloc, "kernel32"), stdcall, Ptr{Void}, (Uint16,Int32), 2, length(x)+1)

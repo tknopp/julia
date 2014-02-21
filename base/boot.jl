@@ -107,11 +107,11 @@
 #     last::Task
 #     storage::Any
 #     consumers
+#     started::Bool
 #     done::Bool
 #     runnable::Bool
 # end
 
-import Main
 import Core.Intrinsics.ccall
 
 export
@@ -131,13 +131,13 @@ export
     # errors
     BoundsError, DivideError, DomainError, Exception,
     InexactError, InterruptException, MemoryError, OverflowError,
-    StackOverflowError, UndefRefError,
+    StackOverflowError, UndefRefError, UndefVarError,
     # AST representation
     Expr, GotoNode, LabelNode, LineNumberNode, QuoteNode, SymbolNode, TopNode,
     GetfieldNode,
     # object model functions
     apply, arraylen, arrayref, arrayset, arraysize, fieldtype, getfield,
-    setfield, yieldto, throw, tuple, tuplelen, tupleref, is, ===, isdefined,
+    setfield!, yieldto, throw, tuple, tuplelen, tupleref, is, ===, isdefined,
     convert_default, convert_tuple, kwcall,
     # type reflection
     issubtype, typeassert, typeof, apply_type, isa,
@@ -207,6 +207,9 @@ type InexactError       <: Exception end
 type MemoryError        <: Exception end
 type StackOverflowError <: Exception end
 type UndefRefError      <: Exception end
+type UndefVarError      <: Exception
+    var::Symbol
+end
 type InterruptException <: Exception end
 
 abstract String

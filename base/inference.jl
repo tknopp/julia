@@ -244,14 +244,20 @@ t_func[typeassert] =
                        Any))
 
 const tupleref_tfunc = function (A, t, i)
-    if is(t,())
-        return None
+    wrapType = false
+    if isType(t)
+        t = t.parameters[1]
+        wrapType = true
     end
     if isa(t,DataType) && is(t.name,NTuple.name)
-        return t.parameters[2]
+        T = t.parameters[2]
+        return wrapType ? Type{T} : T
     end
     if !isa(t,Tuple)
         return Any
+    end
+    if is(t,())
+        return None
     end
     n = length(t)
     last = tupleref(t,n)
@@ -261,16 +267,16 @@ const tupleref_tfunc = function (A, t, i)
         i = A[2]
         if i > n
             if vararg
-                return last.parameters[1]
+                T = last.parameters[1]
             else
                 return None
             end
         elseif i == n && vararg
-            return last.parameters[1]
+            T = last.parameters[1]
         elseif i <= 0
             return None
         else
-            return tupleref(t,i)
+            T = tupleref(t,i)
         end
     else
         # index unknown, could be anything from the tuple
@@ -279,12 +285,48 @@ const tupleref_tfunc = function (A, t, i)
         else
             types = t
         end
-        return reduce(tmerge, None, types)
+        T = reduce(tmerge, None, types)
+        if wrapType
+            return isleaftype(T) ? Type{T} : Type{TypeVar(:_,T)}
+        else
+            return T
+        end
     end
+    return wrapType ? Type{T} : T
 end
 t_func[tupleref] = (2, 2, tupleref_tfunc)
 
-const getfield_tfunc = function (A, s, name)
+function quantify_type(t, vars)
+    # all types of the form S{...,T,...} in invariant position where T
+    # is a bound variable are replaced with _<:S
+    if isa(t,TypeVar) || isa(t,TypeConstructor)
+        return t
+    end
+    if isa(t,Tuple)
+        return map(x->quantify_type(x, vars), t)
+    end
+    if isa(t,UnionType)
+        return Union(quantify_type(t.types, vars)...)
+    end
+    if isa(t,DataType)
+        P = t.parameters
+        if P === ()
+            return t
+        end
+        P = quantify_type(P, vars)
+        t = t.name.primary{P...}
+        for i = 1:length(P)
+            Pi = P[i]
+            if isa(Pi,TypeVar) && contains_is(vars, Pi)
+                return TypeVar(:_,t)
+            end
+        end
+    end
+    return t
+end
+
+const getfield_tfunc = function (A, s0, name)
+    s = s0
     if isType(s)
         s = typeof(s.parameters[1])
         if s === TypeVar
@@ -306,9 +348,25 @@ const getfield_tfunc = function (A, s, name)
         if s === Module
             return Top
         end
+        if isType(s0)
+            sp = s0.parameters[1]
+            if fld === :parameters && isleaftype(sp.parameters)
+                return Type{sp.parameters}
+            end
+            if fld === :types && isleaftype(sp.types)
+                return Type{sp.types}
+            end
+            if fld === :super && isleaftype(sp)
+                return Type{sp.super}
+            end
+        end
         for i=1:length(s.names)
             if is(s.names[i],fld)
-                return s.types[i]
+                ft = s.types[i]
+                if isleaftype(s) || !any(x->isa(x,TypeVar), s.parameters)
+                    return ft
+                end
+                return quantify_type(ft, s.parameters)
             end
         end
         return None
@@ -326,7 +384,7 @@ const getfield_tfunc = function (A, s, name)
     end
 end
 t_func[getfield] = (2, 2, getfield_tfunc)
-t_func[setfield] = (3, 3, (o, f, v)->v)
+t_func[setfield!] = (3, 3, (o, f, v)->v)
 const fieldtype_tfunc = function (A, s, name)
     if !isa(s,DataType)
         return Type
@@ -1092,26 +1150,6 @@ f_argnames(ast) =
     map(x->(isa(x,Expr) ? x.args[1] : x), ast.args[1]::Array{Any,1})
 
 is_rest_arg(arg::ANY) = (ccall(:jl_is_rest_arg,Int32,(Any,), arg) != 0)
-
-# function typeinf_task(caller)
-#     result = ()
-#     while true
-#         (caller, args) = yieldto(caller, result)
-#         result = typeinf_ext_(args...)
-#     end
-# end
-
-#Inference_Task = Task(typeinf_task, 2097152)
-#yieldto(Inference_Task, current_task())
-
-#function typeinf_ext(linfo, atypes, sparams, cop)
-    #C = current_task()
-    #args = (linfo, atypes, sparams, cop)
-    #if is(C, Inference_Task)
-    #    return typeinf_ext_(args...)
-    #end
-    #return yieldto(Inference_Task, C, args)
-#end
 
 function typeinf_ext(linfo, atypes::ANY, sparams::ANY, def)
     global inference_stack

@@ -85,6 +85,17 @@ void jl_type_error(const char *fname, jl_value_t *expected, jl_value_t *got)
     jl_type_error_rt(fname, "", expected, got);
 }
 
+void jl_undefined_var_error(jl_sym_t *var)
+{
+    if (var->name[0] == '#') {
+        // convention for renamed variables: #...#original_name
+        char *nxt = strchr(var->name+1, '#');
+        if (nxt)
+            var = jl_symbol(nxt+1);
+    }
+    jl_throw(jl_new_struct(jl_undefvarerror_type, var));
+}
+
 JL_CALLABLE(jl_f_throw)
 {
     JL_NARGS(throw, 1, 1);
@@ -362,17 +373,20 @@ JL_CALLABLE(jl_f_top_eval)
         return v;
     }
     jl_module_t *last_m = jl_current_module;
+    jl_module_t *task_last_m = jl_current_task->current_module;
     JL_TRY {
-        jl_current_module = m;
+        jl_current_task->current_module = jl_current_module = m;
         v = jl_toplevel_eval(ex);
     }
     JL_CATCH {
         jl_lineno = last_lineno;
         jl_current_module = last_m;
+        jl_current_task->current_module = task_last_m;
         jl_rethrow();
     }
     jl_lineno = last_lineno;
     jl_current_module = last_m;
+    jl_current_task->current_module = task_last_m;
     assert(v);
     return v;
 }
@@ -486,13 +500,13 @@ JL_CALLABLE(jl_f_get_field)
 
 JL_CALLABLE(jl_f_set_field)
 {
-    JL_NARGS(setfield, 3, 3);
+    JL_NARGS(setfield!, 3, 3);
     jl_value_t *v = args[0];
     jl_value_t *vt = (jl_value_t*)jl_typeof(v);
     if (vt == (jl_value_t*)jl_module_type)
         jl_error("cannot assign variables in other modules");
     if (!jl_is_datatype(vt))
-        jl_type_error("setfield", (jl_value_t*)jl_datatype_type, v);
+        jl_type_error("setfield!", (jl_value_t*)jl_datatype_type, v);
     jl_datatype_t *st = (jl_datatype_t*)vt;
     if (!st->mutabl)
         jl_errorf("type %s is immutable", st->name->name->name);
@@ -503,12 +517,12 @@ JL_CALLABLE(jl_f_set_field)
             jl_throw(jl_bounds_exception);
     }
     else {
-        JL_TYPECHK(setfield, symbol, args[1]);
+        JL_TYPECHK(setfield!, symbol, args[1]);
         idx = jl_field_index(st, (jl_sym_t*)args[1], 1);
     }
     jl_value_t *ft = jl_tupleref(st->types, idx);
     if (!jl_subtype(args[2], ft, 1)) {
-        jl_type_error("setfield", ft, args[2]);
+        jl_type_error("setfield!", ft, args[2]);
     }
     jl_set_nth_field(v, idx, args[2]);
     return args[2];
@@ -981,7 +995,7 @@ void jl_init_primitives(void)
     add_builtin_func("tupleref",  jl_f_tupleref);
     add_builtin_func("tuplelen",  jl_f_tuplelen);
     add_builtin_func("getfield",  jl_f_get_field);
-    add_builtin_func("setfield",  jl_f_set_field);
+    add_builtin_func("setfield!",  jl_f_set_field);
     add_builtin_func("fieldtype", jl_f_field_type);
 
     add_builtin_func("arraylen", jl_f_arraylen);

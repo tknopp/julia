@@ -86,15 +86,17 @@ Getting Around
 
 .. function:: which(f, args...)
 
-   Show which method of ``f`` will be called for the given arguments.
+   Return the method of ``f`` (a ``Method`` object) that will be called for the given arguments.
 
 .. function:: @which
 
    Evaluates the arguments to the function call, determines their types, and calls the ``which`` function on the resulting expression
 
-.. function:: methods(f)
+.. function:: methods(f, [types])
 
    Show all methods of ``f`` with their argument types.
+
+   If ``types`` is specified, an array of methods whose types match is returned.
 
 .. function:: methodswith(typ[, showparents])
 
@@ -299,11 +301,11 @@ Types
    Extract a named field from a value of composite type. The syntax ``a.b`` calls
    ``getfield(a, :b)``, and the syntax ``a.(b)`` calls ``getfield(a, b)``.
 
-.. function:: setfield(value, name::Symbol, x)
+.. function:: setfield!(value, name::Symbol, x)
 
    Assign ``x`` to a named field in ``value`` of composite type.
-   The syntax ``a.b = c`` calls ``setfield(a, :b, c)``, and the syntax ``a.(b) = c``
-   calls ``setfield(a, b, c)``.
+   The syntax ``a.b = c`` calls ``setfield!(a, :b, c)``, and the syntax ``a.(b) = c``
+   calls ``setfield!(a, b, c)``.
 
 .. function:: fieldoffsets(type)
 
@@ -505,10 +507,11 @@ Iterable Collections
 
    Returns the indices of elements in collection ``a`` that appear in collection ``b``
 
-.. function:: unique(itr)
+.. function:: unique(itr[, dim])
 
    Returns an array containing only the unique elements of the iterable ``itr``, in
    the order that the first of each set of equivalent elements originally appears.
+   If ``dim`` is specified, returns unique regions of the array ``itr`` along ``dim``.
 
 .. function:: reduce(op, v0, itr)
 
@@ -551,6 +554,11 @@ Iterable Collections
 .. function:: minimum(A, dims)
 
    Compute the minimum value of an array over the given dimensions
+
+.. function:: extrema(itr)
+
+    Compute both the minimum and maximum element in a single pass, and
+    return them as a 2-tuple.
 
 .. function:: indmax(itr) -> Integer
 
@@ -725,6 +733,32 @@ Given a dictionary ``D``, the syntax ``D[x]`` returns the value of key ``x`` (if
 
    Return the value stored for the given key, or the given default value if no mapping for the key is present.
 
+.. function:: get(f::Function, collection, key)
+
+   Return the value stored for the given key, or if no mapping for the key is present, return ``f()``.  Use ``get!`` to also store the default value in the dictionary.
+
+   This is intended to be called using ``do`` block syntax::
+
+     get(dict, key) do
+         # default value calculated here
+	 time()
+     end
+
+.. function:: get!(collection, key, default)
+
+   Return the value stored for the given key, or if no mapping for the key is present, store ``key => default``, and return ``default``.
+
+.. function:: get!(f::Function, collection, key)
+
+   Return the value stored for the given key, or if no mapping for the key is present, store ``key => f()``, and return ``f()``.
+
+   This is intended to be called using ``do`` block syntax::
+
+     get!(dict, key) do
+         # default value calculated here
+	 time()
+     end
+
 .. function:: getkey(collection, key, default)
 
    Return the key matching argument ``key`` if one exists in ``collection``, otherwise return ``default``.
@@ -763,10 +797,6 @@ Partially implemented by: ``IntSet``, ``Set``, ``EnvHash``, ``Array``, ``BitArra
 
 Set-Like Collections
 --------------------
-
-.. function:: add!(collection, key)
-
-   Add an element to a set-like collection.
 
 .. function:: Set(x...)
 
@@ -925,11 +955,11 @@ Strings
 
 .. function:: repr(x)
 
-   Create a string from any value using the ``show`` function.
+   Create a string from any value using the ``showall`` function.
 
-.. function:: bytestring(::Ptr{Uint8})
+.. function:: bytestring(::Ptr{Uint8}, [length])
 
-   Create a string from the address of a C (0-terminated) string. A copy is made; the ptr can be safely freed.
+   Create a string from the address of a C (0-terminated) string. A copy is made; the ptr can be safely freed. If ``length`` is specified, the string does not have to be 0-terminated.
 
 .. function:: bytestring(s)
 
@@ -951,6 +981,37 @@ Strings
 
    Convert a string to a contiguous UTF-8 string (all characters must be valid UTF-8 characters).
 
+.. function:: normalize_string(s, normalform::Symbol)
+
+   Normalize the string ``s`` according to one of the four "normal
+   forms" of the Unicode standard: ``normalform`` can be ``:NFC``,
+   ``:NFD``, ``:NFKC``, or ``:NFKD``.  Normal forms C (canonical
+   composition) and D (canonical decomposition) convert different
+   visually identical representations of the same abstract string into
+   a single canonical form, with form C being more compact.  Normal
+   forms KC and KD additionally canonicalize "compatibility
+   equivalents": they convert characters that are abstractly similar
+   but visually distinct into a single canonical choice (e.g. they expand
+   ligatures into the individual characters), with form KC being more compact.
+
+   Alternatively, finer control and additional transformations may be
+   be obtained by calling `normalize_string(s; keywords...)`, where
+   any number of the following boolean keywords options (which all default
+   to ``false`` except for ``compose``) are specified:
+
+   * ``compose=false``: do not perform canonical composition
+   * ``decompose=true``: do canonical decomposition instead of canonical composition (``compose=true`` is ignored if present)
+   * ``compat=true``: compatibility equivalents are canonicalized
+   * ``casefold=true``: perform Unicode case folding, e.g. for case-insensitive string comparison
+   * ``newline2lf=true``, ``newline2ls=true``, or ``newline2ps=true``: convert various newline sequences (LF, CRLF, CR, NEL) into a linefeed (LF), line-separation (LS), or paragraph-separation (PS) character, respectively
+   * ``stripmark=true``: strip diacritical marks (e.g. accents)
+   * ``stripignore=true``: strip Unicode's "default ignorable" characters (e.g. the soft hyphen or the left-to-right marker)
+   * ``stripcc=true``: strip control characters; horizontal tabs and form feeds are converted to spaces; newlines are also converted to spaces unless a newline-conversion flag was specified
+   * ``rejectna=true``: throw an error if unassigned code points are found
+   * ``stable=true``: enforce Unicode Versioning Stability
+
+   For example, NFKC corresponds to the options ``compose=true, compat=true, stable=true``.
+
 .. function:: is_valid_ascii(s) -> Bool
 
    Returns true if the string or byte vector is valid ASCII, false otherwise.
@@ -962,6 +1023,10 @@ Strings
 .. function:: is_valid_char(c) -> Bool
 
    Returns true if the given char or integer is a valid Unicode code point.
+
+.. function:: is_assigned_char(c) -> Bool
+
+   Returns true if the given char or integer is an assigned Unicode code point.
 
 .. function:: ismatch(r::Regex, s::String) -> Bool
 
@@ -1680,7 +1745,7 @@ Text I/O
 
    Create an iterable object that will yield each line from a stream.
 
-.. function:: readdlm(source, delim::Char, T::Type, eol::Char; has_header=false, use_mmap=false, ignore_invalid_chars=false)
+.. function:: readdlm(source, delim::Char, T::Type, eol::Char; has_header=false, use_mmap=true, ignore_invalid_chars=false, quotes=true)
 
    Read a matrix from the source where each line (separated by ``eol``) gives one row, with elements separated by the given delimeter. The source can be a text file, stream or byte array. Memory mapped files can be used by passing the byte array representation of the mapped segment as source. 
 
@@ -1691,6 +1756,8 @@ Text I/O
    If ``use_mmap`` is ``true``, the file specified by ``source`` is memory mapped for potential speedups.
 
    If ``ignore_invalid_chars`` is ``true``, bytes in ``source`` with invalid character encoding will be ignored. Otherwise an error is thrown indicating the offending character position.
+
+   If ``quotes`` is ``true``, column enclosed within double-quote (``) characters are allowed to contain new lines and column delimiters. Double-quote characters within a quoted field must be escaped with another double-quote.
 
 .. function:: readdlm(source, delim::Char, eol::Char; options...)
 
@@ -2629,6 +2696,10 @@ Mathematical Functions
 
    Return the maximum of the arguments. Operates elementwise over arrays.
 
+.. function:: minmax(x, y)
+
+   Return ``(min(x,y), max(x,y))``.
+
 .. function:: clamp(x, lo, hi)
 
    Return x if ``lo <= x <= hi``. If ``x < lo``, return ``lo``. If ``x > hi``, return ``hi``.
@@ -3397,9 +3468,9 @@ Basic functions
 
    Returns the number of elements in A
 
-.. function:: nnz(A)
+.. function:: countnz(A)
 
-   Counts the number of nonzero values in array A (dense or sparse)
+   Counts the number of nonzero values in array A (dense or sparse). Note that this is not a constant-time operation. For sparse matrices, one should usually use ``nfilled`` instead.
 
 .. function:: conj!(A)
 
@@ -4409,7 +4480,7 @@ Parallel Computing
 
    Call a function asynchronously on the given arguments on the specified processor. Returns a ``RemoteRef``.
 
-.. function:: wait(x)
+.. function:: wait([x])
 
    Block the current task until some event occurs, depending on the type
    of the argument:
@@ -4424,6 +4495,14 @@ Parallel Computing
 
    * ``RawFD``: Wait for changes on a file descriptor (see `poll_fd` for keyword arguments and return code)
 
+   If no argument is passed, the task blocks for an undefined period. If the task's
+   state is set to ``:waiting``, it can only be restarted by an explicit call to
+   ``schedule`` or ``yieldto``. If the task's state is ``:runnable``, it might be
+   restarted unpredictably.
+
+   Often ``wait`` is called within a ``while`` loop to ensure a waited-for condition
+   is met before proceeding.
+
 .. function:: fetch(RemoteRef)
 
    Wait for and get the value of a remote reference.
@@ -4436,11 +4515,11 @@ Parallel Computing
 
    Perform ``fetch(remotecall(...))`` in one message.
 
-.. function:: put(RemoteRef, value)
+.. function:: put!(RemoteRef, value)
 
-   Store a value to a remote reference. Implements "shared queue of length 1" semantics: if a value is already present, blocks until the value is removed with ``take``.
+   Store a value to a remote reference. Implements "shared queue of length 1" semantics: if a value is already present, blocks until the value is removed with ``take``. Returns its first argument.
 
-.. function:: take(RemoteRef)
+.. function:: take!(RemoteRef)
 
    Fetch the value of a remote reference, removing it so that the reference is empty again.
 
@@ -4489,9 +4568,32 @@ Parallel Computing
 
 .. function:: @sync
 
-   Wait until all dynamically-enclosed uses of ``@async``, ``@spawn``, and
-   ``@spawnat`` complete.
+   Wait until all dynamically-enclosed uses of ``@async``, ``@spawn``, 
+   ``@spawnat`` and ``@parallel`` are complete.
 
+.. function:: @parallel 
+
+   A parallel for loop of the form ::
+
+        @parallel [reducer] for var = range
+            body
+        end
+   
+   The specified range is partitioned and locally executed across all workers. 
+   In case an optional reducer function is specified, @parallel performs local
+   reductions on each worker with a final reduction on the calling process.
+   
+   Note that without a reducer function, @parallel executes asynchronously, 
+   i.e. it spawns independent tasks on all available workers and returns 
+   immediately without waiting for completion. To wait for completion, prefix 
+   the call with ``@sync``, like ::
+   
+        @sync @parallel for var = range
+            body
+        end
+        
+    
+    
 Distributed Arrays
 ------------------
 
@@ -4547,13 +4649,16 @@ Distributed Arrays
    Get the vector of processors storing pieces of ``d``
 
    
-Shared Arrays (EXPERIMENTAL FEATURE)
-------------------------------------
+Shared Arrays (Experimental, UNIX-only feature)
+-----------------------------------------------
 
-.. function:: SharedArray(T::Type, dims::NTuple; init=false, pids=workers())
+.. function:: SharedArray(T::Type, dims::NTuple; init=false, pids=Int[])
 
     Construct a SharedArray of a bitstype ``T``  and size ``dims`` across the processes
     specified by ``pids`` - all of which have to be on the same host. 
+    
+    If ``pids`` is left unspecified, the shared array will be mapped across all workers
+    on the current host.
 
     If an ``init`` function of the type ``initfn(S::SharedArray)`` is specified, 
     it is called on all the participating workers. 
@@ -4914,8 +5019,9 @@ C Interface
 
 .. function:: pointer(a[, index])
 
-   Get the native address of an array element. Be careful to ensure that a julia
-   reference to ``a`` exists as long as this pointer will be used.
+   Get the native address of an array or string element. Be careful to
+   ensure that a julia reference to ``a`` exists as long as this
+   pointer will be used.
 
 .. function:: pointer(type, int)
 
@@ -5126,11 +5232,11 @@ Tasks
 
 .. function:: Task(func)
 
-   Create a ``Task`` (i.e. thread, or coroutine) to execute the given function. The task exits when this function returns.
+   Create a ``Task`` (i.e. thread, or coroutine) to execute the given function (which must be callable with no arguments). The task exits when this function returns.
 
 .. function:: yieldto(task, args...)
 
-   Switch to the given task. The first time a task is switched to, the task's function is called with ``args``. On subsequent switches, ``args`` are returned from the task's last call to ``yieldto``.
+   Switch to the given task. The first time a task is switched to, the task's function is called with no arguments. On subsequent switches, ``args`` are returned from the task's last call to ``yieldto``. This is a low-level call that only switches tasks, not considering states or scheduling in any way.
 
 .. function:: current_task()
 
@@ -5153,7 +5259,7 @@ Tasks
 
 .. function:: yield()
 
-   For scheduled tasks, switch back to the scheduler to allow another scheduled task to run. A task that calls this function is still runnable, and will be restarted immediately if there are no other runnable tasks.
+   Switch to the scheduler to allow another scheduled task to run. A task that calls this function is still runnable, and will be restarted immediately if there are no other runnable tasks.
 
 .. function:: task_local_storage(symbol)
 
@@ -5187,11 +5293,15 @@ Tasks
    only one is. If ``error`` is true, the passed value is raised as an
    exception in the woken tasks.
 
-.. function:: schedule(t::Task)
+.. function:: schedule(t::Task, [val]; error=false)
 
    Add a task to the scheduler's queue. This causes the task to run constantly
    when the system is otherwise idle, unless the task performs a blocking
    operation such as ``wait``.
+
+   If a second argument is provided, it will be passed to the task (via the
+   return value of ``yieldto``) when it runs again. If ``error`` is true,
+   the value is raised as an exception in the woken task.
 
 .. function:: @schedule
 

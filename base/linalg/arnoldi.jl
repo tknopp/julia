@@ -6,7 +6,7 @@ function eigs(A;nev::Integer=6, ncv::Integer=20, which::ASCIIString="LM",
           tol=0.0, maxiter::Integer=1000, sigma=0,v0::Vector=zeros((0,)),
           ritzvec::Bool=true, complexOP::Bool=false)
     n = chksquare(A)
-    (n <= 6) && (nev = max(n-1, nev))
+    (n <= 6) && (nev = min(n-1, nev))
     ncv = blas_int(min(max(2*nev+2, ncv), n))
 
     sym   = issym(A)
@@ -24,7 +24,7 @@ function eigs(A;nev::Integer=6, ncv::Integer=20, which::ASCIIString="LM",
         mode = 1
         linop(x) = A * x
     else
-        C = lufact(A - sigma*eye(T,n))
+        C = lufact(A - sigma*eye(A))
         if cmplx
             mode = 3
             linop(x) = C\x

@@ -64,11 +64,6 @@ function tril(B::BitMatrix, k::Integer)
     A
 end
 
-# TODO: improve this!
-(*)(A::BitArray, B::BitArray)      = bitunpack(A) * bitunpack(B)
-(*)(A::BitArray, B::Union(AbstractArray, Array{Bool})) = bitunpack(A) * B
-(*)(A::Union(AbstractArray, Array{Bool}), B::BitArray) = A * bitunpack(B)
-
 ## diff and gradient
 
 # TODO: this could be improved (is it worth it?)
@@ -137,7 +132,7 @@ end
 
 ## Structure query functions
 
-issym(A::BitMatrix) = size(A, 1)==size(A, 2) && nnz(A - A.')==0
+issym(A::BitMatrix) = size(A, 1)==size(A, 2) && numnz(A - A.')==0
 ishermitian(A::BitMatrix) = issym(A)
 
 function nonzero_chunks(chunks::Vector{Uint64}, pos0::Int, pos1::Int)

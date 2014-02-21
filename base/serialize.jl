@@ -235,14 +235,13 @@ function serialize(s, linfo::LambdaStaticData)
 end
 
 function serialize(s, t::Task)
-    if istaskstarted(t) && !t.done
+    if istaskstarted(t) && !istaskdone(t)
         error("cannot serialize a running Task")
     end
     writetag(s, Task)
     serialize(s, t.code)
     serialize(s, t.storage)
-    serialize(s, t.done)
-    serialize(s, t.runnable)
+    serialize(s, t.state == :queued || t.state == :waiting ? (:runnable) : t.state)
     serialize(s, t.result)
     serialize(s, t.exception)
 end
@@ -331,6 +330,9 @@ function deserialize(s, ::Type{Module})
     path = deserialize(s)
     m = Main
     for mname in path
+        if !isdefined(m,mname)
+            warn("Module $mname not defined on process $(myid())")  # an error seemingly fails
+        end
         m = eval(m,mname)::Module
     end
     m
@@ -466,8 +468,7 @@ deserialize{T}(s, ::Type{Ptr{T}}) = pointer(T, 0)
 function deserialize(s, ::Type{Task})
     t = Task(deserialize(s))
     t.storage = deserialize(s)
-    t.done = deserialize(s)
-    t.runnable = deserialize(s)
+    t.state = deserialize(s)
     t.result = deserialize(s)
     t.exception = deserialize(s)
     t
@@ -505,7 +506,7 @@ function deserialize(s, t::DataType)
         for i in 1:length(t.names)
             tag = int32(read(s, Uint8))
             if tag==0 || !is(deser_tag[tag], UndefRefTag)
-                setfield(x, i, handle_deserialize(s, tag))
+                setfield!(x, i, handle_deserialize(s, tag))
             end
         end
         return x

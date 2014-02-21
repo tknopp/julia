@@ -1,29 +1,27 @@
 ### From array.jl
 
-@ngenerate N function _checksize(A::AbstractArray, I::NTuple{N, Any}...)
-    @nexprs N d->(size(A, d) == length(I_d) || throw(DimensionMismatch("Index $d has length $(length(I_d)), but size(A, $d) = $(size(A,d))")))
+@ngenerate N Nothing function checksize(A::AbstractArray, I::NTuple{N, Any}...)
+    @nexprs N d->(size(A, d) == length(I_d) || throw(DimensionMismatch("index $d has length $(length(I_d)), but size(A, $d) = $(size(A,d))")))
     nothing
 end
-checksize(A, I) = (_checksize(A, I); return nothing)
-checksize(A, I, J) = (_checksize(A, I, J); return nothing)
-checksize(A, I...) = (_checksize(A, I...); return nothing)
 
 unsafe_getindex(v::Real, ind::Integer) = v
 unsafe_getindex(v::Ranges, ind::Integer) = first(v) + (ind-1)*step(v)
 unsafe_getindex(v::AbstractArray, ind::Integer) = v[ind]
 
 # Version that uses cartesian indexing for src
-@ngenerate N function _getindex!(dest::Array, src::AbstractArray, I::NTuple{N,Union(Int,AbstractVector)}...)
+@ngenerate N typeof(dest) function _getindex!(dest::Array, src::AbstractArray, I::NTuple{N,Union(Int,AbstractVector)}...)
     checksize(dest, I...)
     k = 1
     @nloops N i dest d->(@inbounds j_d = unsafe_getindex(I_d, i_d)) begin
         @inbounds dest[k] = (@nref N src j)
         k += 1
     end
+    dest
 end
 
 # Version that uses linear indexing for src
-@ngenerate N function _getindex!(dest::Array, src::Array, I::NTuple{N,Union(Int,AbstractVector)}...)
+@ngenerate N typeof(dest) function _getindex!(dest::Array, src::Array, I::NTuple{N,Union(Int,AbstractVector)}...)
     checksize(dest, I...)
     stride_1 = 1
     @nexprs N d->(stride_{d+1} = stride_d*size(src,d))
@@ -33,31 +31,29 @@ end
         @inbounds dest[k] = src[offset_0]
         k += 1
     end
+    dest
 end
 
-getindex!(dest, src, I) = (checkbounds(src, I); _getindex!(dest, src, to_index(I)); return dest)
-getindex!(dest, src, I, J) = (checkbounds(src, I, J); _getindex!(dest, src, to_index(I), to_index(J)); return dest)
-getindex!(dest, src, I...) = (checkbounds(src, I...); _getindex!(dest, src, to_index(I)...); return dest)
+# It's most efficient to call checkbounds first, then to_index, and finally
+# allocate the output. Hence the different variants.
+_getindex(A, I::(Union(Int,AbstractVector)...)) =
+    _getindex!(similar(A, index_shape(I...)), A, I...)
 
-getindex(A::Array, I::Union(Real,AbstractVector)) = getindex!(similar(A, index_shape(I)), A, I)
-function getindex(A::Array, I::Union(Real,AbstractVector)...)
+@nsplat N function getindex(A::Array, I::NTuple{N,Union(Real,AbstractVector)}...)
     checkbounds(A, I...)
-    Ii = to_index(I)
-    dest = similar(A, index_shape(Ii...))
-    _getindex!(dest, A, Ii...)
-    dest
+    _getindex(A, to_index(I...))
 end
-# Version of the above for 2d without the splats
-function getindex(A::Array, I::Union(Real,AbstractVector), J::Union(Real,AbstractVector))
-    checkbounds(A, I, J)
-    Ii, Ji = to_index(I), to_index(J)
-    dest = similar(A, index_shape(Ii,Ji))
-    _getindex!(dest, A, Ii, Ji)
-    dest
+
+# Also a safe version of getindex!
+@nsplat N function getindex!(dest, src, I::NTuple{N,Union(Real,AbstractVector)}...)
+    checkbounds(src, I...)
+    _getindex!(dest, src, to_index(I...)...)
 end
 
 
-@ngenerate N function _setindex!(A::Array, x, I::NTuple{N,Union(Int,AbstractArray)}...)
+@ngenerate N typeof(A) function setindex!(A::Array, x, J::NTuple{N,Union(Real,AbstractArray)}...)
+    @ncall N checkbounds A J
+    @nexprs N d->(I_d = to_index(J_d))
     stride_1 = 1
     @nexprs N d->(stride_{d+1} = stride_d*size(A,d))
     @nexprs N d->(offset_d = 1)  # really only need offset_$N = 1
@@ -67,7 +63,7 @@ end
         end
     else
         X = x
-        setindex_shape_check(X, I...)
+        @ncall N setindex_shape_check X I
         # TODO? A variant that can use cartesian indexing for RHS
         k = 1
         @nloops N i d->(1:length(I_d)) d->(@inbounds offset_{d-1} = offset_d + (unsafe_getindex(I_d, i_d)-1)*stride_d) begin
@@ -75,27 +71,12 @@ end
             k += 1
         end
     end
-end
-
-function setindex!(A::Array, x, I::Union(Real,AbstractArray), J::Union(Real,AbstractArray))
-    checkbounds(A, I, J)
-    _setindex!(A, x, to_index(I), to_index(J))
-    A
-end
-function setindex!(A::Array, x, I::Union(Real,AbstractArray))
-    checkbounds(A, I)
-    _setindex!(A, x, to_index(I))
-    A
-end
-function setindex!(A::Array, x, I::Union(Real,AbstractArray)...)
-    checkbounds(A, I...)
-    _setindex!(A, x, to_index(I)...)
     A
 end
 
 
-@ngenerate N function findn{T,N}(A::AbstractArray{T,N})
-    nnzA = nnz(A)
+@ngenerate N NTuple{N,Vector{Int}} function findn{T,N}(A::AbstractArray{T,N})
+    nnzA = countnz(A)
     @nexprs N d->(I_d = Array(Int, nnzA))
     k = 1
     @nloops N i A begin
@@ -127,7 +108,7 @@ function gen_getindex_body(N::Int)
     end
 end
 
-eval(ngenerate(:N, :(getindex{T}(s::SubArray{T,N}, ind::Integer)), gen_getindex_body, 2:5, false))
+eval(ngenerate(:N, nothing, :(getindex{T}(s::SubArray{T,N}, ind::Integer)), gen_getindex_body, 2:5, false))
 
 
 function gen_setindex!_body(N::Int)
@@ -145,45 +126,65 @@ function gen_setindex!_body(N::Int)
     end
 end
 
-eval(ngenerate(:N, :(setindex!{T}(s::SubArray{T,N}, v, ind::Integer)), gen_setindex!_body, 2:5, false))
+eval(ngenerate(:N, nothing, :(setindex!{T}(s::SubArray{T,N}, v, ind::Integer)), gen_setindex!_body, 2:5, false))
 
 
 ### from abstractarray.jl
 
-@ngenerate N function _fill!{T,N}(A::AbstractArray{T,N}, x)
+@ngenerate N typeof(A) function fill!{T,N}(A::StoredArray{T,N}, x)
     @nloops N i A begin
         @inbounds (@nref N A i) = x
     end
+    A
 end
 
-fill!(A::AbstractArray, x) = (_fill!(A, x); return A)
+@ngenerate N typeof(dest) function copy!{T,N}(dest::StoredArray{T,N}, src::StoredArray{T,N})
+    if @nall N d->(size(dest,d) == size(src,d))
+        @nloops N i dest begin
+            @inbounds (@nref N dest i) = (@nref N src i)
+        end
+    else
+        invoke(copy!, (typeof(dest), Any), dest, src)
+    end
+    dest
+end
 
+### BitArrays
 
-### from bitarray.jl
+## getindex
 
-# note: we can gain some performance if the first dimension is a range;
-# but we need to single-out the N=0 case due to how @ngenerate works
-# case N = 0
-function getindex(B::BitArray, I0::Range1)
-    ndims(B) < 1 && error("wrong number of dimensions")
+# general scalar indexing with two or more indices
+# (uses linear indexing, which performs the final bounds check and
+# is defined in bitarray.jl)
+
+@ngenerate N Bool function getindex(B::BitArray, I_0::Int, I::NTuple{N,Int}...)
+    stride = 1
+    index = I_0
+    @nexprs N d->begin
+        l = size(B,d)
+        stride *= l
+        1 <= I_{d-1} <= l || throw(BoundsError())
+        index += (I_d - 1) * stride
+    end
+    return B[index]
+end
+
+# contiguous multidimensional indexing: if the first dimension is a range,
+# we can get some performance from using copy_chunks
+
+function getindex(B::BitArray, I0::Range1{Int})
     checkbounds(B, I0)
     X = BitArray(length(I0))
     copy_chunks(X.chunks, 1, B.chunks, first(I0), length(I0))
     return X
 end
 
-# TODO: extend to I:Union(Real,AbstractArray)... (i.e. not necessarily contiguous)
-@ngenerate N function getindex(B::BitArray, I0::Range1, I::NTuple{N,Union(Real,Range1)}...)
-    ndims(B) < N+1 && error("wrong number of dimensions")
+@ngenerate N BitArray{length(index_shape(I0, I...))} function getindex(B::BitArray, I0::Range1{Int}, I::NTuple{N,Union(Int,Range1{Int})}...)
     checkbounds(B, I0, I...)
     X = BitArray(index_shape(I0, I...))
 
-    I0 = to_index(I0)
-
     f0 = first(I0)
     l0 = length(I0)
-
-    Base.@nexprs N d->(I_d = to_index(I_d))
 
     gap_lst_1 = 0
     @nexprs N d->(gap_lst_{d+1} = length(I_d))
@@ -207,9 +208,10 @@ end
     return X
 end
 
-@ngenerate N function getindex(B::BitArray, I::NTuple{N,Union(Real,AbstractVector)}...)
+# general multidimensional non-scalar indexing
+
+@ngenerate N BitArray{length(index_shape(I...))} function getindex(B::BitArray, I::NTuple{N,Union(Int,AbstractVector{Int})}...)
     checkbounds(B, I...)
-    @nexprs N d->(I_d = to_index(I_d))
     X = BitArray(index_shape(I...))
     Xc = X.chunks
 
@@ -221,34 +223,55 @@ end
     return X
 end
 
-# note: we can gain some performance if the first dimension is a range;
-# case N = 0
-function setindex!(B::BitArray, X::BitArray, I0::Range1)
-    ndims(B) != 1 && error("wrong number of dimensions in assigment")
-    I0 = to_index(I0)
+# general version with Real (or logical) indexing which dispatches on the appropriate method
+# TODO: fix return type
+
+@ngenerate N Bool function getindex(B::BitArray, I::NTuple{N,Real}...)
+    @nexprs N d->(J_d = to_index(I_d))
+    return @nref N B J
+end
+
+@ngenerate N BitArray{length(index_shape(I...))} function getindex(B::BitArray, I::NTuple{N,Union(Real,AbstractVector)}...)
+    @nexprs N d->(J_d = to_index(I_d))
+    return @nref N B J
+end
+
+## setindex!
+
+# general scalar indexing with two or more indices
+# (uses linear indexing, which performs the final bounds check and
+# is defined in bitarray.jl)
+
+@ngenerate N typeof(B) function setindex!(B::BitArray, x::Bool, I_0::Int, I::NTuple{N,Int}...)
+    stride = 1
+    index = I_0
+    @nexprs N d->begin
+        l = size(B,d)
+        stride *= l
+        1 <= I_{d-1} <= l || throw(BoundsError())
+        index += (I_d - 1) * stride
+    end
+    B[index] = x
+    return B
+end
+
+# contiguous multidimensional indexing: if the first dimension is a range,
+# we can get some performance from using copy_chunks
+
+function setindex!(B::BitArray, X::BitArray, I0::Range1{Int})
     checkbounds(B, I0)
-    lI = length(I0)
-    length(X) != lI && error("array assignment dimensions mismatch")
-    lI == 0 && return B
-    f0 = first(I0)
+    setindex_shape_check(X, I0)
     l0 = length(I0)
+    l0 == 0 && return B
+    f0 = first(I0)
     copy_chunks(B.chunks, f0, X.chunks, 1, l0)
     return B
 end
 
-# TODO: extend to I:Union(Real,AbstractArray)... (i.e. not necessarily contiguous)
-@ngenerate N function setindex!(B::BitArray, X::BitArray, I0::Range1, I::NTuple{N,Union(Real,Range1)}...)
-    ndims(B) != N+1 && error("wrong number of dimensions in assigment")
-    I0 = to_index(I0)
-    lI = length(I0)
-
-    @nexprs N d->begin
-        I_d = to_index(I_d)
-        lI *= length(I_d)
-    end
-    length(X) != lI && error("array assignment dimensions mismatch")
+@ngenerate N typeof(B) function setindex!(B::BitArray, X::BitArray, I0::Range1{Int}, I::NTuple{N,Union(Int,Range1{Int})}...)
     checkbounds(B, I0, I...)
-    lI == 0 && return B
+    setindex_shape_check(X, I0, I...)
+    length(X) == 0 && return B
     f0 = first(I0)
     l0 = length(I0)
 
@@ -275,17 +298,11 @@ end
     return B
 end
 
-@ngenerate N function setindex!(B::BitArray, X::AbstractArray, I::NTuple{N,Union(Real,AbstractArray)}...)
+# general multidimensional non-scalar indexing
+
+@ngenerate N typeof(B) function setindex!(B::BitArray, X::AbstractArray, I::NTuple{N,Union(Int,AbstractArray{Int})}...)
     checkbounds(B, I...)
-    @nexprs N d->(I_d = to_index(I_d))
-    nel = 1
-    @nexprs N d->(nel *= length(I_d))
-    length(X) != nel && error("argument dimensions must match")
-    if ndims(X) > 1
-        @nexprs N d->begin
-            size(X,d) != length(I_d) && error("argument dimensions must match")
-        end
-    end
+    setindex_shape_check(X, I...)
     refind = 1
     @nloops N i d->I_d begin
         (@nref N B i) = X[refind] # TODO: should avoid bounds checking
@@ -294,19 +311,40 @@ end
     return B
 end
 
-@ngenerate N function setindex!(B::BitArray, x, I::NTuple{N,Union(Real,AbstractArray)}...)
-    x = convert(Bool, x)
+@ngenerate N typeof(B) function setindex!(B::BitArray, x::Bool, I::NTuple{N,Union(Int,AbstractArray{Int})}...)
     checkbounds(B, I...)
-    @nexprs N d->(I_d = to_index(I_d))
-    Bc = B.chunks
     @nloops N i d->I_d begin
         (@nref N B i) = x # TODO: should avoid bounds checking
     end
     return B
 end
 
-@ngenerate N function findn{N}(B::BitArray{N})
-    nnzB = nnz(B)
+# general versions with Real (or logical) indexing which dispatch on the appropriate method
+
+# (multiple signatures for disambiguation)
+for T in [Real, Union(Real, AbstractArray)]
+    @eval begin
+        @ngenerate N typeof(B) function setindex!(B::BitArray, x, I::NTuple{N,$T}...)
+            y = convert(Bool, x)
+            @nexprs N d->(J_d = to_index(I_d))
+            (@nref N B J) = y
+            return B
+        end
+        @ngenerate N typeof(B) function setindex!(B::BitArray, X::AbstractArray, I::NTuple{N,$T}...)
+            @nexprs N d->(J_d = to_index(I_d))
+            (@nref N B J) = X
+            return B
+        end
+    end
+end
+setindex!(B::BitArray, x) = setindex!(B, convert(Bool,x))
+
+
+
+## findn
+
+@ngenerate N NTuple{N,Vector{Int}} function findn{N}(B::BitArray{N})
+    nnzB = countnz(B)
     I = ntuple(N, x->Array(Int, nnzB))
     if nnzB > 0
         count = 1
@@ -320,14 +358,30 @@ end
     return I
 end
 
+## isassigned
+
+@ngenerate N Bool function isassigned(B::BitArray, I_0::Int, I::NTuple{N,Int}...)
+    stride = 1
+    index = I_0
+    @nexprs N d->begin
+        l = size(B,d)
+        stride *= l
+        1 <= I_{d-1} <= l || return false
+        index += (I_d - 1) * stride
+    end
+    return isassigned(B, index)
+end
+
+## permutedims
+
 for (V, PT, BT) in [((:N,), BitArray, BitArray), ((:T,:N), Array, StridedArray)]
-    @eval begin
-    @ngenerate N function permutedims!{$(V...)}(P::$PT{$(V...)}, B::$BT{$(V...)}, perm)
+    @eval @ngenerate N typeof(P) function permutedims!{$(V...)}(P::$PT{$(V...)}, B::$BT{$(V...)}, perm)
         dimsB = size(B)
-        (length(perm) == N && isperm(perm)) || error("no valid permutation of dimensions")
+        length(perm) == N || error("expected permutation of size $N, but length(perm)=$(length(perm))")
+        isperm(perm) || error("input is not a permutation")
         dimsP = size(P)
         for i = 1:length(perm)
-            dimsP[i] == dimsB[perm[i]] || error("destination tensor of incorrect size")
+            dimsP[i] == dimsB[perm[i]] || throw(DimensionMismatch("destination tensor of incorrect size"))
         end
 
         #calculates all the strides
@@ -355,5 +409,79 @@ for (V, PT, BT) in [((:N,), BitArray, BitArray), ((:T,:N), Array, StridedArray)]
 
         return P
     end
+end
+
+## unique across dim
+
+immutable Prehashed
+    hash::Uint
+end
+hash(x::Prehashed) = x.hash
+
+@ngenerate N typeof(A) function unique{T,N}(A::AbstractArray{T,N}, dim::Int)
+    1 <= dim <= N || return copy(A)
+    hashes = zeros(Uint, size(A, dim))
+
+    # Compute hash for each row
+    k = 0
+    @nloops N i A d->(if d == dim; k = i_d; end) begin
+       @inbounds hashes[k] = bitmix(hashes[k], hash((@nref N A i)))
     end
+
+    # Collect index of first row for each hash
+    uniquerow = Array(Int, size(A, dim))
+    firstrow = Dict{Prehashed,Int}()
+    for k = 1:size(A, dim)
+        uniquerow[k] = get!(firstrow, Prehashed(hashes[k]), k)
+    end
+    uniquerows = collect(values(firstrow))
+
+    # Check for collisions
+    collided = falses(size(A, dim))
+    @inbounds begin
+        @nloops N i A d->(if d == dim
+                              k = i_d
+                              j_d = uniquerow[k]
+                          else
+                              j_d = i_d
+                          end) begin
+            if (@nref N A j) != (@nref N A i)
+                collided[k] = true
+            end
+        end
+    end
+
+    if any(collided)
+        nowcollided = BitArray(size(A, dim))
+        while any(collided)
+            # Collect index of first row for each collided hash
+            empty!(firstrow)
+            for j = 1:size(A, dim)
+                collided[j] || continue
+                uniquerow[j] = get!(firstrow, Prehashed(hashes[j]), j)
+            end
+            for v in values(firstrow)
+                push!(uniquerows, v)
+            end
+
+            # Check for collisions
+            fill!(nowcollided, false)
+            @nloops N i A d->begin
+                                 if d == dim
+                                     k = i_d
+                                     j_d = uniquerow[k]
+                                     (!collided[k] || j_d == k) && continue
+                                 else
+                                     j_d = i_d
+                                 end
+                             end begin
+                if (@nref N A j) != (@nref N A i)
+                    nowcollided[k] = true
+                end
+            end
+            (collided, nowcollided) = (nowcollided, collided)
+        end
+    end
+
+    @nref N A d->d == dim ? sort!(uniquerows) : (1:size(A, d))
 end

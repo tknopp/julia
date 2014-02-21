@@ -338,28 +338,9 @@ end
 
 ./(x::Number, r::Ranges) = [ x/y for y=r ]
 ./(r::Ranges, y::Number) = [ x/y for x=r ]
-function ./(r::Ranges, s::Ranges)
-    if length(r) != length(s)
-        error("argument dimensions must match")
-    end
-    [ r[i]/s[i] for i = 1:length(r) ]
-end
-
-function .*{T<:Number,S<:Number}(r::Ranges{T}, s::Ranges{S})
-    if length(r) != length(s)
-        error("argument dimensions must match")
-    end
-    [ r[i]*s[i] for i = 1:length(r) ]
-end
 
 .^(x::Number, r::Ranges) = [ x^y for y=r ]
 .^(r::Ranges, y::Number) = [ x^y for x=r ]
-function .^{T<:Number,S<:Number}(r::Ranges{T}, s::Ranges{S})
-    if length(r) != length(s)
-        error("argument dimensions must match")
-    end
-    [ r[i]^s[i] for i = 1:length(r) ]
-end
 
 ## concatenation ##
 
@@ -406,7 +387,9 @@ sortperm{T<:Real}(r::Range{T}) = issorted(r) ? (1:1:length(r)) : (length(r):-1:1
 
 function sum{T<:Real}(r::Ranges{T})
     l = length(r)
-    return l * first(r) + step(r) * div(l * (l - 1), 2)
+    # note that a little care is required to avoid overflow in l*(l-1)/2
+    return l * first(r) + (iseven(l) ? (step(r) * (l-1)) * (l>>1)
+                                     : (step(r) * l) * ((l-1)>>1))
 end
 
 function map!(f::Callable, dest, r::Ranges)

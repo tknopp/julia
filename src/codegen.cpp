@@ -203,6 +203,7 @@ static Function *jlthrow_func;
 static Function *jlthrow_line_func;
 static Function *jlerror_func;
 static Function *jltypeerror_func;
+static Function *jlundefvarerror_func;
 static Function *jlcheckassign_func;
 static Function *jldeclareconst_func;
 static Function *jltopeval_func;
@@ -356,6 +357,10 @@ static Value *emit_condition(jl_value_t *cond, const std::string &msg, jl_codect
 static Type *NoopType;
 
 // --- utilities ---
+
+extern "C" {
+    int globalUnique = 0;
+}
 
 #include "cgutils.cpp"
 
@@ -2065,10 +2070,7 @@ static Value *emit_checked_var(Value *bp, jl_sym_t *name, jl_codectx_t *ctx)
     BasicBlock *ifok = BasicBlock::Create(getGlobalContext(), "ok");
     builder.CreateCondBr(ok, ifok, err);
     builder.SetInsertPoint(err);
-    std::string msg;
-    msg += std::string(name->name);
-    msg += " not defined";
-    just_emit_error(msg, ctx);
+    builder.CreateCall(prepare_call(jlundefvarerror_func), literal_pointer_val((jl_value_t*)name));
     builder.CreateBr(ifok);
     ctx->f->getBasicBlockList().push_back(ifok);
     builder.SetInsertPoint(ifok);
@@ -2798,8 +2800,11 @@ static void finalize_gc_frame(jl_codectx_t *ctx)
 // generate a julia-callable function that calls f (AKA lam)
 static Function *gen_jlcall_wrapper(jl_lambda_info_t *lam, jl_expr_t *ast, Function *f)
 {
+    std::stringstream funcName;
+    funcName << "jlcall_" << f->getName().str();
+
     Function *w = Function::Create(jl_func_sig, Function::ExternalLinkage,
-                                   f->getName(), f->getParent());
+                                   funcName.str(), f->getParent());
     Function::arg_iterator AI = w->arg_begin();
     AI++; //const Argument &fArg = *AI++;
     Value *argArray = AI++;
@@ -2866,8 +2871,6 @@ static Function *gen_jlcall_wrapper(jl_lambda_info_t *lam, jl_expr_t *ast, Funct
 
     return w;
 }
-
-static int globalUnique = 0;
 
 // cstyle = compile with c-callable signature, not jlcall
 static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
@@ -3643,7 +3646,7 @@ static void init_julia_llvm_env(Module *m)
 #ifdef JL_GC_MARKSWEEP
     jlpgcstack_var =
         new GlobalVariable(*m, jl_ppvalue_llvmt,
-                           true, GlobalVariable::ExternalLinkage,
+                           false, GlobalVariable::ExternalLinkage,
                            NULL, "jl_pgcstack");
     add_named_global(jlpgcstack_var, (void*)&jl_pgcstack);
 #endif
@@ -3722,6 +3725,13 @@ static void init_julia_llvm_env(Module *m)
                          "jl_throw", m);
     jlthrow_func->setDoesNotReturn();
     add_named_global(jlthrow_func, (void*)&jl_throw);
+
+    jlundefvarerror_func =
+        Function::Create(FunctionType::get(T_void, args1_, false),
+                         Function::ExternalLinkage,
+                         "jl_undefined_var_error", m);
+    jlundefvarerror_func->setDoesNotReturn();
+    add_named_global(jlundefvarerror_func, (void*)&jl_undefined_var_error);
 
     std::vector<Type*> args2_throw(0);
     args2_throw.push_back(jl_pvalue_llvmt);
@@ -4133,7 +4143,6 @@ extern "C" void jl_init_codegen(void)
                                          (void*)&restore_arg_area_loc);
 
     typeToTypeId = jl_alloc_cell_1d(16);
-    jl_gc_preserve((jl_value_t*)typeToTypeId);
 }
 
 /*

@@ -8,7 +8,7 @@ static GlobalVariable *prepare_global(GlobalVariable *G)
         GlobalVariable *gv = jl_Module->getGlobalVariable(G->getName());
         if (!gv) {
             gv = new GlobalVariable(*jl_Module, G->getType()->getElementType(),
-                                    true, GlobalVariable::ExternalLinkage,
+                                    G->isConstant(), GlobalVariable::ExternalLinkage,
                                     NULL, G->getName());
         }
         return gv;     
@@ -227,6 +227,13 @@ static void jl_gen_llvm_gv_array()
             GlobalVariable::ExternalLinkage,
             ConstantArray::get(atype, ArrayRef<Constant*>(jl_sysimg_gvars)),
             "jl_sysimg_gvars");
+    new GlobalVariable(
+            *jl_Module,
+            T_size,
+            true,
+            GlobalVariable::ExternalLinkage,
+            ConstantInt::get(T_size,globalUnique+1),
+            "jl_globalUnique");
 }
 
 static int32_t jl_assign_functionID(Function *functionObject)
@@ -246,10 +253,13 @@ static Value *julia_gv(const char *cname, void *addr)
     it = jl_value_to_llvm.find(addr);
     if (it != jl_value_to_llvm.end())
         return builder.CreateLoad(it->second.gv);
+
+    std::stringstream gvname;
+    gvname << cname << globalUnique++;
     // no existing GlobalVariable, create one and store it
     GlobalValue *gv = new GlobalVariable(*jl_Module, jl_pvalue_llvmt,
                            false, imaging_mode ? GlobalVariable::InternalLinkage : GlobalVariable::ExternalLinkage,
-                           ConstantPointerNull::get((PointerType*)jl_pvalue_llvmt), cname);
+                           ConstantPointerNull::get((PointerType*)jl_pvalue_llvmt), gvname.str());
 
     // make the pointer valid for this session
 #ifdef USE_MCJIT
@@ -533,7 +543,9 @@ static bool is_tupletype_homogeneous(jl_tuple_t *t)
 // --- scheme for tagging llvm values with julia types using metadata ---
 
 static std::map<int, jl_value_t*> typeIdToType;
-static jl_array_t *typeToTypeId;
+extern "C" {
+    jl_array_t *typeToTypeId;
+}
 static int cur_type_id = 1;
 
 static int jl_type_to_typeid(jl_value_t *t)
@@ -545,7 +557,7 @@ static int jl_type_to_typeid(jl_value_t *t)
             jl_error("internal compiler error: too many bits types");
         JL_GC_PUSH1(&id);
         id = jl_box_long(mine);
-        jl_eqtable_put(typeToTypeId, t, id);
+        typeToTypeId = jl_eqtable_put(typeToTypeId, t, id);
         typeIdToType[mine] = t;
         JL_GC_POP();
         return mine;
@@ -582,6 +594,7 @@ static jl_value_t *julia_type_of_without_metadata(Value *v, bool err=true)
 static jl_value_t *julia_type_of(Value *v)
 {
     MDNode *mdn;
+    assert(v != NULL);
     if (dyn_cast<Instruction>(v) == NULL ||
         (mdn = ((Instruction*)v)->getMetadata("julia_type")) == NULL) {
         return julia_type_of_without_metadata(v, true);
@@ -1044,7 +1057,7 @@ static Value *emit_tupleref(Value *tuple, Value *ival, jl_value_t *jt, jl_codect
                 jl_add_linfo_root(ctx->linfo, jt);
                 v = allocate_box_dynamic(emit_tupleref(literal_pointer_val(jt),
                                                        ival, jl_typeof(jt), ctx),
-                                         ConstantInt::get(T_size,ty->getScalarSizeInBits()), v);
+                                         ConstantInt::get(T_size,ty->getScalarSizeInBits()/8), v);
             }
         }
         return v;
@@ -1508,7 +1521,16 @@ static Value *boxed(Value *v,  jl_codectx_t *ctx, jl_value_t *jt)
     if (jb == jl_uint32_type) return builder.CreateCall(prepare_call(box_uint32_func), v);
     if (jb == jl_uint64_type) return builder.CreateCall(prepare_call(box_uint64_func), v);
     if (jb == jl_char_type)   return builder.CreateCall(prepare_call(box_char_func), v);
-    if (!jl_isbits(jt)) {
+
+    if (!jl_is_leaf_type(jt)) {
+        // we can get a sharper type from julia_type_of than expr_type in some
+        // cases, due to ccall's compile-time evaluations of types. see issue #5752
+        jl_value_t *jt2 = julia_type_of(v);
+        if (jl_subtype(jt2, jt, 0))
+            jt = jt2;
+    }
+
+    if (!jl_isbits(jt) || !jl_is_leaf_type(jt)) {
         assert("Don't know how to box this type" && false);
         return NULL;
     }
