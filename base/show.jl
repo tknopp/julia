@@ -212,8 +212,8 @@ print(io::IO, n::Unsigned) = print(io, dec(n))
 # original expression.
 #
 # This is consistent with many other show methods, i.e.:
-#   show(Set(1,2,3))                # ==> "Set{Int64}(2,3,1)"
-#   eval(parse("Set{Int64}(2,3,1)”) # ==> An actual set
+#   show(Set([1,2,3]))                # ==> "Set{Int64}([2,3,1])"
+#   eval(parse("Set{Int64}([2,3,1])”) # ==> An actual set
 # While this isn’t true of ALL show methods, it is of all ASTs.
 
 typealias ExprNode Union(Expr, QuoteNode, SymbolNode, LineNumberNode,
@@ -227,8 +227,8 @@ show_unquoted(io::IO, ex, ::Int,::Int) = show(io, ex)
 ## AST printing constants ##
 
 const indent_width = 4
-const quoted_syms = Set{Symbol}(:(:),:(::),:(:=),:(=),:(==),:(===),:(=>))
-const uni_ops = Set{Symbol}(:(+), :(-), :(!), :(~), :(<:), :(>:))
+const quoted_syms = Set{Symbol}([:(:),:(::),:(:=),:(=),:(==),:(===),:(=>)])
+const uni_ops = Set{Symbol}([:(+), :(-), :(!), :(~), :(<:), :(>:)])
 const bin_ops_by_prec = [
     "= := += -= *= /= //= .//= .*= ./= \\= .\\= ^= .^= %= .%= |= &= \$= => <<= >>= >>>= ~ .+= .-=",
     "?",
@@ -247,10 +247,10 @@ const bin_ops_by_prec = [
     "."
 ]
 const bin_op_precs = Dict{Symbol,Int}(merge([{symbol(op)=>i for op=split(bin_ops_by_prec[i])} for i=1:length(bin_ops_by_prec)]...))
-const bin_ops = Set{Symbol}(keys(bin_op_precs)...)
-const expr_infix_wide = Set(:(=), :(+=), :(-=), :(*=), :(/=), :(\=), :(&=),
-    :(|=), :($=), :(>>>=), :(>>=), :(<<=), :(&&), :(||))
-const expr_infix = Set(:(:), :(<:), :(->), :(=>), symbol("::"))
+const bin_ops = Set{Symbol}(keys(bin_op_precs))
+const expr_infix_wide = Set([:(=), :(+=), :(-=), :(*=), :(/=), :(\=), :(&=),
+    :(|=), :($=), :(>>>=), :(>>=), :(<<=), :(&&), :(||)])
+const expr_infix = Set([:(:), :(<:), :(->), :(=>), symbol("::")])
 const expr_calls  = [:call =>('(',')'), :ref =>('[',']'), :curly =>('{','}')]
 const expr_parens = [:tuple=>('(',')'), :vcat=>('[',']'), :cell1d=>('{','}'),
                       :hcat =>('[',']'), :row =>('[',']')]
@@ -421,6 +421,9 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
             show_unquoted(io, args[1], indent)
             show_enclosed_list(io, op, args[2:end], ",", cl, indent)
         end
+    elseif is(head, :ccall)
+        show_unquoted(io, :ccall, indent)
+        show_enclosed_list(io, '(', args, ",", ')', indent)
 
     # comparison (i.e. "x < y < z")
     elseif is(head, :comparison) && nargs >= 3 && (nargs&1==1)
@@ -488,20 +491,33 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
         show(io, args[1])
     elseif is(head, :null)
         print(io, "nothing")
-    elseif is(head, :kw)
+    elseif is(head, :kw) && length(args)==2
         show_unquoted(io, args[1], indent+indent_width)
         print(io, '=')
         show_unquoted(io, args[2], indent+indent_width)
+    elseif is(head, :string)
+        a = map(args) do x
+            if !isa(x,String)
+                if isa(x,Symbol) && !(x in quoted_syms)
+                    string("\$", x)
+                else
+                    string("\$(", sprint(show_unquoted,x), ")")
+                end
+            else
+                sprint(print_escaped, x, "\"\$")
+            end
+        end
+        print(io, '"', a..., '"')
 
     # print anything else as "Expr(head, args...)"
     else
-        print(io, "Expr(")
-        show_unquoted(io, ex.head, indent)
+        print(io, "\$(Expr(")
+        show(io, ex.head)
         for arg in args
             print(io, ", ")
-            show_unquoted(io, arg, indent)
+            show(io, arg)
         end
-        print(io, ")")
+        print(io, "))")
     end
 
     show_expr_type(io, ex.typ)
