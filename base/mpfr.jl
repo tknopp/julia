@@ -17,7 +17,7 @@ import
         itrunc, eps, signbit, sin, cos, tan, sec, csc, cot, acos, asin, atan,
         cosh, sinh, tanh, sech, csch, coth, acosh, asinh, atanh, atan2,
         serialize, deserialize, inf, nan, hash, cbrt, typemax, typemin,
-        realmin, realmax, get_rounding, set_rounding
+        realmin, realmax, get_rounding, set_rounding, maxintfloat
 
 import Base.Math.lgamma_r
 
@@ -75,11 +75,12 @@ BigFloat(x::Integer) = BigFloat(BigInt(x))
 BigFloat(x::Union(Bool,Int8,Int16,Int32)) = BigFloat(convert(Clong,x))
 BigFloat(x::Union(Uint8,Uint16,Uint32)) = BigFloat(convert(Culong,x))
 
-BigFloat(x::Union(Float16,Float32)) = BigFloat(float64(x))
+BigFloat(x::Union(Float16,Float32,Float16)) = BigFloat(float64(x))
 BigFloat(x::Rational) = BigFloat(num(x)) / BigFloat(den(x))
 
 convert(::Type{Rational}, x::BigFloat) = convert(Rational{BigInt}, x)
 convert(::Type{BigFloat}, x::Rational) = BigFloat(x) # to resolve ambiguity
+convert(::Type{BigFloat}, x::Float16) = BigFloat(x) # to resolve ambiguity
 convert(::Type{BigFloat}, x::Real) = BigFloat(x)
 convert(::Type{FloatingPoint}, x::BigInt) = BigFloat(x)
 
@@ -232,8 +233,10 @@ function *(x::BigFloat, c::Culong)
     return z
 end
 *(c::Culong, x::BigFloat) = x * c
-*(c::Unsigned, x::BigFloat) = x * convert(Culong, c)
-*(x::BigFloat, c::Unsigned) = x * convert(Culong, c)
+if Culong === Uint64
+    *(c::Uint32, x::BigFloat) = x * convert(Culong, c)
+    *(x::BigFloat, c::Uint32) = x * convert(Culong, c)
+end
 
 # Signed multiplication
 function *(x::BigFloat, c::Clong)
@@ -242,7 +245,8 @@ function *(x::BigFloat, c::Clong)
     return z
 end
 *(c::Clong, x::BigFloat) = x * c
-*(x::BigFloat, c::Signed) = x * convert(Clong, c)
+*(x::BigFloat, c::Union(Int8,Uint8,Int16,Uint16,Int32)) = x * convert(Clong, c)
+*(c::Union(Int8,Uint8,Int16,Uint16,Int32), x::BigFloat) = x * convert(Clong, c)
 
 # Float64 multiplication
 function *(x::BigFloat, c::Float64)
@@ -255,7 +259,6 @@ end
 *(x::BigFloat, c::Float32) = x * convert(Float64, c)
 
 # BigInt multiplication
-*(c::Signed, x::BigFloat) = x * convert(Clong, c)
 function *(x::BigFloat, c::BigInt)
     z = BigFloat()
     ccall((:mpfr_mul_z, :libmpfr), Int32, (Ptr{BigFloat}, Ptr{BigFloat}, Ptr{BigInt}, Int32), &z, &x, &c, ROUNDING_MODE[end])
@@ -591,6 +594,9 @@ function set_bigfloat_precision(x::Int)
     end
     DEFAULT_PRECISION[end] = x
 end
+
+maxintfloat(x::BigFloat) = BigFloat(2)^precision(x)
+maxintfloat(::Type{BigFloat}) = BigFloat(2)^get_bigfloat_precision()
 
 function to_mpfr(r::RoundingMode)
     c = r.code

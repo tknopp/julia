@@ -96,6 +96,13 @@ function convert(::Type{Float16}, val::Float32)
     reinterpret(Float16, h)
 end
 
+convert(::Type{Integer}, x::Float16) = convert(Int,float32(x))
+
+round(x::Float16) = float16(round(float32(x)))
+trunc(x::Float16) = float16(trunc(float32(x)))
+floor(x::Float16) = float16(floor(float32(x)))
+ ceil(x::Float16) = float16( ceil(float32(x)))
+
 isnan(x::Float16)    = reinterpret(Uint16,x)&0x7fff  > 0x7c00
 isinf(x::Float16)    = reinterpret(Uint16,x)&0x7fff == 0x7c00
 isfinite(x::Float16) = reinterpret(Uint16,x)&0x7c00 != 0x7c00

@@ -1,3 +1,4 @@
+
 show(x) = show(STDOUT::IO, x)
 
 function print(io::IO, s::Symbol)
@@ -84,6 +85,9 @@ end
 showcompact(io::IO, x) = show(io, x)
 showcompact(x) = showcompact(STDOUT::IO, x)
 
+showcompact_lim(io, x) = _limit_output ? showcompact(io, x) : show(io, x)
+showcompact_lim(io, x::Number) = _limit_output ? showcompact(io, x) : print(io, x)
+
 macro show(exs...)
     blk = Expr(:block)
     for ex in exs
@@ -118,7 +122,7 @@ function show(io::IO, l::LambdaStaticData)
     print(io, ")")
 end
 
-function show_delim_array(io::IO, itr::AbstractArray, op, delim, cl, delim_one)
+function show_delim_array(io::IO, itr::AbstractArray, op, delim, cl, delim_one, compact=false)
     print(io, op)
     newline = true
     first = true
@@ -133,7 +137,7 @@ function show_delim_array(io::IO, itr::AbstractArray, op, delim, cl, delim_one)
                 x = itr[i]
                 multiline = isa(x,AbstractArray) && ndims(x)>1 && length(x)>0
                 newline && multiline && println(io)
-                show(io, x)
+                compact ? showcompact_lim(io, x) : show(io, x)
             end
             i += 1
             if i > l
@@ -699,22 +703,22 @@ dump(io::IO, x::DataType) = dump(io, x, 5, "")
 dump(io::IO, x::TypeVar, n::Int, indent) = println(io, x.name)
 
 
-alignment(x::Any) = (0, length(sprint(showcompact, x)))
-alignment(x::Number) = (length(sprint(showcompact, x)), 0)
-alignment(x::Integer) = (length(sprint(showcompact, x)), 0)
+alignment(x::Any) = (0, length(sprint(showcompact_lim, x)))
+alignment(x::Number) = (length(sprint(showcompact_lim, x)), 0)
+alignment(x::Integer) = (length(sprint(showcompact_lim, x)), 0)
 function alignment(x::Real)
-    m = match(r"^(.*?)((?:[\.eE].*)?)$", sprint(showcompact, x))
-    m == nothing ? (length(sprint(showcompact, x)), 0) :
+    m = match(r"^(.*?)((?:[\.eE].*)?)$", sprint(showcompact_lim, x))
+    m == nothing ? (length(sprint(showcompact_lim, x)), 0) :
                    (length(m.captures[1]), length(m.captures[2]))
 end
 function alignment(x::Complex)
-    m = match(r"^(.*,)(.*)$", sprint(showcompact, x))
-    m == nothing ? (length(sprint(showcompact, x)), 0) :
+    m = match(r"^(.*,)(.*)$", sprint(showcompact_lim, x))
+    m == nothing ? (length(sprint(showcompact_lim, x)), 0) :
                    (length(m.captures[1]), length(m.captures[2]))
 end
 function alignment(x::Rational)
-    m = match(r"^(.*?/)(/.*)$", sprint(showcompact, x))
-    m == nothing ? (length(sprint(showcompact, x)), 0) :
+    m = match(r"^(.*?/)(/.*)$", sprint(showcompact_lim, x))
+    m == nothing ? (length(sprint(showcompact_lim, x)), 0) :
                    (length(m.captures[1]), length(m.captures[2]))
 end
 
@@ -761,7 +765,7 @@ function print_matrix_row(io::IO,
         if isassigned(X,i,j)
             x = X[i,j]
             a = alignment(x)
-            sx = sprint(showcompact, x)
+            sx = sprint(showcompact_lim, x)
         else
             a = undef_ref_alignment
             sx = undef_ref_str
@@ -789,12 +793,16 @@ function print_matrix_vdots(io::IO,
     end
 end
 
-function print_matrix(io::IO,
-    X::AbstractVecOrMat, rows::Integer, cols::Integer,
-    pre::String, sep::String, post::String,
-    hdots::String, vdots::String, ddots::String,
-    hmod::Integer, vmod::Integer
-)
+function print_matrix(io::IO, X::AbstractVecOrMat,
+                      rows::Integer = tty_rows()-4,
+                      cols::Integer = tty_cols(),
+                      pre::String = " ",
+                      sep::String = "  ",
+                      post::String = "",
+                      hdots::String = "  \u2026  ",
+                      vdots::String = "\u22ee",
+                      ddots::String = "  \u22f1  ",
+                      hmod::Integer = 5, vmod::Integer = 5)
     cols -= length(pre) + length(post)
     presp = repeat(" ", length(pre))
     postsp = ""
@@ -864,13 +872,6 @@ function print_matrix(io::IO,
         end
     end
 end
-print_matrix(io::IO, X::AbstractVecOrMat,
-             rows::Integer, cols::Integer) =
-    print_matrix(io, X, rows, cols, " ", "  ", "",
-                 "  \u2026  ", "\u22ee", "  \u22f1  ", 5, 5)
-
-print_matrix(io::IO, X::AbstractVecOrMat) =
-               print_matrix(io, X, tty_rows()-4, tty_cols())
 
 summary(x) = string(typeof(x))
 
@@ -881,7 +882,7 @@ dims2string(d) = length(d) == 0 ? "0-dimensional" :
 summary(a::AbstractArray) =
     string(dims2string(size(a)), " ", typeof(a))
 
-function show_nd(io::IO, a::AbstractArray, limit, rows, cols)
+function show_nd(io::IO, a::AbstractArray, limit, print_matrix, label_slices)
     if isempty(a)
         return
     end
@@ -909,11 +910,13 @@ function show_nd(io::IO, a::AbstractArray, limit, rows, cols)
                 end
             end
         end
-        print(io, "[:, :, ")
-        for i = 1:(nd-1); print(io, "$(idxs[i]), "); end
-        println(io, idxs[end], "] =")
+        if label_slices
+            print(io, "[:, :, ")
+            for i = 1:(nd-1); print(io, "$(idxs[i]), "); end
+            println(io, idxs[end], "] =")
+        end
         slice = sub(a, 1:size(a,1), 1:size(a,2), idxs...)
-        print_matrix(io, slice, rows, cols)
+        print_matrix(io, slice)
         print(io, idxs == tail ? "" : "\n\n")
     end
     cartesianmap(print_slice, tail)
@@ -931,45 +934,74 @@ whos() = whos(r"")
 whos(m::Module) = whos(m, r"")
 whos(pat::Regex) = whos(current_module(), pat)
 
-function show{T}(io::IO, x::AbstractArray{T,0})
-    println(io, summary(x),":")
-    if isassigned(x)
-        sx = sprint(showcompact, x[])
-    else
-        sx = undef_ref_str
-    end
-    print(io, sx)
-end
-
 # global flag for limiting output
 # TODO: this should be replaced with a better mechanism. currently it is only
 # for internal use in showing arrays.
 _limit_output = false
+
+function print_matrix_repr(io, X::AbstractArray)
+    compact, prefix = array_eltype_show_how(eltype(X))
+    prefix *= "["
+    ind = " "^length(prefix)
+    print(io, prefix)
+    for i=1:size(X,1)
+        i > 1 && print(io, ind)
+        for j=1:size(X,2)
+            j > 1 && print(io, " ")
+            if !isassigned(X,i,j)
+                print(io, undef_ref_str)
+            else
+                el = X[i,j]
+                compact ? showcompact_lim(io, el) : show(io, el)
+            end
+        end
+        if i < size(X,1)
+            println(io)
+        else
+            print(io, "]")
+        end
+    end
+end
 
 # NOTE: this is a possible, so-far-unexported function, providing control of
 # array output. Not sure I want to do it this way.
 showarray(X::AbstractArray; kw...) = showarray(STDOUT, X; kw...)
 function showarray(io::IO, X::AbstractArray;
                    header::Bool=true, limit::Bool=_limit_output,
-                   rows = tty_rows()-4, cols = tty_cols())
+                   rows = tty_rows()-4, cols = tty_cols(), repr=false)
     header && print(io, summary(X))
     if !isempty(X)
         header && println(io, ":")
         if ndims(X) == 0
-            return showcompact(io, X[])
+            if isassigned(X)
+                return showcompact_lim(io, X[])
+            else
+                return print(io, undef_ref_str)
+            end
         end
         if !limit
             rows = cols = typemax(Int)
         end
-        if ndims(X)<=2
-            print_matrix(io, X, rows, cols)
+        if repr
+            if ndims(X)<=2
+                print_matrix_repr(io, X)
+            else
+                show_nd(io, X, limit, print_matrix_repr, false)
+            end
         else
-            show_nd(io, X, limit, rows, cols)
+            punct = (" ", "  ", "")
+            if ndims(X)<=2
+                print_matrix(io, X, rows, cols, punct...)
+            else
+                show_nd(io, X, limit,
+                        (io,slice)->print_matrix(io,slice,rows,cols,punct...),
+                        !repr)
+            end
         end
     end
 end
 
-show(io::IO, X::AbstractArray) = showarray(io, X)
+show(io::IO, X::AbstractArray) = showarray(io, X, header=false, limit=false, repr=true)
 
 print(io::IO, X::AbstractArray) = writedlm(io, X)
 
@@ -1006,14 +1038,32 @@ function showlimited(io::IO, x)
     end
 end
 
+# returns compact, prefix
+function array_eltype_show_how(e)
+    leaf = isleaftype(e)
+    plain = e<:Number || e<:String
+    if isa(e,DataType) && e === e.name.primary
+        str = string(e.name)
+    else
+        str = string(e)
+    end
+    leaf&&plain, (e===Float64 || e===Int || (leaf && !plain) ? "" : str)
+end
+
 function show_vector(io::IO, v, opn, cls)
+    e = eltype(v)
+    compact = false
+    if e !== Any
+        compact, prefix = array_eltype_show_how(e)
+        print(io, prefix)
+    end
     if _limit_output && length(v) > 20
-        show_delim_array(io, sub(v,1:10), opn, ",", "", false)
+        show_delim_array(io, sub(v,1:10), opn, ",", "", false, compact)
         print(io, "  \u2026  ")
         n = length(v)
-        show_delim_array(io, sub(v,(n-9):n), "", ",", cls, false)
+        show_delim_array(io, sub(v,(n-9):n), "", ",", cls, false, compact)
     else
-        show_delim_array(io, v, opn, ",", cls, false)
+        show_delim_array(io, v, opn, ",", cls, false, compact)
     end
 end
 
