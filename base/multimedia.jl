@@ -2,7 +2,7 @@ module Multimedia
 
 export Display, display, pushdisplay, popdisplay, displayable, redisplay,
    MIME, @MIME, @MIME_str, writemime, reprmime, stringmime, istext,
-   mimewritable, TextDisplay, reinit_displays
+   mimewritable, TextDisplay
 
 ###########################################################################
 # We define a singleton type MIME{mime symbol} for each MIME type, so
@@ -87,7 +87,7 @@ istext(m::String) = istext(MIME(m))
 reprmime(m::String, x) = reprmime(MIME(m), x)
 stringmime(m::String, x) = stringmime(MIME(m), x)
 
-for mime in ["text/vnd.graphviz", "text/latex", "text/calendar", "text/n3", "text/richtext", "text/x-setext", "text/sgml", "text/tab-separated-values", "text/x-vcalendar", "text/x-vcard", "text/cmd", "text/css", "text/csv", "text/html", "text/javascript", "text/plain", "text/vcard", "text/xml", "application/atom+xml", "application/ecmascript", "application/json", "application/rdf+xml", "application/rss+xml", "application/xml-dtd", "application/postscript", "image/svg+xml", "application/x-latex", "application/xhtml+xml", "application/javascript", "application/xml", "model/x3d+xml", "model/x3d+vrml", "model/vrml"]
+for mime in ["text/vnd.graphviz", "text/latex", "text/calendar", "text/n3", "text/richtext", "text/x-setext", "text/sgml", "text/tab-separated-values", "text/x-vcalendar", "text/x-vcard", "text/cmd", "text/css", "text/csv", "text/html", "text/javascript", "text/markdown", "text/plain", "text/vcard", "text/xml", "application/atom+xml", "application/ecmascript", "application/json", "application/rdf+xml", "application/rss+xml", "application/xml-dtd", "application/postscript", "image/svg+xml", "application/x-latex", "application/xhtml+xml", "application/javascript", "application/xml", "model/x3d+xml", "model/x3d+vrml", "model/vrml"]
     @eval @textmime $mime
 end
 
@@ -114,9 +114,8 @@ displayable(mime::String) = displayable(MIME(mime))
 immutable TextDisplay <: Display
     io::IO
 end
-display(d::TextDisplay, ::MIME"text/plain", x) =
-    writemime(d.io, MIME("text/plain"), x)
-display(d::TextDisplay, x) = display(d, MIME("text/plain"), x)
+display(d::TextDisplay, M::MIME"text/plain", x) = writemime(d.io, M, x)
+display(d::TextDisplay, x) = display(d, MIME"text/plain"(), x)
 
 import Base: close, flush
 flush(d::TextDisplay) = flush(d.io)
@@ -145,28 +144,30 @@ function reinit_displays()
     pushdisplay(TextDisplay(STDOUT))
 end
 
+macro try_display(expr)
+  quote
+    try $(esc(expr))
+    catch e
+      isa(e, MethodError) && e.f in (display, redisplay, writemime) ||
+        rethrow()
+    end
+  end
+end
+
+xdisplayable(D::Display, args...) = applicable(display, D, args...)
+
 function display(x)
     for i = length(displays):-1:1
-        try
-            return display(displays[i], x)
-        catch e
-            if !isa(e, MethodError)
-                rethrow()
-            end
-        end
+        xdisplayable(displays[i], x) &&
+            @try_display return display(displays[i], x)
     end
     throw(MethodError(display, (x,)))
 end
 
 function display(m::MIME, x)
     for i = length(displays):-1:1
-        try
-            return display(displays[i], m, x)
-        catch e
-            if !isa(e, MethodError)
-                rethrow()
-            end
-        end
+        xdisplayable(displays[i], m, x) &&
+            @try_display return display(displays[i], m, x)
     end
     throw(MethodError(display, (m, x)))
 end
@@ -176,9 +177,7 @@ displayable{D<:Display,mime}(d::D, ::MIME{mime}) =
 
 function displayable(m::MIME)
     for d in displays
-        if displayable(d, m)
-            return true
-        end
+        displayable(d, m) && return true
     end
     return false
 end
@@ -193,26 +192,16 @@ end
 
 function redisplay(x)
     for i = length(displays):-1:1
-        try
-            return redisplay(displays[i], x)
-        catch e
-            if !isa(e, MethodError)
-                rethrow()
-            end
-        end
+        applicable(redisplay, displays[i], x) &&
+            @try_display return redisplay(displays[i], x)
     end
     throw(MethodError(redisplay, (x,)))
 end
 
 function redisplay(m::Union(MIME,String), x)
     for i = length(displays):-1:1
-        try
-            return redisplay(displays[i], m, x)
-        catch e
-            if !isa(e, MethodError)
-                rethrow()
-            end
-        end
+        applicable(redisplay, displays[i], m, x) &&
+            @try_display return redisplay(displays[i], m, x)
     end
     throw(MethodError(redisplay, (m, x)))
 end

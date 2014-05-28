@@ -38,7 +38,7 @@ begin
     kill(p)
 end
 
-@test_throws run(`foo_is_not_a_valid_command`)
+@test_throws Base.UVError run(`foo_is_not_a_valid_command`)
 
 if false
     prefixer(prefix, sleep) = `perl -nle '$|=1; print "'$prefix' ", $_; sleep '$sleep';'`
@@ -65,6 +65,7 @@ end
 file = tempname()
 run(`echo hello world` |> file)
 @test readall(file |> `cat`) == "hello world\n"
+rm(file)
 
 # Stream Redirection
 @unix_only begin
@@ -101,6 +102,7 @@ file = tempname()
 stdin, proc = writesto(`cat -` |> file)
 write(stdin, str)
 close(stdin)
+rm(file)
 
 # issue #3373
 # fixing up Conditions after interruptions
@@ -120,5 +122,30 @@ yield()
 
 
 # issue #4535
-exename=joinpath(JULIA_HOME,(ccall(:jl_is_debugbuild,Cint,())==0?"julia-basic":"julia-debug-basic"))
+exename=joinpath(JULIA_HOME,(ccall(:jl_is_debugbuild,Cint,())==0?"julia":"julia-debug"))
 @test readall(`$exename -f -e 'println(STDERR,"Hello World")'` .> `cat`) == "Hello World\n"
+
+# issue #6310
+@test readall(`echo "2+2"` |> `$exename -f`) == "4\n"
+
+# issue #5904
+@test run(ignorestatus(`false`) |> `true`) === nothing
+
+
+# issue #6010
+# TODO: should create separate set of task tests
+ducer = @async for i=1:100; produce(i); end
+yield()
+@test consume(ducer) == 1
+@test consume(ducer) == 2
+
+# redirect_*
+OLD_STDOUT = STDOUT
+fname = tempname()
+f = open(fname,"w")
+redirect_stdout(f)
+println("Hello World")
+redirect_stdout(OLD_STDOUT)
+close(f)
+@test "Hello World\n" == readall(fname)
+@test is(OLD_STDOUT,STDOUT)

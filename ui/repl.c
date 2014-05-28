@@ -3,7 +3,26 @@
   system startup, main(), and console interaction
 */
 
-#include "repl.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <assert.h>
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#ifndef _MSC_VER
+#include <unistd.h>
+#include <libgen.h>
+#endif
+#include <limits.h>
+#include <errno.h>
+#include <math.h>
+#include <getopt.h>
+#include <ctype.h>
+
 #include "uv.h"
 #define WHOLE_ARCHIVE
 #include "../src/julia.h"
@@ -12,21 +31,33 @@
 #error "JL_SYSTEM_IMAGE_PATH not defined!"
 #endif
 
+#ifdef _MSC_VER
+#define PATH_MAX MAX_PATH
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef _MSC_VER
+DLLEXPORT char * dirname(char *);
+#endif
+
+extern DLLEXPORT char *julia_home;
+
 char system_image[256] = JL_SYSTEM_IMAGE_PATH;
 
 static int lisp_prompt = 0;
 static int codecov=0;
 static char *program = NULL;
 char *image_file = NULL;
-int tab_width = 2;
 
 static const char *usage = "julia [options] [program] [args...]\n";
 static const char *opts =
     " -v --version             Display version information\n"
     " -h --help                Print this message\n"
     " -q --quiet               Quiet startup without banner\n"
-    " -H --home <dir>          Set location of julia executable\n"
-    " -T --tab <size>          Set REPL tab width to <size>\n\n"
+    " -H --home <dir>          Set location of julia executable\n\n"
 
     " -e --eval <expr>         Evaluate <expr>\n"
     " -E --print <expr>        Evaluate and show <expr>\n"
@@ -37,12 +68,15 @@ static const char *opts =
     " -p n                     Run n local processes\n"
     " --machinefile file       Run processes on hosts listed in file\n\n"
 
-    " --no-history             Don't load or save history\n"
+    " -i                       Force isinteractive() to be true\n"
+    " --no-history-file        Don't load or save history\n"
     " -f --no-startup          Don't load ~/.juliarc.jl\n"
     " -F                       Load ~/.juliarc.jl, then handle remaining inputs\n"
     " --color=yes|no           Enable or disable color text\n\n"
 
-    " --code-coverage          Count executions of source lines\n";
+    " --code-coverage          Count executions of source lines\n"
+    " --check-bounds=yes|no    Emit bounds checks always or never (ignoring declarations)\n"
+    " --int-literals=32|64     Select integer literal size independent of platform\n";
 
 void parse_opts(int *argcp, char ***argvp)
 {
@@ -55,6 +89,8 @@ void parse_opts(int *argcp, char ***argvp)
         { "help",          no_argument,       0, 'h' },
         { "sysimage",      required_argument, 0, 'J' },
         { "code-coverage", no_argument,       &codecov, 1 },
+        { "check-bounds",  required_argument, 0, 300 },
+        { "int-literals",  required_argument, 0, 301 },
         { 0, 0, 0, 0 }
     };
     int c;
@@ -74,10 +110,6 @@ void parse_opts(int *argcp, char ***argvp)
         case 'H':
             julia_home = strdup(optarg);
             break;
-        case 'T':
-            // TODO: more robust error checking.
-            tab_width = atoi(optarg);
-            break;
         case 'b':
             jl_compileropts.build_path = strdup(optarg);
             if (!imagepathspecified)
@@ -90,6 +122,22 @@ void parse_opts(int *argcp, char ***argvp)
         case 'h':
             printf("%s%s", usage, opts);
             exit(0);
+        case 300:
+            if (!strcmp(optarg,"yes"))
+                jl_compileropts.check_bounds = JL_COMPILEROPT_CHECK_BOUNDS_ON;
+            else if (!strcmp(optarg,"no"))
+                jl_compileropts.check_bounds = JL_COMPILEROPT_CHECK_BOUNDS_OFF;
+            break;
+        case 301:
+            if (!strcmp(optarg,"32"))
+                jl_compileropts.int_literals = 32;
+            else if (!strcmp(optarg,"64"))
+                jl_compileropts.int_literals = 64;
+            else {
+                ios_printf(ios_stderr, "julia: invalid integer literal size (%s)\n", optarg);
+                exit(1);
+            }
+            break;
         default:
             ios_printf(ios_stderr, "julia: unhandled option -- %c\n",  c);
             ios_printf(ios_stderr, "This is a bug, please report it.\n");
@@ -140,17 +188,6 @@ void parse_opts(int *argcp, char ***argvp)
     }
 }
 
-int ends_with_semicolon(const char *input)
-{
-    char *p = strrchr(input, ';');
-    if (p++) {
-        while (isspace(*p)) p++;
-        if (*p == '\0' || *p == '#')
-            return 1;
-    }
-    return 0;
-}
-
 static int exec_program(void)
 {
     int err = 0;
@@ -179,24 +216,14 @@ static int exec_program(void)
     return 0;
 }
 
-// handle a command line input event
-void handle_input(jl_value_t *ast, int end, int show_value)
-{
-    if (end) {
-        show_value = -1;
-        ast = jl_nothing;
-    }
-    jl_value_t *f = jl_get_global(jl_base_module,jl_symbol("repl_callback"));
-    assert(f);
-    jl_value_t **fargs;
-    JL_GC_PUSHARGS(fargs, 2);
-    fargs[0] = ast;
-    fargs[1] = jl_box_long(show_value);
-    jl_apply((jl_function_t*)f, fargs, 2);
-    JL_GC_POP();
-}
-
 void jl_lisp_prompt();
+
+#ifndef _WIN32
+int jl_repl_raise_sigtstp(void)
+{
+    return raise(SIGTSTP);
+}
+#endif
 
 #ifdef JL_GF_PROFILE
 static void print_profile(void)
@@ -217,20 +244,14 @@ static void print_profile(void)
 }
 #endif
 
-uv_buf_t *jl_alloc_read_buffer(uv_handle_t* handle, size_t suggested_size)
-{
-    if(suggested_size>512) suggested_size = 512; //Readline has a max buffer of 512
-    char *buf = malloc(suggested_size);
-    uv_buf_t *ret = malloc(sizeof(uv_buf_t));
-    *ret = uv_buf_init(buf,suggested_size);
-    return ret;
-}
-
-
 int true_main(int argc, char *argv[])
 {
     if (jl_base_module != NULL) {
         jl_array_t *args = (jl_array_t*)jl_get_global(jl_base_module, jl_symbol("ARGS"));
+        if (args == NULL) {
+            args = jl_alloc_cell_1d(0);
+            jl_set_const(jl_base_module, jl_symbol("ARGS"), (jl_value_t*)args);
+        }
         assert(jl_array_len(args) == 0);
         jl_array_grow_end(args, argc);
         int i;
@@ -240,7 +261,7 @@ int true_main(int argc, char *argv[])
             jl_arrayset(args, s, i);
         }
     }
-    
+
     // run program if specified, otherwise enter REPL
     if (program) {
         int ret = exec_program();
@@ -251,16 +272,11 @@ int true_main(int argc, char *argv[])
     jl_function_t *start_client =
         (jl_function_t*)jl_get_global(jl_base_module, jl_symbol("_start"));
 
-    //uv_read_start(jl_stdin_tty,jl_alloc_read_buffer,&read_buffer);
-
     if (start_client) {
         jl_apply(start_client, NULL, 0);
-        //rl_cleanup_after_signal();
         return 0;
     }
 
-    // client event loop not available; use fallback blocking version
-    //install_read_event_handler(&echoBack);
     int iserr = 0;
 
  again:
@@ -295,3 +311,7 @@ int main(int argc, char *argv[])
     julia_init(lisp_prompt ? NULL : image_file);
     return julia_trampoline(argc, argv, true_main);
 }
+
+#ifdef __cplusplus
+}
+#endif

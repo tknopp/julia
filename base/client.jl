@@ -70,22 +70,6 @@ function repl_hook(input::String)
          macroexpand(Expr(:macrocall,symbol("@cmd"),input)))
 end
 
-function repl_methods(input::String)
-    tokens = split(input, ".")
-    fn = Main
-    for token in tokens
-        sym = symbol(token)
-        isdefined(fn, sym) || return
-        fn = fn.(sym)
-    end
-    isgeneric(fn) || return
-
-    buf = IOBuffer()
-    show_method_table(buf, methods(fn), -1, false)
-    println(buf)
-    takebuf_string(buf)
-end
-
 display_error(er) = display_error(er, {})
 function display_error(er, bt)
     with_output_color(:red, STDERR) do io
@@ -143,49 +127,7 @@ function repl_callback(ast::ANY, show_value)
     put!(repl_channel, (ast, show_value))
 end
 
-_eval_done = Condition()
-
-function run_repl()
-    global const repl_channel = RemoteRef()
-
-    ccall(:jl_init_repl, Void, (Cint,), _use_history)
-
-    # install Ctrl-C interrupt handler (InterruptException)
-    ccall(:jl_install_sigint_handler, Void, ())
-    buf = Uint8[0]
-    @async begin
-        while !eof(STDIN)
-            read(STDIN, buf)
-            ccall(:jl_read_buffer,Void,(Ptr{Void},Cssize_t),buf,1)
-            if _repl_enough_stdin
-                wait(_eval_done)
-            end
-        end
-        put!(repl_channel,(nothing,-1))
-    end
-
-    while true
-        if have_color
-            prompt_string = "\01\033[1m\033[32m\02julia> \01\033[0m"*input_color()*"\02"
-        else
-            prompt_string = "julia> "
-        end
-        ccall(:repl_callback_enable, Void, (Ptr{Uint8},), prompt_string)
-        global _repl_enough_stdin = false
-        start_reading(STDIN)
-        (ast, show_value) = take!(repl_channel)
-        if show_value == -1
-            # exit flag
-            break
-        end
-        eval_user_input(ast, show_value!=0)
-        notify(_eval_done)
-    end
-
-    if have_color
-        print(color_normal)
-    end
-end
+_repl_start = Condition()
 
 function parse_input_line(s::String)
     # s = bytestring(s)
@@ -211,16 +153,50 @@ function parse_input_line(io::IO)
     end
 end
 
+# detect the reason which caused an :incomplete expression
+# from the error message
+# NOTE: the error messages are defined in src/julia-parser.scm
+incomplete_tag(ex) = :none
+function incomplete_tag(ex::Expr)
+    Meta.isexpr(ex, :incomplete) || return :none
+    msg = ex.args[1]
+    contains(msg, "string") && return :string
+    contains(msg, "comment") && return :comment
+    contains(msg, "requires end") && return :block
+    contains(msg, "\"`\"") && return :cmd
+    contains(msg, "character") && return :char
+    return :other
+end
+
 # try to include() a file, ignoring if not found
 try_include(path::String) = isfile(path) && include(path)
 
+function init_bind_addr(args::Vector{UTF8String})
+    # Treat --bind-to in a position independent manner in ARGS since
+    # --worker, -n and --machinefile options are affected by it
+    btoidx = findfirst(args, "--bind-to")
+    if btoidx > 0
+        bind_addr = parseip(args[btoidx+1])
+    else
+        try
+            bind_addr = getipaddr()
+        catch
+            # All networking is unavailable, initialize bind_addr to the loopback address
+            # Will cause an exception to be raised only when used. 
+            bind_addr = ip"127.0.0.1"
+        end
+    end
+    global LPROC
+    LPROC.bind_addr = bind_addr
+end
+
+
 function process_options(args::Vector{UTF8String})
-    global bind_addr
     quiet = false
     repl = true
     startup = true
     color_set = false
-    history = true
+    no_history_file = false
     i = 1
     while i <= length(args)
         if args[i]=="-q" || args[i]=="--quiet"
@@ -229,8 +205,7 @@ function process_options(args::Vector{UTF8String})
             start_worker()
             # doesn't return
         elseif args[i]=="--bind-to"
-            i += 1
-            bind_addr = args[i]
+            i+=1 # has already been processed
         elseif args[i]=="-e" || args[i]=="--eval"
             repl = false
             i+=1
@@ -267,13 +242,19 @@ function process_options(args::Vector{UTF8String})
             println("julia version ", VERSION)
             exit(0)
         elseif args[i]=="--no-history"
-            history = false
+            # deprecated in v0.3
+            warn("'--no-history' is deprecated; use '--no-history-file'")
+            no_history_file = true
+        elseif args[i] == "--no-history-file"
+            no_history_file = true
         elseif args[i] == "-f" || args[i] == "--no-startup"
             startup = false
         elseif args[i] == "-F"
             # load juliarc now before processing any more options
             load_juliarc()
             startup = false
+        elseif args[i] == "-i"
+            global is_interactive = true
         elseif beginswith(args[i], "--color")
             if args[i] == "--color"
                 color_set = true
@@ -300,6 +281,7 @@ function process_options(args::Vector{UTF8String})
             repl = false
             # remove julia's arguments
             splice!(ARGS, 1:length(ARGS), args[i+1:end])
+            ccall(:jl_exit_on_sigint, Void, (Cint,), 1)
             include(args[i])
             break
         else
@@ -307,7 +289,7 @@ function process_options(args::Vector{UTF8String})
         end
         i += 1
     end
-    return (quiet,repl,startup,color_set,history)
+    return (quiet,repl,startup,color_set,no_history_file)
 end
 
 const roottask = current_task()
@@ -325,8 +307,6 @@ function init_load_path()
     push!(LOAD_PATH,abspath(JULIA_HOME,"..","share","julia","site",vers))
 end
 
-global const Workqueue = Any[]
-
 function init_head_sched()
     # start in "head node" mode
     global PGRP
@@ -334,11 +314,6 @@ function init_head_sched()
     LPROC.id = 1
     assert(length(PGRP.workers) == 0)
     register_worker(LPROC)
-end
-
-function init_profiler()
-    # Use a max size of 1M profile samples, and fire timer every 1ms
-    Profile.init(1_000_000, 0.001)
 end
 
 function load_juliarc()
@@ -352,44 +327,50 @@ function load_juliarc()
     try_include(abspath(homedir(),".juliarc.jl"))
 end
 
-
-function _start()
-    # set up standard streams
-    reinit_stdio()
-    fdwatcher_reinit()
-    # Initialize RNG
-    Random.librandom_init()
-    Sys.init()
-    global const CPU_CORES = Sys.CPU_CORES
+function early_init()
+    Sys.init_sysinfo()
     if CPU_CORES > 8 && !("OPENBLAS_NUM_THREADS" in keys(ENV)) && !("OMP_NUM_THREADS" in keys(ENV))
         # Prevent openblas from stating to many threads, unless/until specifically requested
         ENV["OPENBLAS_NUM_THREADS"] = 8
     end
-    # Check that BLAS is correctly built
-    check_blas()
-    LinAlg.init()
-    GMP.gmp_init()
-    init_profiler()
-    start_gc_msgs_task()
+end
 
-    #atexit(()->flush(STDOUT))
+function init_parallel()
+    start_gc_msgs_task()
+    atexit(terminate_all_workers)
+end
+
+import .Terminals
+import .REPL
+
+function _start()
+    early_init()
+
     try
+        init_parallel()
+        init_bind_addr(ARGS)
         any(a->(a=="--worker"), ARGS) || init_head_sched()
         init_load_path()
-        (quiet,repl,startup,color_set,history) = process_options(copy(ARGS))
-        global _use_history = history
+        (quiet,repl,startup,color_set,no_history_file) = process_options(copy(ARGS))
 
+        local term
+        global active_repl
         if repl
             if !isa(STDIN,TTY)
-                global is_interactive = !isa(STDIN,Union(File,IOStream))
+                global is_interactive |= !isa(STDIN,Union(File,IOStream))
                 color_set || (global have_color = false)
             else
+                term = Terminals.TTYTerminal(get(ENV,"TERM",@windows? "" : "dumb"),STDIN,STDOUT,STDERR)
                 global is_interactive = true
-                if !color_set
-                    @windows_only global have_color = true
-                    @unix_only global have_color =
-                        (beginswith(get(ENV,"TERM",""),"xterm") || success(`tput setaf 0`))
+                color_set || (global have_color = Terminals.hascolor(term))
+                if term.term_type == "dumb"
+                    active_repl = REPL.BasicREPL(term)
+                else
+                    active_repl = REPL.LineEditREPL(term)
+                    active_repl.no_history_file = no_history_file
                 end
+
+                quiet || REPL.banner(term,term)
             end
         end
 
@@ -412,8 +393,7 @@ function _start()
                 end
                 quit()
             end
-            quiet || banner()
-            run_repl()
+            REPL.run_repl(active_repl)
         end
     catch err
         display_error(err,catch_backtrace())

@@ -3,12 +3,11 @@ module Order
 ## notions of element ordering ##
 
 export # not exported by Base
-    Ordering, Forward, Lexicographic,
+    Ordering, Forward, Reverse, Lexicographic,
     By, Lt, Perm,
     ReverseOrdering, ForwardOrdering, LexicographicOrdering,
     DirectOrdering,
     lt, uint_mapping, ord, ordtype
-    # Reverse, # TODO: clashes with Reverse iterator
 
 abstract Ordering
 
@@ -46,8 +45,16 @@ lt(o::ForwardOrdering,       a, b) = isless(a,b)
 lt(o::ReverseOrdering,       a, b) = lt(o.fwd,b,a)
 lt(o::By,                    a, b) = isless(o.by(a),o.by(b))
 lt(o::Lt,                    a, b) = o.lt(a,b)
-lt(p::Perm,                  a, b) = lt(p.order, p.data[a], p.data[b])
 lt(o::LexicographicOrdering, a, b) = lexcmp(a,b) < 0
+
+function lt(p::Perm, a::Int, b::Int)
+    lt(p.order, p.data[a], p.data[b]) ? true :
+    lt(p.order, p.data[b], p.data[a]) ? false : a < b
+end
+function lt(p::Perm{LexicographicOrdering}, a::Int, b::Int)
+    c = lexcmp(p.data[a], p.data[b])
+    c != 0 ? c < 0 : a < b
+end
 
 # Map a bits-type to an unsigned int, maintaining sort order
 uint_mapping(::ForwardOrdering, x::Unsigned) = x

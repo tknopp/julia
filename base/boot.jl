@@ -46,8 +46,7 @@
 #end
 
 #abstract AbstractArray{T,N}
-#abstract StoredArray{T,N} <: AbstractArray{T,N}
-#abstract DenseArray{T,N} <: StoredArray{T,N}
+#abstract DenseArray{T,N} <: AbstractArray{T,N}
 
 #type Array{T,N} <: DenseArray{T,N}
 #end
@@ -118,7 +117,7 @@ export
     # key types
     Any, DataType, Vararg, ANY, NTuple, None, Top,
     Tuple, Type, TypeConstructor, TypeName, TypeVar, Union, UnionType, Void,
-    AbstractArray, StoredArray, DenseArray,
+    AbstractArray, DenseArray,
     # special objects
     Box, Function, IntrinsicFunction, LambdaStaticData, Method, MethodTable,
     Module, Nothing, Symbol, Task, Array,
@@ -134,13 +133,14 @@ export
     StackOverflowError, UndefRefError, UndefVarError,
     # AST representation
     Expr, GotoNode, LabelNode, LineNumberNode, QuoteNode, SymbolNode, TopNode,
-    GetfieldNode,
+    GetfieldNode, NewvarNode,
     # object model functions
-    apply, arraylen, arrayref, arrayset, arraysize, fieldtype, getfield,
-    setfield!, yieldto, throw, tuple, tuplelen, tupleref, is, ===, isdefined,
-    convert_default, convert_tuple, kwcall,
+    apply, fieldtype, getfield, setfield!, yieldto, throw, tuple, is, ===, isdefined,
+    # arraylen, arrayref, arrayset, arraysize, tuplelen, tupleref, convert_default,
+    # kwcall,
     # type reflection
-    issubtype, typeassert, typeof, apply_type, isa,
+    issubtype, typeof, isa,
+    # typeassert, apply_type,
     # method reflection
     applicable, invoke, method_exists,
     # constants
@@ -152,6 +152,7 @@ export
     #checked_smul, checked_ssub, checked_uadd, checked_umul, checked_usub,
     #nan_dom_err, copysign_float, ctlz_int, ctpop_int, cttz_int,
     #div_float, eq_float, eq_int, eqfsi64, eqfui64, flipsign_int, select_value,
+    #sqrt_llvm, powi_llvm,
     #fpext64, fpiseq, fpislt, fpsiround, fpuiround, fptosi, fptoui,
     #fptrunc32, le_float, lefsi64, lefui64, lesif64,
     #leuif64, lshr_int, lt_float, ltfsi64, ltfui64, ltsif64, ltuif64, mul_float,

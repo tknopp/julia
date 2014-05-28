@@ -166,7 +166,7 @@ function clone(url_or_pkg::String)
         # TODO: Cache.prefetch(pkg,url)
     else
         url = url_or_pkg
-        m = match(r"/(\w+?)(?:\.jl)?(?:\.git)?$", url)
+        m = match(r"(?:^|[/\\])(\w+?)(?:\.jl)?(?:\.git)?$", url)
         m != nothing || error("can't determine package name from URL: $url")
         pkg = m.captures[1]
     end
@@ -292,7 +292,7 @@ function pull_request(dir::String, commit::String="", url::String="")
     branch = "pull-request/$(commit[1:8])"
     info("Pushing changes as branch $branch")
     Git.run(`push -q $fork $commit:refs/heads/$branch`, dir=dir)
-    pr_url = "$(response["html_url"])/compare/$branch?expand=1"
+    pr_url = "$(response["html_url"])/compare/$branch"
     @osx? run(`open $pr_url`) : info("To create a pull-request open:\n\n  $pr_url\n")
 end
 
@@ -305,9 +305,11 @@ end
 function publish(branch::String)
     Git.branch(dir="METADATA") == branch ||
         error("METADATA must be on $branch to publish changes")
-    Git.success(`push -q -n origin $branch`, dir="METADATA") ||
-        error("METADATA is behind origin/$branch – run `Pkg.update()` before publishing")
     Git.run(`fetch -q`, dir="METADATA")
+    ahead_remote, ahead_local = map(int,split(Git.readchomp(`rev-list --count --left-right origin/$branch...$branch`, dir="METADATA"),'\t'))
+    ahead_remote > 0 && error("METADATA is behind origin/$branch – run `Pkg.update()` before publishing")
+    ahead_local == 0 && error("There are no METADATA changes to publish")
+
     info("Validating METADATA")
     check_metadata()
     tags = Dict{ASCIIString,Vector{ASCIIString}}()
@@ -662,5 +664,48 @@ function updatehook(pkgs::Vector)
      - To retry, run Pkg.update() again
     """)
 end
+
+function test!(pkg::String, errs::Vector{String}, notests::Vector{String})
+    const reqs_path = abspath(pkg,"test","REQUIRE")
+    if isfile(reqs_path)
+        const tests_require = Reqs.parse(reqs_path)
+        if (!isempty(tests_require))
+            info("Computing test dependencies for $pkg...")
+            resolve(tests_require)
+        end
+    end
+    const test_path = abspath(pkg,"test","runtests.jl")
+    if isfile(test_path)
+        info("Testing $pkg")
+        cd(dirname(test_path)) do
+            try
+                run(`$JULIA_HOME/julia $test_path`)
+                info("$pkg tests passed")
+            catch err
+                warnbanner(err, label="[ ERROR: $pkg ]")
+                push!(errs,pkg)
+            end
+        end
+    else
+        push!(notests,pkg)
+    end
+    resolve()
+end
+
+function test(pkgs::Vector{String})
+    errs = String[]
+    notests = String[]
+    for pkg in pkgs
+        test!(pkg,errs,notests)
+    end
+    if !isempty(errs) || !isempty(notests)
+        messages = String[]
+        isempty(errs) || push!(messages, "$(join(errs,", "," and ")) had test errors")
+        isempty(notests) || push!(messages, "$(join(notests,", "," and ")) did not provide a test/runtests.jl file")
+        error(join(messages, "and"))
+    end
+end
+
+test() = test(sort!(String[keys(installed())...]))
 
 end # module

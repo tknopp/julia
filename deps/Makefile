@@ -8,7 +8,9 @@ ifneq ($(XC_HOST),)
 CONFIGURE_COMMON += --host=$(XC_HOST)
 endif
 ifeq ($(OS),WINNT)
+ifneq ($(USEMSVC), 1)
 CONFIGURE_COMMON += LDFLAGS=-Wl,--stack,8388608
+endif
 endif
 CONFIGURE_COMMON += F77="$(FC)" CC="$(CC)" CXX="$(CXX)"
 
@@ -16,7 +18,7 @@ CONFIGURE_COMMON += F77="$(FC)" CC="$(CC)" CXX="$(CXX)"
 # they will override the values passed above to ./configure
 MAKE_COMMON = DESTDIR="" prefix=$(build_prefix) bindir=$(build_bindir) libdir=$(build_libdir) libexecdir=$(build_libexecdir) datarootdir=$(build_datarootdir) includedir=$(build_includedir) sysconfdir=$(build_sysconfdir)
 
-#autoconf configure-driven scripts: llvm readline pcre arpack fftw unwind gmp mpfr patchelf uv
+#autoconf configure-driven scripts: llvm pcre arpack fftw unwind gmp mpfr patchelf uv
 #custom Makefile rules: openlibm Rmath double-conversion random suitesparse-wrapper suitesparse lapack openblas utf8proc
 
 # prevent installing libs into usr/lib64 on opensuse
@@ -63,14 +65,6 @@ endif
 
 ifeq ($(USE_SYSTEM_LLVM), 0)
 STAGE1_DEPS += llvm
-endif
-
-ifeq ($(OS),WINNT)
-READLINE_VER = 5.0
-endif
-
-ifeq ($(USE_SYSTEM_READLINE), 0)
-STAGE1_DEPS += readline
 endif
 
 ifeq ($(USE_SYSTEM_PCRE), 0)
@@ -144,9 +138,9 @@ compile: $(addprefix compile-, $(LIBS))
 check: $(addprefix check-, $(LIBS))
 install: $(addprefix install-, $(LIBS))
 cleanall: $(addprefix clean-, $(LIBS))
-distclean: $(addprefix distclean-, $(LIBS))
+distcleanall: $(addprefix distclean-, $(LIBS))
 	rm -rf $(build_prefix)
-getall: get-llvm get-readline get-uv get-pcre get-double-conversion get-openlibm get-openspecfun get-random get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-zlib get-patchelf get-utf8proc
+getall: get-llvm get-uv get-pcre get-double-conversion get-openlibm get-openspecfun get-random get-Rmath get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-zlib get-patchelf get-utf8proc
 
 ## PATHS ##
 # sort is used to remove potential duplicates
@@ -207,7 +201,7 @@ endif
 endif
 
 LLVM_TARGET_FLAGS= --enable-targets=host
-LLVM_FLAGS = --disable-profiling --enable-shared --enable-static $(LLVM_TARGET_FLAGS) --disable-bindings --disable-docs
+LLVM_FLAGS += --disable-profiling --enable-shared --enable-static $(LLVM_TARGET_FLAGS) --disable-bindings --disable-docs
 LLVM_MFLAGS =
 ifeq ($(LLVM_ASSERTIONS), 1)
 LLVM_FLAGS += --enable-assertions 
@@ -218,7 +212,7 @@ else
 LLVM_FLAGS += --disable-assertions
 endif
 ifeq ($(LLVM_DEBUG), 1)
-LLVM_FLAGS += --disable-optimized
+LLVM_FLAGS += --disable-optimized --enable-debug-symbols --enable-keep-symbols
 else
 LLVM_FLAGS += --enable-optimized
 endif
@@ -295,6 +289,19 @@ else
 endif
 
 llvm-$(LLVM_VER)/configure: $(LLVM_TAR) $(LLVM_CLANG_TAR) $(LLVM_COMPILER_RT_TAR) $(LLVM_LIBCXX_TAR)
+ifneq ($(LLVM_CLANG_TAR),)
+	$(JLCHECKSUM) $(LLVM_CLANG_TAR)
+endif
+ifneq ($(LLVM_COMPILER_RT_TAR),)
+	$(JLCHECKSUM) $(LLVM_COMPILER_RT_TAR)
+endif
+
+ifneq ($(LLVM_LIBCXX_TAR),)
+	$(JLCHECKSUM) $(LLVM_LIBCXX_TAR)
+endif
+ifneq ($(LLVM_VER),svn)
+	$(JLCHECKSUM) $(LLVM_TAR)
+endif
 ifneq ($(LLVM_VER),svn)
 	mkdir -p llvm-$(LLVM_VER) && \
 	$(TAR) -C llvm-$(LLVM_VER) --strip-components 1 -xf $(LLVM_TAR)
@@ -407,90 +414,15 @@ install-llvm: $(LLVM_OBJ_TARGET)
 #todo: LLVM make check target is broken on julia.mit.edu (and really slow elsewhere)
 
 
-## GNU readline ##
-
-
-ifeq ($(OS),WINNT)
-READLINE_OBJ_TARGET = $(build_libdir)/libreadline.a
-READLINE_OBJ_SOURCE = readline-$(READLINE_VER)/libreadline.a
-READLINE_URL = https://github.com/JuliaLang/readline/tarball/master
-READLINE_OPTS = --disable-shared --enable-static --with-curses
-READLINE_CFLAGS = LOCAL_DEFS="-include $(abspath .)/readline-win.h"
-readline-$(READLINE_VER).tar.gz:
-	$(JLDOWNLOAD) $@ $(READLINE_URL)
-	touch -c $@
-readline-$(READLINE_VER)/configure: readline-$(READLINE_VER).tar.gz
-	mkdir readline-$(READLINE_VER)
-	$(TAR) -C readline-$(READLINE_VER) --strip-components 1 -xf $<
-	touch -c $@
-$(READLINE_OBJ_TARGET): $(READLINE_OBJ_SOURCE) readline-$(READLINE_VER)/checked
-	$(MAKE) -C readline-$(READLINE_VER) $(READLINE_CFLAGS) install $(MAKE_COMMON)
-	touch -c $@
-else
-READLINE_OBJ_TARGET = $(build_libdir)/libreadline.$(SHLIB_EXT)
-ifneq ($(OS),Darwin)
-READLINE_OBJ_SOURCE = readline-$(READLINE_VER)/shlib/libreadline.$(SHLIB_EXT).$(READLINE_VER)
-else
-READLINE_OBJ_SOURCE = readline-$(READLINE_VER)/shlib/libreadline.$(READLINE_VER).$(SHLIB_EXT)
-endif
-READLINE_URL = ftp://ftp.gnu.org/gnu/readline/readline-$(READLINE_VER).tar.gz
-READLINE_OPTS = --enable-shared --enable-static --with-curses
-READLINE_CFLAGS = 
-readline-$(READLINE_VER).tar.gz:
-	$(JLDOWNLOAD) $@ http://ftp.gnu.org/gnu/readline/$@
-	touch -c $@
-readline-$(READLINE_VER)/configure: readline-$(READLINE_VER).tar.gz
-	$(TAR) zxf $<
-	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-001
-	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-002
-	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-003
-	cd readline-$(READLINE_VER) && patch -p0 < ../readline62-004
-	touch -c $@
-$(READLINE_OBJ_TARGET): $(READLINE_OBJ_SOURCE) readline-$(READLINE_VER)/checked
-	$(MAKE) -C readline-$(READLINE_VER) install $(MAKE_COMMON)
-	chmod +w $(build_libdir)/libreadline.* $(build_libdir)/libhistory.*
-ifeq ($(OS), Darwin)
-	$(INSTALL_NAME_CMD)libreadline.$(SHLIB_EXT) $(build_libdir)/libreadline.$(SHLIB_EXT)
-	$(INSTALL_NAME_CMD)libhistory.dylib $(build_libdir)/libhistory.dylib
-else ifeq ($(OS), Linux)
-	for filename in $(build_libdir)/libhistory.so* $(build_libdir)/libreadline.so* ; do \
-		$(PATCHELF) --set-rpath '$$ORIGIN' $$filename ;\
-	done
-endif
-	touch -c $@
-endif
-
-readline-$(READLINE_VER)/config.status: readline-$(READLINE_VER)/configure
-	cd readline-$(READLINE_VER) && \
-	chmod a+x ./configure && \
-	./configure $(CONFIGURE_COMMON) $(READLINE_OPTS)
-	touch -c $@
-$(READLINE_OBJ_SOURCE): readline-$(READLINE_VER)/config.status
-	cd readline-$(READLINE_VER) && \
-	$(MAKE) $(READLINE_CFLAGS)
-	touch -c $@
-readline-$(READLINE_VER)/checked: $(READLINE_OBJ_SOURCE)
-	cd readline-$(READLINE_VER) && \
-	$(MAKE) check $(READLINE_CFLAGS)
-	echo 1 > $@
-
-clean-readline:
-	-$(MAKE) -C readline-$(READLINE_VER) clean
-	-rm -f $(READLINE_OBJ_TARGET)
-distclean-readline:
-	-rm -rf readline-$(READLINE_VER).tar.gz readline-$(READLINE_VER)
-
-get-readline: readline-$(READLINE_VER).tar.gz
-configure-readline: readline-$(READLINE_VER)/config.status
-compile-readline: $(READLINE_OBJ_SOURCE)
-check-readline: readline-$(READLINE_VER)/checked
-install-readline: $(READLINE_OBJ_TARGET) 
-
-
 ## LIBUV ##
 
 UV_SRC_TARGET = libuv/.libs/libuv.a
 UV_OBJ_TARGET = $(build_libdir)/libuv.a
+ifneq ($(USEMSVC), 1)
+UV_OPTS =
+else
+UV_OPTS = CFLAGS=-DBUILDING_UV_SHARED
+endif
 
 libuv/configure:
 	(cd .. && git submodule init && git submodule update)
@@ -502,7 +434,7 @@ libuv/config.status: $(JULIAHOME)/.git/modules/deps/libuv/HEAD
 endif
 libuv/config.status: libuv/configure
 	cd libuv && \
-	./configure --with-pic $(CONFIGURE_COMMON)
+	./configure --with-pic $(CONFIGURE_COMMON) $(UV_OPTS)
 	touch -c $@
 $(UV_SRC_TARGET): libuv/config.status
 	touch -c libuv/aclocal.m4
@@ -518,7 +450,7 @@ endif
 	echo 1 > $@
 $(UV_OBJ_TARGET): $(UV_SRC_TARGET)
 	$(MAKE) -C libuv install $(MAKE_COMMON)
-	$(INSTALL_NAME_CMD)libuv.dylib $(build_shlibdir)/libuv.dylib
+	$(INSTALL_NAME_CMD)libuv.$(SHLIB_EXT) $(build_shlibdir)/libuv.$(SHLIB_EXT)
 
 clean-uv:
 	-$(MAKE) -C libuv clean
@@ -541,6 +473,7 @@ PCRE_OBJ_TARGET = $(build_shlibdir)/libpcre.$(SHLIB_EXT)
 pcre-$(PCRE_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://sourceforge.net/projects/pcre/files/pcre/$(PCRE_VER)/$@/download
 pcre-$(PCRE_VER)/configure: pcre-$(PCRE_VER).tar.bz2
+	$(JLCHECKSUM) $<
 	$(TAR) jxf $<
 	touch -c $@
 pcre-$(PCRE_VER)/config.status: pcre-$(PCRE_VER)/configure
@@ -552,12 +485,14 @@ $(PCRE_SRC_TARGET): pcre-$(PCRE_VER)/config.status
 	touch -c $@
 pcre-$(PCRE_VER)/checked: $(PCRE_SRC_TARGET)
 ifeq ($(OS),$(BUILD_OS))
+ifneq ($(OS),WINNT)
 	$(MAKE) -C pcre-$(PCRE_VER) check -j1
+endif
 endif
 	echo 1 > $@
 $(PCRE_OBJ_TARGET): $(PCRE_SRC_TARGET) pcre-$(PCRE_VER)/checked
 	$(MAKE) -C pcre-$(PCRE_VER) $(LIBTOOL_CCLD) install $(MAKE_COMMON)
-	$(INSTALL_NAME_CMD)libpcre.dylib $@
+	$(INSTALL_NAME_CMD)libpcre.$(SHLIB_EXT) $@
 	touch -c $@
 
 clean-pcre:
@@ -582,6 +517,7 @@ double-conversion-$(GRISU_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://double-conversion.googlecode.com/files/$@
 	touch -c $@
 double-conversion-$(GRISU_VER)/Makefile: double-conversion-$(GRISU_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p double-conversion-$(GRISU_VER) && \
 	$(TAR) -C double-conversion-$(GRISU_VER) --strip-components 1 -xf double-conversion-$(GRISU_VER).tar.gz
 	touch -c $@
@@ -599,11 +535,11 @@ $(GRISU_OBJ_TARGET): double-conversion-$(GRISU_VER)/Makefile
 	$(CXX) -c $(GRISU_OPTS) -o src/strtod.o -Isrc src/strtod.cc && \
 	$(CXX) -c $(GRISU_OPTS) -o src/libdouble-conversion.o -I.. -Isrc ../double_conversion_wrapper.cpp && \
 	$(CXX) $(GRISU_OPTS) src/*.o $(LDFLAGS) -shared -dead_strip -o $@ && \
-	$(INSTALL_NAME_CMD)libgrisu.dylib $@
+	$(INSTALL_NAME_CMD)libgrisu.$(SHLIB_EXT) $@
 else
 $(GRISU_OBJ_TARGET):
 	$(CXX) $(GRISU_OPTS) -I/usr/include/double-conversion double_conversion_wrapper.cpp -shared $(LDFLAGS) -o $@ -ldouble-conversion && \
-	$(INSTALL_NAME_CMD)libgrisu.dylib $@
+	$(INSTALL_NAME_CMD)libgrisu.$(SHLIB_EXT) $@
 endif
 
 clean-double-conversion:
@@ -637,14 +573,16 @@ endif
 $(OPENLIBM_OBJ_SOURCE): openlibm/Makefile
 	$(MAKE) -C openlibm $(OPENLIBM_FLAGS) $(MAKE_COMMON)
 	touch -c $@
-$(OPENLIBM_OBJ_TARGET): $(OPENLIBM_OBJ_SOURCE) | $(build_shlibdir)
-	cp openlibm/libopenlibm.a $(build_libdir)/libopenlibm.a
-	cp $< $@
+$(OPENLIBM_OBJ_TARGET): $(OPENLIBM_OBJ_SOURCE)
+	$(MAKE) -C openlibm install $(OPENLIBM_FLAGS) $(MAKE_COMMON)
 	$(INSTALL_NAME_CMD)libopenlibm.$(SHLIB_EXT) $@
+	touch -c $@
 
 clean-openlibm:
 	-$(MAKE) -C openlibm distclean $(OPENLIBM_FLAGS)
 	-rm $(OPENLIBM_OBJ_TARGET)
+	-rm $(build_libdir)/libopenlibm.a
+
 distclean-openlibm: clean-openlibm
 	-cd openlibm && git clean -fdx
 
@@ -656,7 +594,12 @@ install-openlibm: $(OPENLIBM_OBJ_TARGET)
 
 ## openspecfun ##
 
-OPENSPECFUN_FLAGS = ARCH="$(ARCH)" CC="$(CC)" FC="$(FC)" AR="$(AR)" OS="$(OS)" USECLANG=$(USECLANG) USEGCC=$(USEGCC) FFLAGS="$(JFFLAGS)" USE_OPENLIBM=1 OPENLIBM_HOME=$(JULIAHOME)/deps/openlibm
+OPENSPECFUN_FLAGS = ARCH="$(ARCH)" CC="$(CC)" FC="$(FC)" AR="$(AR)" OS="$(OS)" USECLANG=$(USECLANG) USEGCC=$(USEGCC) FFLAGS="$(JFFLAGS)"
+
+ifeq ($(USE_SYSTEM_LIBM),0)
+	OPENSPECFUN_FLAGS += USE_OPENLIBM=1
+	OPENLIBM_FAKE_TARGET = $(OPENLIBM_OBJ_TARGET)
+endif
 
 OPENSPECFUN_OBJ_TARGET = $(build_shlibdir)/libopenspecfun.$(SHLIB_EXT)
 OPENSPECFUN_OBJ_SOURCE = openspecfun/libopenspecfun.$(SHLIB_EXT)
@@ -669,17 +612,19 @@ endif
 ifeq (exists, $(shell [ -d $(JULIAHOME)/.git/modules/deps/openspecfun ] && echo exists ))
 $(OPENSPECFUN_OBJ_SOURCE): $(JULIAHOME)/.git/modules/deps/openspecfun/HEAD
 endif
-$(OPENSPECFUN_OBJ_SOURCE): openspecfun/Makefile
+
+$(OPENSPECFUN_OBJ_SOURCE): openspecfun/Makefile $(OPENLIBM_FAKE_TARGET)
 	$(MAKE) -C openspecfun $(OPENSPECFUN_FLAGS) $(MAKE_COMMON)
 	touch -c $@
-$(OPENSPECFUN_OBJ_TARGET): $(OPENSPECFUN_OBJ_SOURCE) | $(build_shlibdir)
-	cp openspecfun/libopenspecfun.a $(build_libdir)/libopenspecfun.a
-	cp $< $@
+$(OPENSPECFUN_OBJ_TARGET): $(OPENSPECFUN_OBJ_SOURCE)
+	$(MAKE) -C openspecfun install $(OPENSPECFUN_FLAGS) $(MAKE_COMMON)
 	$(INSTALL_NAME_CMD)libopenspecfun.$(SHLIB_EXT) $@
+	touch -c $@
 
 clean-openspecfun:
 	-$(MAKE) -C openspecfun distclean $(OPENSPECFUN_FLAGS)
 	-rm $(OPENSPECFUN_OBJ_TARGET)
+	-rm $(build_libdir)/libopenspecfun.a
 distclean-openspecfun: clean-openspecfun
 	-cd openspecfun && git clean -fdx
 
@@ -692,38 +637,41 @@ install-openspecfun: $(OPENSPECFUN_OBJ_TARGET)
 ## LIBRANDOM ##
 
 LIBRANDOM_OBJ_TARGET = $(build_shlibdir)/librandom.$(SHLIB_EXT)
-LIBRANDOM_OBJ_SOURCE = random/librandom.$(SHLIB_EXT)
+LIBRANDOM_OBJ_SOURCE = librandom.$(SHLIB_EXT)
 
-LIBRANDOM_CFLAGS = $(CFLAGS) -O3 -finline-functions -fomit-frame-pointer -DNDEBUG -fno-strict-aliasing \
-				   --param max-inline-insns-single=1800 -Wmissing-prototypes -Wall  -std=c99 \
-				   -DDSFMT_MEXP=19937 $(fPIC) -shared -DDSFMT_DO_NOT_USE_OLD_NAMES
+LIBRANDOM_CFLAGS = $(CFLAGS) -DNDEBUG -DDSFMT_MEXP=19937 $(fPIC) -DDSFMT_DO_NOT_USE_OLD_NAMES
+ifneq ($(USEMSVC), 1)
+LIBRANDOM_CFLAGS += -O3 -finline-functions -fomit-frame-pointer -fno-strict-aliasing \
+		--param max-inline-insns-single=1800 -Wmissing-prototypes -Wall  -std=c99 -shared
+else
+LIBRANDOM_CFLAGS += -Wl,-dll
+endif
 ifeq ($(ARCH), x86_64)
 LIBRANDOM_CFLAGS += -msse2 -DHAVE_SSE2
 endif
 
-random/dsfmt-$(DSFMT_VER).tar.gz:
+dsfmt-$(DSFMT_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/SFMT/dSFMT-src-$(DSFMT_VER).tar.gz 
 	touch -c $@
-random/dsfmt-$(DSFMT_VER)/config.status: random/dsfmt-$(DSFMT_VER).tar.gz
-	cd random && \
+dsfmt-$(DSFMT_VER)/config.status: dsfmt-$(DSFMT_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p dsfmt-$(DSFMT_VER) && \
 	$(TAR) -C dsfmt-$(DSFMT_VER) --strip-components 1 -xf dsfmt-$(DSFMT_VER).tar.gz && \
 	cd dsfmt-$(DSFMT_VER) && patch < ../dSFMT.h.patch && patch < ../dSFMT.c.patch
 	echo 1 > $@
-$(LIBRANDOM_OBJ_SOURCE): random/jl_random.c random/randmtzig.c random/dsfmt-$(DSFMT_VER)/config.status
-	cd random && \
-	$(CC) $(CPPFLAGS) $(LIBRANDOM_CFLAGS) $(LDFLAGS) jl_random.c -o librandom.$(SHLIB_EXT) && \
+$(LIBRANDOM_OBJ_SOURCE): dsfmt-$(DSFMT_VER)/config.status
+	$(CC) $(CPPFLAGS) $(LIBRANDOM_CFLAGS) $(LDFLAGS) dsfmt-$(DSFMT_VER)/dSFMT.c -o librandom.$(SHLIB_EXT) && \
 	$(INSTALL_NAME_CMD)librandom.$(SHLIB_EXT) librandom.$(SHLIB_EXT)
 $(LIBRANDOM_OBJ_TARGET): $(LIBRANDOM_OBJ_SOURCE)
 	cp $< $@
 
 clean-random:
-	-rm -f random/librandom.$(SHLIB_EXT)
+	-rm -f librandom.$(SHLIB_EXT)
 distclean-random: clean-random
-	-cd random && rm -rf *.tar.gz dsfmt-$(DSFMT_VER)
+	-rm -rf *.tar.gz dsfmt-$(DSFMT_VER)
 
-get-random: random/dsfmt-$(DSFMT_VER).tar.gz
-configure-random: random/dsfmt-$(DSFMT_VER)/config.status
+get-random: dsfmt-$(DSFMT_VER).tar.gz
+configure-random: dsfmt-$(DSFMT_VER)/config.status
 compile-random: $(LIBRANDOM_OBJ_SOURCE)
 check-random: compile-random
 install-random: $(LIBRANDOM_OBJ_TARGET)
@@ -736,7 +684,8 @@ RMATH_OBJ_SOURCE = Rmath/src/libRmath-julia.$(SHLIB_EXT)
 
 RMATH_FLAGS += CC="$(CC)" USECLANG=$(USECLANG) USEGCC=$(USEGCC) \
 			   OS="$(OS)" ARCH="$(ARCH)" \
-			   USE_LIBRANDOM=1 LIBRANDOM_PATH="$(build_shlibdir)"
+			   USE_LIBRANDOM=1 LIBRANDOM_PATH="$(build_shlibdir)" \
+			   DSFMT_PATH=$(JULIAHOME)/deps/dsfmt-$(DSFMT_VER)
 
 Rmath/Make.inc:
 	(cd .. && git submodule init && git submodule update)
@@ -777,6 +726,7 @@ OPENBLAS_BUILD_OPTS = CC="$(CC)" FC="$(FC)" RANLIB="$(RANLIB)" FFLAGS="$(FFLAGS)
 # Thread support
 ifeq ($(OPENBLAS_USE_THREAD), 1)
 OPENBLAS_BUILD_OPTS += USE_THREAD=1
+OPENBLAS_BUILD_OPTS += GEMM_MULTITHREADING_THRESHOLD=50
 # Maximum number of threads for parallelism
 ifneq ($(ARCH),x86_64)
 # Assume we can't address much memory to spawn many threads
@@ -819,12 +769,14 @@ else ifeq ($(ARCH),i387)
 OPENBLAS_BUILD_OPTS += BINARY=32
 else ifeq ($(ARCH),i486)
 OPENBLAS_BUILD_OPTS += BINARY=32
+else ifeq ($(ARCH),i586)
+OPENBLAS_BUILD_OPTS += BINARY=32
 else ifeq ($(ARCH),i686)
 OPENBLAS_BUILD_OPTS += BINARY=32
 else ifeq ($(ARCH),x86_64)
 OPENBLAS_BUILD_OPTS += BINARY=64
 else
-$(error "unknown arch for openblas cross-compile")
+$(error "unknown arch for openblas cross-compile: $(ARCH)")
 endif
 
 ifeq ($(OS),WINNT)
@@ -842,9 +794,10 @@ endif
 openblas-$(OPENBLAS_VER).tar.gz:
 	$(JLDOWNLOAD) $@ https://github.com/xianyi/OpenBLAS/tarball/$(OPENBLAS_VER) 
 openblas-$(OPENBLAS_VER)/config.status: openblas-$(OPENBLAS_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p openblas-$(OPENBLAS_VER) && \
 	$(TAR) -C openblas-$(OPENBLAS_VER) --strip-components 1 -xf $<
-	perl -i -ple 's/^\s*(EXTRALIB\s*\+=\s*-lSystemStubs)\s*$$/# $$1/g' $@.system
+	perl -i -ple 's/^\s*(EXTRALIB\s*\+=\s*-lSystemStubs)\s*$$/# $$1/g' openblas-$(OPENBLAS_VER)/Makefile.system
 ifeq  ($(OPENBLAS_VER),v0.2.8)
 	cd openblas-$(OPENBLAS_VER)/lapack-netlib/SRC && \
 		patch < ../../../dlasd4-lapack-3.4.2.patch && \
@@ -948,12 +901,12 @@ GFORTBLAS_FFLAGS += -cpp -ffree-line-length-0 -ffixed-line-length-0 \
 endif
 endif
 
-libgfortblas.dylib: gfortblas.c gfortblas.alias
+libgfortblas.$(SHLIB_EXT): gfortblas.c gfortblas.alias
 	$(CC) -Wall -O3 $(CPPFLAGS) $(CFLAGS) $(fPIC) -shared $< -o $@ -pipe \
 				-Wl,-reexport_framework,vecLib -Wl,-alias_list,gfortblas.alias
-$(build_shlibdir)/libgfortblas.dylib: libgfortblas.dylib
+$(build_shlibdir)/libgfortblas.$(SHLIB_EXT): libgfortblas.$(SHLIB_EXT)
 	cp -f $< $@
-	$(INSTALL_NAME_CMD)libgfortblas.dylib $@
+	$(INSTALL_NAME_CMD)libgfortblas.$(SHLIB_EXT) $@
 endif
 
 ## LAPACK ##
@@ -974,13 +927,14 @@ endif
 lapack-$(LAPACK_VER).tgz:
 	$(JLDOWNLOAD) $@ http://www.netlib.org/lapack/$@
 lapack-$(LAPACK_VER)/Makefile: lapack-$(LAPACK_VER).tgz
+	$(JLCHECKSUM) $<
 	$(TAR) zxf $<
 	cd lapack-$(LAPACK_VER)/SRC && patch < ../../dlasd4-lapack-3.4.2.patch && patch < ../../slasd4-lapack-3.4.2.patch
 	touch -c $@
 ifeq ($(USE_SYSTEM_BLAS), 0)
 lapack-$(LAPACK_VER)/liblapack.a: | $(OPENBLAS_OBJ_TARGET)
 else ifeq ($(OS),Darwin)
-lapack-$(LAPACK_VER)/liblapack.a: | $(build_shlibdir)/libgfortblas.dylib
+lapack-$(LAPACK_VER)/liblapack.a: | $(build_shlibdir)/libgfortblas.$(SHLIB_EXT)
 endif
 lapack-$(LAPACK_VER)/liblapack.a: lapack-$(LAPACK_VER)/Makefile
 	cd lapack-$(LAPACK_VER) && \
@@ -996,7 +950,7 @@ $(LAPACK_OBJ_SOURCE): lapack-$(LAPACK_VER)/liblapack.a
 	$(FC) -shared $(FFLAGS) $(JFFLAGS) SRC/*.o INSTALL/dlamch.o INSTALL/dsecnd_INT_ETIME.o INSTALL/ilaver.o INSTALL/slamch.o $(LIBBLAS) -o liblapack.$(SHLIB_EXT)
 $(LAPACK_OBJ_TARGET): $(LAPACK_OBJ_SOURCE)
 	cp $< $@
-	$(INSTALL_NAME_CMD)liblapack.dylib $@
+	$(INSTALL_NAME_CMD)liblapack.$(SHLIB_EXT) $@
 
 clean-lapack:
 	-$(MAKE) -C lapack-$(LAPACK_VER) clean
@@ -1032,11 +986,13 @@ ifneq ($(OS),WINNT)
 ARPACK_FLAGS += LDFLAGS="-Wl,-rpath,'$(build_libdir)'"
 endif
 
-arpack-ng-$(ARPACK_VER).tar.gz:
-	$(JLDOWNLOAD) $@ http://forge.scilab.org/index.php/p/arpack-ng/downloads/get/arpack-ng-$(ARPACK_VER).tar.gz
+# ARPACK-NG upstream keeps changing their download filenames
+arpack-ng_$(ARPACK_VER).tar.gz:
+	$(JLDOWNLOAD) $@ http://forge.scilab.org/index.php/p/arpack-ng/downloads/get/$@
 	touch -c $@
-arpack-ng-$(ARPACK_VER)/configure: arpack-ng-$(ARPACK_VER).tar.gz
-	$(TAR) zxf $< 
+arpack-ng-$(ARPACK_VER)/configure: arpack-ng_$(ARPACK_VER).tar.gz
+	$(JLCHECKSUM) $<
+	$(TAR) zxf $<
 	touch -c $@
 
 ifeq ($(USE_ATLAS), 1)
@@ -1058,9 +1014,9 @@ $(ARPACK_OBJ_SOURCE): arpack-ng-$(ARPACK_VER)/config.status
 	$(MAKE) $(ARPACK_MFLAGS)
 	touch -c $@
 arpack-ng-$(ARPACK_VER)/checked: $(ARPACK_OBJ_SOURCE)
-	cd arpack-ng-$(ARPACK_VER) && \
-	$(MAKE) check $(ARPACK_MFLAGS) && \
-	cd TESTS && $(call spawn,./dnsimp$(EXE))
+	cd arpack-ng-$(ARPACK_VER)
+#	$(MAKE) check $(ARPACK_MFLAGS) && \
+#	cd TESTS && $(call spawn,./dnsimp$(EXE))
 	echo 1 > $@
 $(ARPACK_OBJ_TARGET): $(ARPACK_OBJ_SOURCE) arpack-ng-$(ARPACK_VER)/checked | $(build_shlibdir)
 	cd arpack-ng-$(ARPACK_VER) && \
@@ -1080,9 +1036,9 @@ clean-arpack:
 	-$(MAKE) -C arpack-ng-$(ARPACK_VER) clean
 	-rm -f $(ARPACK_OBJ_SOURCE) $(ARPACK_OBJ_TARGET)
 distclean-arpack:
-	-rm -rf arpack-ng-$(ARPACK_VER).tar.gz arpack-ng-$(ARPACK_VER)
+	-rm -rf arpack-ng_$(ARPACK_VER).tar.gz arpack-ng-$(ARPACK_VER)
 
-get-arpack: arpack-ng-$(ARPACK_VER).tar.gz
+get-arpack: arpack-ng_$(ARPACK_VER).tar.gz
 configure-arpack: arpack-ng-$(ARPACK_VER)/config.status
 compile-arpack: $(ARPACK_OBJ_SOURCE)
 check-arpack: arpack-ng-$(ARPACK_VER)/checked
@@ -1115,6 +1071,7 @@ fftw-$(FFTW_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://www.fftw.org/$@
 
 fftw-$(FFTW_VER)-single/configure: fftw-$(FFTW_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p fftw-$(FFTW_VER)-single && \
 	$(TAR) -C fftw-$(FFTW_VER)-single --strip-components 1 -xf $<
 ifeq ($(OS),WINNT)
@@ -1139,9 +1096,9 @@ $(FFTW_SINGLE_OBJ_TARGET): $(FFTW_SINGLE_SRC_TARGET) fftw-$(FFTW_VER)-single/che
 	$(MAKE) -C fftw-$(FFTW_VER)-single install $(MAKE_COMMON)
 	touch -c $@
 ifeq ($(OS), Darwin)
-	$(INSTALL_NAME_CMD)libfftw3f.dylib $(build_shlibdir)/libfftw3f.dylib
+	$(INSTALL_NAME_CMD)libfftw3f.$(SHLIB_EXT) $(build_shlibdir)/libfftw3f.$(SHLIB_EXT)
 	$(INSTALL_NAME_CMD)libfftw3f_threads.$(SHLIB_EXT) $(build_shlibdir)/libfftw3f_threads.$(SHLIB_EXT)
-	$(INSTALL_NAME_CHANGE_CMD) $(build_shlibdir)/libfftw3f.3.dylib $(INSTALL_NAME_ID_DIR)libfftw3f.dylib $(build_shlibdir)/libfftw3f_threads.dylib
+	$(INSTALL_NAME_CHANGE_CMD) $(build_shlibdir)/libfftw3f.3.$(SHLIB_EXT) $(INSTALL_NAME_ID_DIR)libfftw3f.$(SHLIB_EXT) $(build_shlibdir)/libfftw3f_threads.$(SHLIB_EXT)
 else ifeq ($(OS), WINNT)
 	mv -f $(build_shlibdir)/libfftw3f-3.dll $@
 else ifeq ($(OS), Linux)
@@ -1152,6 +1109,7 @@ endif
 	touch -c $@
 
 fftw-$(FFTW_VER)-double/configure: fftw-$(FFTW_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p fftw-$(FFTW_VER)-double && \
 	$(TAR) -C fftw-$(FFTW_VER)-double --strip-components 1 -xf $<
 ifeq ($(OS),WINNT)
@@ -1178,7 +1136,7 @@ $(FFTW_DOUBLE_OBJ_TARGET): $(FFTW_DOUBLE_SRC_TARGET) fftw-$(FFTW_VER)-double/che
 ifeq ($(OS), Darwin)
 	$(INSTALL_NAME_CMD)libfftw3.$(SHLIB_EXT) $(build_shlibdir)/libfftw3.$(SHLIB_EXT)
 	$(INSTALL_NAME_CMD)libfftw3_threads.$(SHLIB_EXT) $(build_shlibdir)/libfftw3_threads.$(SHLIB_EXT)
-	$(INSTALL_NAME_CHANGE_CMD) $(build_shlibdir)/libfftw3.3.dylib $(INSTALL_NAME_ID_DIR)libfftw3.dylib $(build_shlibdir)/libfftw3_threads.dylib
+	$(INSTALL_NAME_CHANGE_CMD) $(build_shlibdir)/libfftw3.3.$(SHLIB_EXT) $(INSTALL_NAME_ID_DIR)libfftw3.$(SHLIB_EXT) $(build_shlibdir)/libfftw3_threads.$(SHLIB_EXT)
 else ifeq ($(OS), WINNT)
 	mv -f $(build_shlibdir)/libfftw3-3.dll $@
 else ifeq ($(OS), Linux)
@@ -1227,8 +1185,10 @@ utf8proc-v$(UTF8PROC_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://www.public-software-group.org/pub/projects/utf8proc/v$(UTF8PROC_VER)/$@
 
 utf8proc-v$(UTF8PROC_VER)/Makefile: utf8proc-v$(UTF8PROC_VER).tar.gz
+	$(JLCHECKSUM) $<
 	$(TAR) -xzf $<
 	patch $@ < utf8proc_Makefile.patch
+	cd utf8proc-v$(UTF8PROC_VER) && patch < ../utf8proc_msvc.patch
 	touch -c $@
 
 $(UTF8PROC_OBJ_SOURCE): utf8proc-v$(UTF8PROC_VER)/Makefile
@@ -1277,6 +1237,7 @@ SUITESPARSE_MFLAGS = CC="$(CC)" CXX="$(CXX)" F77="$(FC)" AR="$(AR)" RANLIB="$(RA
 SuiteSparse-$(SUITESPARSE_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://www.cise.ufl.edu/research/sparse/SuiteSparse/$@ 
 SuiteSparse-$(SUITESPARSE_VER)/Makefile: SuiteSparse-$(SUITESPARSE_VER).tar.gz
+	$(JLCHECKSUM) $<
 	mkdir -p SuiteSparse-$(SUITESPARSE_VER)
 	$(TAR) -C SuiteSparse-$(SUITESPARSE_VER) --strip-components 1 -zxf $<
 	touch -c $@
@@ -1366,7 +1327,9 @@ LIBUNWIND_CFLAGS = $(CFLAGS) -U_FORTIFY_SOURCE $(fPIC)
 libunwind-$(UNWIND_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://download.savannah.gnu.org/releases/libunwind/$@ 
 libunwind-$(UNWIND_VER)/configure: libunwind-$(UNWIND_VER).tar.gz
+	$(JLCHECKSUM) $<
 	$(TAR) xfz $<
+	cd libunwind-$(UNWIND_VER) && patch -p1 < ../libunwind.patch
 	touch -c $@
 libunwind-$(UNWIND_VER)/config.status: libunwind-$(UNWIND_VER)/configure
 	cd libunwind-$(UNWIND_VER) && \
@@ -1411,6 +1374,7 @@ libosxunwind-$(OSXUNWIND_VER).tar.gz:
 	$(JLDOWNLOAD) $@ https://github.com/JuliaLang/libosxunwind/archive/v$(OSXUNWIND_VER).tar.gz
 
 libosxunwind-$(OSXUNWIND_VER)/Makefile: libosxunwind-$(OSXUNWIND_VER).tar.gz
+	$(JLCHECKSUM) $<
 	$(TAR) xfz $<
 	touch -c $@
 
@@ -1442,6 +1406,7 @@ GMP_OBJ_TARGET = $(build_shlibdir)/libgmp.$(SHLIB_EXT)
 gmp-$(GMP_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ ftp://ftp.gmplib.org/pub/gmp-$(GMP_VER)/$@
 gmp-$(GMP_VER)/configure: gmp-$(GMP_VER).tar.bz2
+	$(JLCHECKSUM) $<
 	$(TAR) jxf $<
 	touch -c $@
 gmp-$(GMP_VER)/config.status: gmp-$(GMP_VER)/configure
@@ -1460,7 +1425,7 @@ $(GMP_OBJ_TARGET): $(GMP_SRC_TARGET) gmp-$(GMP_VER)/checked
 ifeq ($(OS),WINNT)
 	mv -f $(build_libdir)/libgmp.$(SHLIB_EXT) $@
 endif
-	$(INSTALL_NAME_CMD)libgmp.dylib $@
+	$(INSTALL_NAME_CMD)libgmp.$(SHLIB_EXT) $@
 	touch -c $@
 
 clean-gmp:
@@ -1490,6 +1455,7 @@ endif
 mpfr-$(MPFR_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://www.mpfr.org/mpfr-current/$@
 mpfr-$(MPFR_VER)/configure: mpfr-$(MPFR_VER).tar.bz2
+	$(JLCHECKSUM) $<
 	$(TAR) jxf $<
 	touch -c $@
 mpfr-$(MPFR_VER)/config.status: mpfr-$(MPFR_VER)/configure $(MPFR_DEPS)
@@ -1505,7 +1471,7 @@ endif
 	echo 1 > $@
 $(MPFR_OBJ_TARGET): $(MPFR_SRC_TARGET) mpfr-$(MPFR_VER)/checked
 	$(MAKE) -C mpfr-$(MPFR_VER) $(LIBTOOL_CCLD) install $(MAKE_COMMON)
-	$(INSTALL_NAME_CMD)libmpfr.dylib $@
+	$(INSTALL_NAME_CMD)libmpfr.$(SHLIB_EXT) $@
 	touch -c $@
 
 clean-mpfr:
@@ -1538,6 +1504,7 @@ endif
 zlib-$(ZLIB_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://zlib.net/$@
 zlib-$(ZLIB_VER)/configure: zlib-$(ZLIB_VER).tar.gz
+	$(JLCHECKSUM) $<
 	$(TAR) zxf $<
 	touch -c $@
 zlib-$(ZLIB_VER)/config.status: zlib-$(ZLIB_VER)/configure
@@ -1563,7 +1530,7 @@ ifeq ($(OS), WINNT)
 else
 	$(MAKE) -C zlib-$(ZLIB_VER) install prefix=$(CROSS_COMPILE) $(MAKE_COMMON)
 endif
-	$(INSTALL_NAME_CMD)libz.dylib $@
+	$(INSTALL_NAME_CMD)libz.$(SHLIB_EXT) $@
 	touch -c $@
 
 clean-zlib:
@@ -1590,6 +1557,7 @@ install-patchelf: $(PATCHELF_TARGET)
 patchelf-$(PATCHELF_VER).tar.bz2:
 	$(JLDOWNLOAD) $@ http://hydra.nixos.org/build/1524660/download/2/$@
 patchelf-$(PATCHELF_VER)/configure: patchelf-$(PATCHELF_VER).tar.bz2
+	$(JLCHECKSUM) $<
 	$(TAR) jxf $<
 	touch -c $@
 patchelf-$(PATCHELF_VER)/config.status: patchelf-$(PATCHELF_VER)/configure
@@ -1629,6 +1597,7 @@ GIT_TARGET = $(build_prefix)/git
 git-$(GIT_VER).tar.gz:
 	$(JLDOWNLOAD) $@ http://git-core.googlecode.com/files/$@
 git-$(GIT_VER)/configure: git-$(GIT_VER).tar.gz
+	$(JLCHECKSUM) $<
 	$(TAR) zxf $<
 	touch -c $@
 git-$(GIT_VER)/config.status: git-$(GIT_VER)/configure
@@ -1658,6 +1627,6 @@ install-git: $(GIT_TARGET)
 
 ## phony targets ##
 
-.PHONY: default compile install cleanall distclean \
+.PHONY: default compile install cleanall distcleanall \
 	get-* configure-* compile-* check-* install-* \
 	clean-* distclean-*

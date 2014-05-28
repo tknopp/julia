@@ -1,10 +1,7 @@
 
 show(x) = show(STDOUT::IO, x)
 
-function print(io::IO, s::Symbol)
-    pname = convert(Ptr{Uint8}, s)
-    write(io, pname, int(ccall(:strlen, Csize_t, (Ptr{Uint8},), pname)))
-end
+print(io::IO, s::Symbol) = (write(io,s);nothing)
 
 function show(io::IO, x::ANY)
     t = typeof(x)::DataType
@@ -71,17 +68,6 @@ function show(io::IO, x::DataType)
     end
 end
 
-function showcompact{T<:Number}(io::IO, x::Vector{T})
-    print(io, "[")
-    if length(x) > 0
-        showcompact(io, x[1])
-        for j in 2:length(x)
-            print(io, ",")
-            showcompact(io, x[j])
-        end
-    end
-    print(io, "]")
-end
 showcompact(io::IO, x) = show(io, x)
 showcompact(x) = showcompact(STDOUT::IO, x)
 
@@ -257,7 +243,7 @@ const expr_infix_wide = Set([:(=), :(+=), :(-=), :(*=), :(/=), :(\=), :(&=),
 const expr_infix = Set([:(:), :(<:), :(->), :(=>), symbol("::")])
 const expr_calls  = [:call =>('(',')'), :ref =>('[',']'), :curly =>('{','}')]
 const expr_parens = [:tuple=>('(',')'), :vcat=>('[',']'), :cell1d=>('{','}'),
-                      :hcat =>('[',']'), :row =>('[',']')]
+                     :hcat =>('[',']'), :row =>('[',']')]
 
 ## AST decoding helpers ##
 
@@ -339,13 +325,16 @@ function show_unquoted(io::IO, ex::SymbolNode, ::Int, ::Int)
     show_expr_type(io, ex.typ)
 end
 
-function show_unquoted(io::IO, ex::QuoteNode, indent::Int, prec::Int)
-    if isa(ex.value, Symbol) && !(ex.value in quoted_syms)
+show_unquoted(io::IO, ex::QuoteNode, indent::Int, prec::Int) =
+    show_unquoted_quote_expr(io, ex.value, indent, prec)
+
+function show_unquoted_quote_expr(io::IO, value, indent::Int, prec::Int)
+    if isa(value, Symbol) && !(value in quoted_syms)
         print(io, ":")
-        print(io, ex.value)
+        print(io, value)
     else
         print(io, ":(")
-        show_unquoted(io, ex.value, indent+indent_width, 0)
+        show_unquoted(io, value, indent+indent_width, 0)
         print(io, ")")
     end
 end
@@ -370,7 +359,12 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
     elseif (head in expr_infix && nargs==2) || (is(head,:(:)) && nargs==3)
         show_list(io, args, head, indent)
     elseif head in expr_infix_wide && nargs == 2
-        show_list(io, args, " $head ", indent)
+        func_prec = get(bin_op_precs, head, 0)
+        if func_prec < prec
+            show_enclosed_list(io, '(', args, " $head ", ')', indent, func_prec)
+        else
+            show_list(io, args, " $head ", indent, func_prec)
+        end
 
     # list (i.e. "(1,2,3)" or "[1,2,3]")
     elseif haskey(expr_parens, head)               # :tuple/:vcat/:cell1d
@@ -412,18 +406,27 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
 
         # binary operator (i.e. "x + y")
         elseif func in bin_ops
-            sep = func_prec >= bin_op_precs[:(^)] ? "$func" : " $func "
-            if func_prec <= prec
-                show_enclosed_list(io, '(', func_args, sep, ')', indent, func_prec)
+            if length(func_args) > 1
+                sep = func_prec >= bin_op_precs[:(^)] ? "$func" : " $func "
+                if func_prec <= prec
+                    show_enclosed_list(io, '(', func_args, sep, ')', indent, func_prec)
+                else
+                    show_list(io, func_args, sep, indent, func_prec)
+                end
             else
-                show_list(io, func_args, sep, indent, func_prec)
+                # 1-argument call to normally-binary operator
+                op, cl = expr_calls[head]
+                print(io, "(")
+                show_unquoted(io, func, indent)
+                print(io, ")")
+                show_enclosed_list(io, op, func_args, ",", cl, indent)
             end
 
         # normal function (i.e. "f(x,y)")
         else
             op, cl = expr_calls[head]
-            show_unquoted(io, args[1], indent)
-            show_enclosed_list(io, op, args[2:end], ",", cl, indent)
+            show_unquoted(io, func, indent)
+            show_enclosed_list(io, op, func_args, ",", cl, indent)
         end
     elseif is(head, :ccall)
         show_unquoted(io, :ccall, indent)
@@ -444,7 +447,8 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
 
     # type declaration
     elseif is(head, :type) && nargs==3
-        show_block(io, head, args[2], args[3], indent); print(io, "end")
+        show_block(io, args[1] ? :type : :immutable, args[2], args[3], indent)
+        print(io, "end")
 
     # empty return (i.e. "function f() return end")
     elseif is(head, :return) && nargs == 1 && is(args[1], nothing)
@@ -476,10 +480,13 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
         show_block(io, "if",   args[1], args[2], indent)
         show_block(io, "else", args[3], indent)
         print(io, "end")
-    elseif is(head, :try) && nargs == 3
+    elseif is(head, :try) && 3 <= nargs <= 4
         show_block(io, "try", args[1], indent)
-        if !(is(args[2], false) && is_expr(args[3], :block, 0))
-            show_block(io, "catch", args[2], args[3], indent)
+        if is_expr(args[3], :block)
+            show_block(io, "catch", is(args[2], false) ? [] : args[2], args[3], indent)
+        end
+        if nargs >= 4 && is_expr(args[4], :block)
+            show_block(io, "finally", [], args[4], indent)
         end
         print(io, "end")
     elseif is(head, :let) && nargs >= 1
@@ -487,7 +494,7 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
     elseif is(head, :block) || is(head, :body)
         show_block(io, "begin", ex, indent); print(io, "end")
     elseif is(head, :quote) && nargs == 1
-        show_unquoted(io, args[1], indent)
+        show_unquoted_quote_expr(io, args[1], indent, 0)
     elseif is(head, :gotoifnot) && nargs == 2
         print(io, "unless ")
         show_list(io, args, " goto ", indent)
@@ -512,6 +519,10 @@ function show_unquoted(io::IO, ex::Expr, indent::Int, prec::Int)
             end
         end
         print(io, '"', a..., '"')
+
+    elseif is(head, :&) && length(args) == 1
+        print(io, '&')
+        show_unquoted(io, args[1])
 
     # print anything else as "Expr(head, args...)"
     else
@@ -572,7 +583,7 @@ function xdump_elts(fn::Function, io::IO, x::Array{Any}, n::Int, indent, i0, i1)
     for i in i0:i1
         print(io, indent, "  ", i, ": ")
         if !isdefined(x,i)
-            println(undef_ref_str)
+            println(io, undef_ref_str)
         else
             fn(io, x[i], n - 1, string(indent, "  "))
         end
@@ -605,7 +616,7 @@ function xdump(fn::Function, io::IO, x::DataType, n::Int, indent)
                 if isa(x.types[idx], DataType)
                     xdump(fn, io, x.types[idx], n - 1, string(indent, "  "))
                 else
-                    println(x.types[idx])
+                    println(io, x.types[idx])
                 end
             end
         end
@@ -681,7 +692,7 @@ dump(io::IO, args...) = error("invalid arguments to dump")
 dump(args...) = with_output_limit(()->dump(STDOUT::IO, args...), true)
 
 function dump(io::IO, x::Dict, n::Int, indent)
-    println(typeof(x), " len ", length(x))
+    println(io, typeof(x), " len ", length(x))
     if n > 0
         i = 1
         for (k,v) in x
@@ -712,7 +723,7 @@ function alignment(x::Real)
                    (length(m.captures[1]), length(m.captures[2]))
 end
 function alignment(x::Complex)
-    m = match(r"^(.*,)(.*)$", sprint(showcompact_lim, x))
+    m = match(r"^(.*[\+\-])(.*)$", sprint(showcompact_lim, x))
     m == nothing ? (length(sprint(showcompact_lim, x)), 0) :
                    (length(m.captures[1]), length(m.captures[2]))
 end
@@ -1001,9 +1012,7 @@ function showarray(io::IO, X::AbstractArray;
     end
 end
 
-show(io::IO, X::AbstractArray) = showarray(io, X, header=false, limit=false, repr=true)
-
-print(io::IO, X::AbstractArray) = writedlm(io, X)
+show(io::IO, X::AbstractArray) = showarray(io, X, header=_limit_output, repr=!_limit_output)
 
 function with_output_limit(thk, lim=true)
     global _limit_output

@@ -34,6 +34,7 @@ namespace JL_I {
         nan_dom_err,
         // functions
         abs_float, copysign_float, flipsign_int, select_value,
+        sqrt_llvm, powi_llvm,
         // pointer access
         pointerref, pointerset, pointertoref,
         // c interface
@@ -243,9 +244,7 @@ static Value *emit_unbox(Type *to, Value *x, jl_value_t *jt)
             // this can happen when a branch yielding a different type ends
             // up being dead code, and type inference knows that the other
             // branch's type is the only one that matters.
-#ifdef DEBUG
-            JL_PRINTF(JL_STDERR, "warning: unbox: T != typeof(x)\n");
-#endif
+            assert(ty == T_void);
             return UndefValue::get(to);
         }
         return x;
@@ -1243,6 +1242,26 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
     HANDLE(jl_alloca,1) {
         return builder.CreateAlloca(IntegerType::get(jl_LLVMContext, 8),JL_INT(x));
     }
+    HANDLE(sqrt_llvm,1) {
+        x = FP(x);
+        raise_exception_unless(builder.CreateFCmpUGE(x, ConstantFP::get(x->getType(),0.0)),
+                               prepare_global(jldomerr_var), ctx);
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::sqrt,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+    }
+    HANDLE(powi_llvm,2) {
+        x = FP(x);
+        y = JL_INT(y);
+        Type *tx = x->getType();
+        // TODO: use powi when LLVM is fixed. issue #6506
+        // http://llvm.org/bugs/show_bug.cgi?id=19530
+        Type *ts[2] = { tx, tx };
+        return builder.
+            CreateCall2(jl_Module->getOrInsertFunction(tx==T_float64 ? "pow" : "powf",
+                                                       FunctionType::get(tx, ts, false)),
+                        x, builder.CreateSIToFP(y, tx));
+    }
     default:
         assert(false);
     }
@@ -1321,7 +1340,8 @@ extern "C" void jl_init_intrinsic_functions(void)
     ADD_I(uitofp); ADD_I(sitofp);
     ADD_I(fptrunc); ADD_I(fpext);
     ADD_I(abs_float); ADD_I(copysign_float);
-    ADD_I(flipsign_int); ADD_I(select_value);
+    ADD_I(flipsign_int); ADD_I(select_value); ADD_I(sqrt_llvm);
+    ADD_I(powi_llvm);
     ADD_I(pointerref); ADD_I(pointerset); ADD_I(pointertoref);
     ADD_I(checked_sadd); ADD_I(checked_uadd);
     ADD_I(checked_ssub); ADD_I(checked_usub);

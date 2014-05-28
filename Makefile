@@ -34,10 +34,10 @@ debug release: | $(DIRS) $(build_datarootdir)/julia/base $(build_datarootdir)/ju
 	$(MAKE) $(QUIET_MAKE) LD_LIBRARY_PATH=$(build_libdir):$(LD_LIBRARY_PATH) JULIA_EXECUTABLE="$(JULIA_EXECUTABLE_$@)" $(build_private_libdir)/sys.$(SHLIB_EXT)
 
 julia-debug-symlink:
-	@ln -sf $(build_bindir)/julia-debug-$(DEFAULT_REPL) julia
+	@ln -sf $(build_bindir)/julia-debug julia
 
 julia-release-symlink:
-	@ln -sf $(build_bindir)/julia-$(DEFAULT_REPL) julia
+	@ln -sf $(build_bindir)/julia julia
 
 julia-debug julia-release: git-submodules
 	@$(MAKE) $(QUIET_MAKE) -C deps
@@ -65,10 +65,7 @@ $(build_sysconfdir)/julia/juliarc.jl: contrib/windows/juliarc.jl
 endif
 
 # use sys.ji if it exists, otherwise run two stages
-$(build_private_libdir)/sys%ji: $(build_private_libdir)/sys%bc
-
-$(build_private_libdir)/sys%o: $(build_private_libdir)/sys%bc
-	$(call spawn,$(LLVM_LLC)) -filetype=obj -relocation-model=pic -mattr=-bmi2,-avx2 -o $(call cygpath_w,$@) $(call cygpath_w,$<)
+$(build_private_libdir)/sys%ji: $(build_private_libdir)/sys%o
 
 .PRECIOUS: $(build_private_libdir)/sys%o
 
@@ -77,11 +74,11 @@ $(build_private_libdir)/sys%$(SHLIB_EXT): $(build_private_libdir)/sys%o
 		$$([ $(OS) = Darwin ] && echo -Wl,-undefined,dynamic_lookup || echo -Wl,--unresolved-symbols,ignore-all ) \
 		$$([ $(OS) = WINNT ] && echo -ljulia -lssp)
 
-$(build_private_libdir)/sys0.bc:
+$(build_private_libdir)/sys0.o:
 	@$(QUIET_JULIA) cd base && \
 	$(call spawn,$(JULIA_EXECUTABLE)) --build $(call cygpath_w,$(build_private_libdir)/sys0) sysimg.jl
 
-$(build_private_libdir)/sys.bc: VERSION base/*.jl base/pkg/*.jl base/linalg/*.jl base/sparse/*.jl $(build_datarootdir)/julia/helpdb.jl $(build_datarootdir)/man/man1/julia.1 $(build_private_libdir)/sys0.$(SHLIB_EXT)
+$(build_private_libdir)/sys.o: VERSION base/*.jl base/pkg/*.jl base/linalg/*.jl base/sparse/*.jl $(build_datarootdir)/julia/helpdb.jl $(build_datarootdir)/man/man1/julia.1 $(build_private_libdir)/sys0.$(SHLIB_EXT)
 	@$(QUIET_JULIA) cd base && \
 	$(call spawn,$(JULIA_EXECUTABLE)) --build $(call cygpath_w,$(build_private_libdir)/sys) \
 		-J$(call cygpath_w,$(build_private_libdir))/$$([ -e $(build_private_libdir)/sys.ji ] && echo sys.ji || echo sys0.ji) -f sysimg.jl \
@@ -102,7 +99,7 @@ $(build_bindir)/stringpatch: $(build_bindir) contrib/stringpatch.c
 JL_LIBS = julia julia-debug
 
 # private libraries, that are installed in $(prefix)/lib/julia
-JL_PRIVATE_LIBS = random suitesparse_wrapper grisu
+JL_PRIVATE_LIBS = random suitesparse_wrapper grisu Rmath
 ifeq ($(USE_SYSTEM_FFTW),0)
 JL_PRIVATE_LIBS += fftw3 fftw3f fftw3_threads fftw3f_threads
 endif
@@ -164,9 +161,7 @@ $(eval $(call std_dll,gcc_s_sjlj-1))
 else
 $(eval $(call std_dll,gcc_s_seh-1))
 endif
-ifneq ($(BUILD_OS),WINNT)
 $(eval $(call std_dll,ssp-0))
-endif
 endif
 
 prefix ?= $(abspath julia-$(JULIA_COMMIT))
@@ -182,7 +177,6 @@ ifeq ($(OS),WINNT)
 	-$(INSTALL_M) $(build_bindir)/*.dll $(build_bindir)/*.bat $(DESTDIR)$(bindir)/
 else
 	-cp -a $(build_libexecdir) $(DESTDIR)$(prefix)
-	cd $(DESTDIR)$(bindir) && ln -sf julia-$(DEFAULT_REPL) julia
 
 	for suffix in $(JL_LIBS) ; do \
 		$(INSTALL_M) $(build_libdir)/lib$${suffix}*.$(SHLIB_EXT)* $(DESTDIR)$(private_libdir) ; \
@@ -201,7 +195,7 @@ else
 endif
 	$(INSTALL_F) $(build_includedir)/uv* $(DESTDIR)$(includedir)/julia
 endif
-	$(INSTALL_F) src/julia.h src/support/*.h $(DESTDIR)$(includedir)/julia
+	$(INSTALL_F) src/julia.h src/options.h src/support/*.h $(DESTDIR)$(includedir)/julia
 	# Copy system image
 	$(INSTALL_F) $(build_private_libdir)/sys.ji $(DESTDIR)$(private_libdir)
 	$(INSTALL_M) $(build_private_libdir)/sys.$(SHLIB_EXT) $(DESTDIR)$(private_libdir)
@@ -216,27 +210,27 @@ endif
 	# Update RPATH entries of Julia if $(private_libdir_rel) != $(build_private_libdir_rel)
 ifneq ($(private_libdir_rel),$(build_private_libdir_rel))
 ifeq ($(OS), Darwin)
-	for julia in $(DESTDIR)$(bindir)/julia-* ; do \
+	for julia in $(DESTDIR)$(bindir)/julia* ; do \
 		install_name_tool -rpath @executable_path/$(build_private_libdir_rel) @executable_path/$(private_libdir_rel) $$julia; \
 		install_name_tool -rpath @executable_path/$(build_libdir_rel) @executable_path/$(libdir_rel) $$julia; \
 	done
 else ifeq ($(OS), Linux)
-	for julia in $(DESTDIR)$(bindir)/julia-* ; do \
+	for julia in $(DESTDIR)$(bindir)/julia* ; do \
 		patchelf --set-rpath '$$ORIGIN/$(private_libdir_rel):$$ORIGIN/$(libdir_rel)' $$julia; \
 	done
 endif
 endif
 
 	# Overwrite JL_SYSTEM_IMAGE_PATH in julia binaries:
-	for julia in $(DESTDIR)$(bindir)/julia-* ; do \
-		$(build_bindir)/stringpatch $$(strings -t x - $$julia | grep "sys.ji$$" | awk '{print $$1;}' ) "$(private_libdir_rel)/sys.ji" 256 $$julia; \
+	for julia in $(DESTDIR)$(bindir)/julia* ; do \
+		$(build_bindir)/stringpatch $$(strings -t x - $$julia | grep "sys.ji$$" | awk '{print $$1;}' ) "$(private_libdir_rel)/sys.ji" 256 $(call cygpath_w,$$julia); \
 	done
 
 	mkdir -p $(DESTDIR)$(sysconfdir)
 	cp -R $(build_sysconfdir)/julia $(DESTDIR)$(sysconfdir)/
 
 dist-clean:
-	rm -fr julia-*.tar.gz julia-*.exe julia-*.7z julia-$(JULIA_COMMIT)
+	rm -fr julia-*.tar.gz julia*.exe julia-*.7z julia-$(JULIA_COMMIT)
 
 dist: dist-clean
 ifeq ($(USE_SYSTEM_BLAS),0)
@@ -266,7 +260,9 @@ else ifeq ($(OS), WINNT)
 endif
 
 	# purge sys.{dll,so,dylib} as that file is not relocatable across processor architectures
+ifeq ($(JULIA_CPU_TARGET), native)
 	-rm -f $(DESTDIR)$(private_libdir)/sys.$(SHLIB_EXT)
+endif
 
 ifeq ($(OS), WINNT)
 	[ ! -d dist-extras ] || ( cd dist-extras && \
@@ -290,10 +286,10 @@ source-dist: git-submodules
 	# Get all the dependencies downloaded
 	@$(MAKE) -C deps getall
 
-	# Create file source-dist.tmp to hold all the filenames that goes into the tarball
+	# Create file source-dist.tmp to hold all the filenames that go into the tarball
 	echo "base/version_git.jl" > source-dist.tmp
 	git ls-files >> source-dist.tmp
-	ls deps/*.tar.gz deps/*.tar.bz2 deps/*.tgz deps/random/*.tar.gz >> source-dist.tmp
+	ls deps/*.tar.gz deps/*.tar.bz2 deps/*.tgz >> source-dist.tmp
 	git submodule --quiet foreach 'git ls-files | sed "s&^&$$path/&"' >> source-dist.tmp
 
 	# Remove unwanted files
@@ -327,13 +323,13 @@ ifeq ($(OS),WINNT)
 endif
 	@$(MAKE) -C deps clean-uv
 
-distclean: cleanall
-	@$(MAKE) -C deps distclean
+distcleanall: cleanall
+	@$(MAKE) -C deps distcleanall
 	@$(MAKE) -C doc cleanall
 	rm -fr $(build_prefix)
 
 .PHONY: default debug release julia-debug julia-release \
-	test testall testall1 test-* clean distclean cleanall \
+	test testall testall1 test-* clean distcleanall cleanall \
 	run-julia run-julia-debug run-julia-release run \
 	install dist source-dist git-submodules
 
@@ -360,7 +356,9 @@ perf-%: release
 win-extras:
 	[ -d dist-extras ] || mkdir dist-extras
 ifneq ($(BUILD_OS),WINNT)
+ifeq (,$(findstring CYGWIN,$(BUILD_OS)))
 	cp /usr/lib/p7zip/7z /usr/lib/p7zip/7z.so dist-extras
+endif
 endif
 ifneq (,$(filter $(ARCH), i386 i486 i586 i686))
 	cd dist-extras && \
@@ -386,9 +384,10 @@ endif
 	cd dist-extras && \
 	$(JLDOWNLOAD) http://downloads.sourceforge.net/sevenzip/7z920_extra.7z && \
 	$(JLDOWNLOAD) https://unsis.googlecode.com/files/nsis-2.46.5-Unicode-setup.exe && \
+	chmod a+x 7z.exe && \
+	chmod a+x 7z.dll && \
 	$(call spawn,./7z.exe) x -y -onsis nsis-2.46.5-Unicode-setup.exe && \
 	chmod a+x ./nsis/makensis.exe && \
-	chmod a+x 7z.exe && \
 	7z x -y mingw-libexpat.rpm -so > mingw-libexpat.cpio && \
 	7z e -y mingw-libexpat.cpio && \
 	7z x -y mingw-zlib.rpm -so > mingw-zlib.cpio && \

@@ -5,14 +5,31 @@
 @test exponent(12.8) == 3
 
 # degree-based trig functions
-for x = -400:40:400
-    @test_approx_eq_eps sind(x) sin(pi/180*x) eps(pi/180*x)
-    @test_approx_eq_eps cosd(x) cos(pi/180*x) eps(pi/180*x)
+for T = (Float32,Float64)
+    for x = -400:40:400
+        @test_approx_eq_eps sind(convert(T,x))::T convert(T,sin(pi/180*x)) eps(deg2rad(convert(T,x)))
+        @test_approx_eq_eps cosd(convert(T,x))::T convert(T,cos(pi/180*x)) eps(deg2rad(convert(T,x)))
+    end
+    for x = 0.0:180:720
+        @test sind(convert(T,x)) === zero(T)
+        @test sind(-convert(T,x)) === -zero(T)
+    end
+
+    for x = -3:0.3:3
+        @test_approx_eq_eps sinpi(convert(T,x))::T convert(T,sin(pi*x)) eps(pi*convert(T,x))
+        @test_approx_eq_eps cospi(convert(T,x))::T convert(T,cos(pi*x)) eps(pi*convert(T,x))
+    end
+    for x = 0.0:1.0:4.0
+        @test sinpi(convert(T,x)) === zero(T)
+        @test sinpi(-convert(T,x)) === -zero(T)
+    end
 end
 
-for x = -3:0.3:3
-    @test_approx_eq_eps sinpi(x) sin(pi*x) eps(pi*x)
-    @test_approx_eq_eps cospi(x) cos(pi*x) eps(pi*x)
+# check type stability
+for T = (Float32,Float64,BigFloat)
+    for f = (sind,cosd,sinpi,cospi)
+        @test Base.return_types(f,(T,)) == [T]
+    end
 end
 
 
@@ -49,8 +66,8 @@ end
 @test_approx_eq airyprime(1.8) -0.0685247801186109345638
 @test_approx_eq airybi(1.8) 2.595869356743906290060
 @test_approx_eq airybiprime(1.8) 2.98554005084659907283
-@test_throws airy(200im)
-@test_throws airybi(200)
+@test_throws Base.Math.AmosException airy(200im)
+@test_throws Base.Math.AmosException airybi(200)
 
 # besselh
 true_h133 = 0.30906272225525164362 - 0.53854161610503161800im
@@ -58,7 +75,7 @@ true_h133 = 0.30906272225525164362 - 0.53854161610503161800im
 @test_approx_eq besselh(-3,1,3) -true_h133
 @test_approx_eq besselh(3,2,3) conj(true_h133)
 @test_approx_eq besselh(-3,2,3) -conj(true_h133)
-@test_throws besselh(1,0)
+@test_throws Base.Math.AmosException besselh(1,0)
 
 
 # besseli
@@ -67,7 +84,7 @@ true_i33 = 0.95975362949600785698
 @test_approx_eq besseli(-3,3) true_i33
 @test_approx_eq besseli(3,-3) -true_i33
 @test_approx_eq besseli(-3,-3) -true_i33
-@test_throws besseli(1,1000)
+@test_throws Base.Math.AmosException besseli(1,1000)
 
 # besselj
 @test besselj(0,0) == 1
@@ -90,31 +107,38 @@ j43 = besselj(4,3.)
 
 @test_approx_eq j33 0.30906272225525164362
 @test_approx_eq j43 0.13203418392461221033
-@test_throws    besselj(0.1, -0.4)
+@test_throws DomainError    besselj(0.1, -0.4)
 @test_approx_eq besselj(0.1, complex(-0.4)) 0.820421842809028916 + 0.266571215948350899im
 @test_approx_eq besselj(3.2, 1.3+0.6im) 0.01135309305831220201 + 0.03927719044393515275im
 @test_approx_eq besselj(1, 3im) 3.953370217402609396im
-@test_throws besselj(20,1000im)
+@test_throws Base.Math.AmosException besselj(20,1000im)
 
 # besselk
 true_k33 = 0.12217037575718356792
 @test_approx_eq besselk(3,3) true_k33
 @test_approx_eq besselk(-3,3) true_k33
 true_k3m3 = -0.1221703757571835679 - 3.0151549516807985776im
-@test_throws besselk(3,-3)
+@test_throws DomainError besselk(3,-3)
 @test_approx_eq besselk(3,complex(-3)) true_k3m3
 @test_approx_eq besselk(-3,complex(-3)) true_k3m3
-@test_throws besselk(200,0.01)
-
+@test_throws Base.Math.AmosException besselk(200,0.01)
+# issue #6564
+@test besselk(1.0,0.0) == Inf
 
 # bessely
 y33 = bessely(3,3.)
 @test bessely(3,3) == y33
 @test_approx_eq bessely(-3,3) -y33
 @test_approx_eq y33 -0.53854161610503161800
-@test_throws bessely(3,-3)
+@test_throws DomainError bessely(3,-3)
 @test_approx_eq bessely(3,complex(-3)) 0.53854161610503161800 - 0.61812544451050328724im
-@test_throws bessely(200.5,0.1)
+@test_throws Base.Math.AmosException bessely(200.5,0.1)
+
+# issue #6653
+for f in (besselj,bessely,besseli,besselk,hankelh1,hankelh2)
+    @test_approx_eq f(0,1) f(0,complex128(1))
+    @test_approx_eq f(0,1) f(0,complex64(1))
+end
 
 # beta, lbeta
 @test_approx_eq beta(3/2,7/2) 5π/128

@@ -10,10 +10,18 @@ abstract UVServer
 typealias UVHandle Ptr{Void}
 typealias UVStream AsyncStream
 
+# A dict of all libuv handles that are being waited on somewhere in the system 
+# and should thus not be garbage collected
+const uvhandles = ObjectIdDict()
+
+preserve_handle(x) = uvhandles[x] = get(uvhandles,x,0)+1
+unpreserve_handle(x) = (v = uvhandles[x]; v == 1 ? pop!(uvhandles,x) : (uvhandles[x] = v-1); nothing)
+
 #Wrapper for an OS file descriptor (on both Unix and Windows)
 immutable RawFD
     fd::Int32
     RawFD(fd::Integer) = new(int32(fd))
+    RawFD(fd::RawFD) = fd
 end
 
 convert(::Type{Int32}, fd::RawFD) = fd.fd
@@ -104,9 +112,12 @@ type Pipe <: AsyncStream
         false,Condition())
 end
 function Pipe()
-    handle = malloc_pipe()
+    handle = c_malloc(_sizeof_uv_named_pipe)
     try
-        return init_pipe!(Pipe(handle);readable=true)
+        ret = Pipe(handle)
+        associate_julia_struct(ret.handle,ret)
+        finalizer(ret,uvfinalize)
+        return init_pipe!(ret;readable=true)
     catch
         c_free(handle)
         rethrow()
@@ -133,17 +144,21 @@ function init_pipe!(pipe::Union(Pipe,PipeServer);readable::Bool=false,writable=f
     elseif pipe.status != StatusUninit
         error("pipe is already initialized")
     end
-    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Any), pipe.handle, writable,readable,julia_only,pipe))
+    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), pipe.handle, writable,readable,julia_only))
     pipe.status = StatusInit
     pipe
 end
 
 function PipeServer()
-    handle = malloc_pipe()
+    handle = c_malloc(_sizeof_uv_named_pipe)
     try
-        return init_pipe!(PipeServer(handle);readable=true)
+        ret = PipeServer(handle)
+        associate_julia_struct(ret.handle,ret)
+        finalizer(ret,uvfinalize)
+        return init_pipe!(ret;readable=true)
     catch
         c_free(handle)
+        c_free(handle-1)
         rethrow()
     end
 end
@@ -174,6 +189,7 @@ function TTY(fd::RawFD; readable::Bool = false)
     handle = c_malloc(_sizeof_uv_tty)
     ret = TTY(handle)
     associate_julia_struct(handle,ret)
+    finalizer(ret,uvfinalize)
     # This needs to go after associate_julia_struct so that there 
     # is no garbage in the ->data field
     uv_error("TTY",ccall(:uv_tty_init,Int32,(Ptr{Void},Ptr{Void},Int32,Int32),eventloop(),handle,fd.fd,readable))
@@ -205,8 +221,9 @@ make_stdout_stream() = _uv_tty2tty(ccall(:jl_stdout_stream, Ptr{Void}, ()))
 
 associate_julia_struct(handle::Ptr{Void},jlobj::ANY) = 
     ccall(:jl_uv_associate_julia_struct,Void,(Ptr{Void},Any),handle,jlobj)
+disassociate_julia_struct(uv) = disassociate_julia_struct(uv.handle)
 disassociate_julia_struct(handle::Ptr{Void}) = 
-    ccall(:jl_uv_disassociate_julia_struct,Void,(Ptr{Void},),handle)
+    handle != C_NULL && ccall(:jl_uv_disassociate_julia_struct,Void,(Ptr{Void},),handle)
 
 function init_stdio(handle)
     t = ccall(:jl_uv_handle_type,Int32,(Ptr{Void},),handle)
@@ -224,8 +241,18 @@ function init_stdio(handle)
         end
         ret.status = StatusOpen
         ret.line_buffered = false  
-        ccall(:jl_uv_associate_julia_struct,Void,(Ptr{Void},Any),ret.handle,ret)     
+        associate_julia_struct(ret.handle,ret)
+        finalizer(ret,uvfinalize)
         return ret
+    end
+end
+
+function stream_wait(x,c...)
+    preserve_handle(x)
+    try
+        return wait(c...)
+    finally
+        unpreserve_handle(x)
     end
 end
 
@@ -241,7 +268,6 @@ function reinit_stdio()
     global STDIN = init_stdio(ccall(:jl_stdin_stream ,Ptr{Void},()))
     global STDOUT = init_stdio(ccall(:jl_stdout_stream,Ptr{Void},()))
     global STDERR = init_stdio(ccall(:jl_stderr_stream,Ptr{Void},()))
-    reinit_displays() # since Multimedia.displays uses STDOUT as fallback
 end
 
 flush(::AsyncStream) = nothing
@@ -262,7 +288,7 @@ end
 function wait_connected(x)
     check_open(x)
     while x.status == StatusConnecting
-        wait(x.connectnotify)
+        stream_wait(x,x.connectnotify)
         check_open(x)
     end
 end
@@ -270,7 +296,7 @@ end
 function wait_readbyte(x::AsyncStream, c::Uint8)
     while isopen(x) && search(x.buffer,c) <= 0
         start_reading(x)
-        wait(x.readnotify)
+        stream_wait(x,x.readnotify)
     end
 end
 
@@ -279,11 +305,11 @@ wait_readline(x) = wait_readbyte(x, uint8('\n'))
 function wait_readnb(x::AsyncStream, nb::Int)
     while isopen(x) && nb_available(x.buffer) < nb
         start_reading(x)
-        wait(x.readnotify)
+        stream_wait(x,x.readnotify)
     end
 end
 
-wait_close(x) = if isopen(x) wait(x.closenotify); end
+wait_close(x) = if isopen(x) stream_wait(x,x.closenotify); end
 
 #from `connect`
 function _uv_hook_connectcb(sock::AsyncStream, status::Int32)
@@ -317,18 +343,18 @@ end
 
 ## BUFFER ##
 ## Allocate a simple buffer
-function alloc_request(buffer::IOBuffer, recommended_size::Int32)
+function alloc_request(buffer::IOBuffer, recommended_size::Uint)
     ensureroom(buffer, int(recommended_size))
     ptr = buffer.append ? buffer.size + 1 : buffer.ptr
     return (pointer(buffer.data, ptr), length(buffer.data)-ptr+1)
 end
-function _uv_hook_alloc_buf(stream::AsyncStream, recommended_size::Int32)
+function _uv_hook_alloc_buf(stream::AsyncStream, recommended_size::Uint)
     (buf,size) = alloc_request(stream.buffer, recommended_size)
     @assert size>0 # because libuv requires this (TODO: possibly stop reading too if it fails)
-    (buf,int32(size))
+    (buf,uint(size))
 end
 
-function notify_filled(buffer::IOBuffer, nread::Int, base::Ptr{Void}, len::Int32)
+function notify_filled(buffer::IOBuffer, nread::Int, base::Ptr{Void}, len::Uint)
     if buffer.append
         buffer.size += nread
     else
@@ -351,7 +377,8 @@ function notify_filled(stream::AsyncStream, nread::Int)
     end
 end
 
-function _uv_hook_readcb(stream::AsyncStream, nread::Int, base::Ptr{Void}, len::Int32)
+const READ_BUFFER_SZ=10485760           # 10 MB 
+function _uv_hook_readcb(stream::AsyncStream, nread::Int, base::Ptr{Void}, len::Uint)
     if nread < 0
         if nread != UV_EOF
             # This is a fatal connectin error. Shutdown requests as per the usual 
@@ -359,15 +386,27 @@ function _uv_hook_readcb(stream::AsyncStream, nread::Int, base::Ptr{Void}, len::
             ccall(:jl_forceclose_uv,Void,(Ptr{Void},),stream.handle)
             notify_error(stream.readnotify, UVError("readcb",nread))
         else
-            close(stream)
-            notify(stream.readnotify)
+            if isa(stream,TTY)
+                notify_error(stream.readnotify, EOFError())
+            else
+                close(stream)
+                notify(stream.readnotify)
+            end
         end
     else
         notify_filled(stream.buffer, nread, base, len)
         notify_filled(stream, nread)
         notify(stream.readnotify)
     end
-end
+
+    # Stop reading when 
+    # 1) when we have an infinite buffer, and we have accumulated a lot of unread data OR
+    # 2) we have an alternate buffer that has reached its limit. 
+    if (is_maxsize_unlimited(stream.buffer) && (nb_available(stream.buffer) > READ_BUFFER_SZ )) ||
+       (nb_available(stream.buffer) == stream.buffer.maxsize)
+        stop_reading(stream)
+    end
+ end
 ##########################################
 # Async Workers
 ##########################################
@@ -380,24 +419,8 @@ type SingleAsyncWork <: AsyncWork
     function SingleAsyncWork(cb::Function)
         this = new(c_malloc(_sizeof_uv_async), cb)
         associate_julia_struct(this.handle, this)
+        preserve_handle(this)
         err = ccall(:uv_async_init,Cint,(Ptr{Void},Ptr{Void},Ptr{Void}),eventloop(),this.handle,uv_jl_asynccb::Ptr{Void})
-        this
-    end
-end
-
-type IdleAsyncWork <: AsyncWork
-    handle::Ptr{Void}
-    cb::Function
-    function IdleAsyncWork(cb::Function)
-        this = new(c_malloc(_sizeof_uv_idle), cb)
-        disassociate_julia_struct(this)
-        err = ccall(:uv_idle_init,Cint,(Ptr{Void},Ptr{Void}),eventloop(),this)
-        if err != 0
-            c_free(this.handle)
-            this.handle = C_NULL
-            error(UVError("uv_make_timer",err))
-        end
-        finalizer(this,close)
         this
     end
 end
@@ -412,12 +435,12 @@ type Timer <: AsyncWork
         # ->data field
         disassociate_julia_struct(this.handle)
         err = ccall(:uv_timer_init,Cint,(Ptr{Void},Ptr{Void}),eventloop(),this.handle)
-        if err != 0 
+        if err != 0
             c_free(this.handle)
             this.handle = C_NULL
             error(UVError("uv_make_timer",err))
         end
-        finalizer(this,close)
+        finalizer(this,uvfinalize)
         this
     end
 end
@@ -441,33 +464,32 @@ function _uv_hook_asynccb(async::AsyncWork, status::Int32)
     if isa(async, Timer)
         if ccall(:uv_timer_get_repeat, Uint64, (Ptr{Void},), async.handle) == 0
             # timer is stopped now
-            disassociate_julia_struct(async.handle) # we want gc to be able to cleanup
+            disassociate_julia_struct(async.handle)
         end
     end
     try
         async.cb(async, status)
-    catch err
-        #bt = catch_backtrace()
-        if isa(err, MethodError)
-            warn_once("async callbacks should take an AsyncWork object as the first argument")
-            async.cb(status)
-            return
-        end
-        rethrow(err)
+    catch
     end
     nothing
 end
 
 function start_timer(timer::Timer, timeout::Real, repeat::Real)
-    associate_julia_struct(timer.handle, timer) # we don't want gc to cleanup
+    associate_julia_struct(timer.handle, timer)
+    preserve_handle(timer)
     ccall(:uv_update_time,Void,(Ptr{Void},),eventloop())
     ccall(:uv_timer_start,Cint,(Ptr{Void},Ptr{Void},Uint64,Uint64),
-        timer.handle, uv_jl_asynccb::Ptr{Void}, uint64(round(timeout*1000))+1, uint64(round(repeat*1000)))
+          timer.handle, uv_jl_asynccb::Ptr{Void}, uint64(round(timeout*1000))+1, uint64(round(repeat*1000)))
 end
 
 function stop_timer(timer::Timer)
+    # ignore multiple calls to stop_timer
+    !haskey(uvhandles, timer) && return
+    timer.handle == C_NULL && return
+
     ccall(:uv_timer_stop,Cint,(Ptr{Void},),timer.handle)
-    disassociate_julia_struct(timer.handle) # we want gc to be able to cleanup
+    disassociate_julia_struct(timer.handle)
+    unpreserve_handle(timer)
 end
 
 function sleep(sec::Real)
@@ -481,22 +503,11 @@ function sleep(sec::Real)
     end)
     start_timer(timer, float(sec), 0)
     try
-        wait(w)
+        stream_wait(timer,w)
     finally
         stop_timer(timer)
     end
     nothing
-end
-
-function add_idle_cb(cb::Function)
-    work = IdleAsyncWork(cb)
-    associate_julia_struct(work.handle, work) # we don't want gc to cleanup
-    ccall(:uv_idle_start,Cint,(Ptr{Void},Ptr{Void}),work.handle,uv_jl_asynccb::Ptr{Void})
-    work
-end
-
-function queueAsync(work::SingleAsyncWork)
-    ccall(:uv_async_send,Cint,(Ptr{Void},),work.handle)
 end
 
 ## event loop ##
@@ -516,48 +527,52 @@ function process_events(block::Bool)
 end
 
 ## pipe functions ##
-malloc_pipe() = c_malloc(_sizeof_uv_named_pipe)
+function malloc_julia_pipe(x) 
+    x.handle = c_malloc(_sizeof_uv_named_pipe)
+    associate_julia_struct(x.handle,x)
+    finalizer(x,uvfinalize)
+end
 
 _link_pipe(read_end::Ptr{Void},write_end::Ptr{Void}) = uv_error("pipe_link",ccall(:uv_pipe_link, Int32, (Ptr{Void}, Ptr{Void}), read_end, write_end))
 
 function link_pipe(read_end::Ptr{Void},readable_julia_only::Bool,write_end::Ptr{Void},writable_julia_only::Bool,readpipe::AsyncStream,writepipe::AsyncStream)
     #make the pipe an unbuffered stream for now
     #TODO: this is probably not freeing memory properly after errors
-    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Any), read_end, 0, 1, readable_julia_only, readpipe))
-    uv_error("init_pipe(2)",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Any), write_end, 1, 0, writable_julia_only, writepipe))
+    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), read_end, 0, 1, readable_julia_only))
+    uv_error("init_pipe(2)",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), write_end, 1, 0, writable_julia_only))
     _link_pipe(read_end,write_end)
 end
 
 function link_pipe(read_end::Ptr{Void},readable_julia_only::Bool,write_end::Ptr{Void},writable_julia_only::Bool)
-    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Ptr{Void}), read_end, 0, 1, readable_julia_only, C_NULL))
-    uv_error("init_pipe(2)",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Ptr{Void}), write_end, 1, 0, writable_julia_only, C_NULL))
+    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), read_end, 0, 1, readable_julia_only))
+    uv_error("init_pipe(2)",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), write_end, 1, 0, writable_julia_only))
     _link_pipe(read_end,write_end)
 end
 
 function link_pipe(read_end::Pipe,readable_julia_only::Bool,write_end::Ptr{Void},writable_julia_only::Bool)
     if read_end.handle == C_NULL
-        read_end.handle = malloc_pipe()
+        malloc_julia_pipe(read_end)
     end
     init_pipe!(read_end; readable = true, writable = false, julia_only = readable_julia_only)
-    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Any), write_end, 1, 0, writable_julia_only, read_end))
+    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), write_end, 1, 0, writable_julia_only))
     _link_pipe(read_end.handle,write_end)
     read_end.status = StatusOpen
 end
 function link_pipe(read_end::Ptr{Void},readable_julia_only::Bool,write_end::Pipe,writable_julia_only::Bool)
     if write_end.handle == C_NULL
-        write_end.handle = malloc_pipe()
+        malloc_julia_pipe(write_end)
     end
-    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32,Any), read_end, 0, 1, readable_julia_only, write_end))
+    uv_error("init_pipe",ccall(:jl_init_pipe, Cint, (Ptr{Void},Int32,Int32,Int32), read_end, 0, 1, readable_julia_only))
     init_pipe!(write_end; readable = false, writable = true, julia_only = writable_julia_only)
     _link_pipe(read_end,write_end.handle)
     write_end.status = StatusOpen
 end
 function link_pipe(read_end::Pipe,readable_julia_only::Bool,write_end::Pipe,writable_julia_only::Bool)
     if write_end.handle == C_NULL
-        write_end.handle = malloc_pipe()
+        malloc_julia_pipe(write_end)
     end
     if read_end.handle == C_NULL
-        read_end.handle = malloc_pipe()
+        malloc_julia_pipe(read_end)
     end
     init_pipe!(read_end; readable = true, writable = false, julia_only = readable_julia_only)
     init_pipe!(write_end; readable = false, writable = true, julia_only = writable_julia_only)
@@ -586,7 +601,7 @@ function start_reading(stream::AsyncStream)
             error("tried to read a stream that is not readable")
         end
         ret = ccall(:uv_read_start,Cint,(Ptr{Void},Ptr{Void},Ptr{Void}),
-            handle(stream),uv_jl_alloc_buf::Ptr{Void},uv_jl_readcb::Ptr{Void})
+                    handle(stream),uv_jl_alloc_buf::Ptr{Void},uv_jl_readcb::Ptr{Void})
         stream.status = StatusActive
         ret
     elseif stream.status == StatusActive
@@ -624,17 +639,44 @@ function readall(stream::AsyncStream)
     return takebuf_string(stream.buffer)
 end
 
-function read{T}(this::AsyncStream, a::Array{T})
+function read!{T}(s::AsyncStream, a::Array{T})
     isbits(T) || error("read from buffer only supports bits types or arrays of bits types")
-    nb = length(a)*sizeof(T)
-    buf = this.buffer
-    @assert buf.seekable == false
-    @assert buf.maxsize >= nb
-    start_reading(this)
-    wait_readnb(this,nb)
-    read(this.buffer, a)
+    nb = length(a) * sizeof(T)
+    read!(s, reshape(reinterpret(Uint8, a), nb))
     return a
 end
+
+function read!{Uint8}(s::AsyncStream, a::Vector{Uint8})
+    nb = length(a)
+    sbuf = s.buffer
+    @assert sbuf.seekable == false
+    @assert sbuf.maxsize >= nb
+    
+    if nb_available(sbuf) >= nb
+        return read!(sbuf, a)
+    end
+    
+    if nb <= 65536 # Arbitrary 64K limit under which we are OK with copying the array from the stream's buffer
+        wait_readnb(s,nb)
+        read!(sbuf, a)
+    else
+        stop_reading(s) # Just playing it safe, since we are going to switch buffers.
+        newbuf = PipeBuffer(a, nb) 
+        newbuf.size = 0
+        s.buffer = newbuf
+        write(newbuf, sbuf) 
+        wait_readnb(s,nb)
+        s.buffer = sbuf
+    end
+    return a
+end
+
+function read{T}(s::AsyncStream, ::Type{T}, dims::Dims) 
+    isbits(T) || error("read from buffer only supports bits types or arrays of bits types")
+    nb = prod(dims)*sizeof(T)
+    a = read!(s, Array(Uint8, nb)) 
+    reshape(reinterpret(T, a), dims)
+end    
 
 function read(this::AsyncStream,::Type{Uint8})
     buf = this.buffer
@@ -704,30 +746,19 @@ end
 write!(s::AsyncStream, string::ByteString) = write!(s,string.data)
 
 function _uv_hook_writecb(s::AsyncStream, req::Ptr{Void}, status::Int32)
-    status < 0 && close(s)
+    if status < 0
+        err = UVError("write",status)
+        showerror(STDERR, err, backtrace())
+    end
     nothing
 end
-
-# Do not task-block TTY methods. These writes are process-blocking anyway, so we use the non-copying versions
-write(s::TTY, b::Uint8) = @uv_write 1 ccall(:jl_putc_copy, Int32, (Uint8, Ptr{Void}, Ptr{Void}, Ptr{Void}), b, handle(s), uvw, uv_jl_writecb::Ptr{Void})
-write(s::TTY, c::Char) = @uv_write utf8sizeof(c) ccall(:jl_pututf8_copy, Int32, (Ptr{Void},Uint32, Ptr{Void}, Ptr{Void}), handle(s), c, uvw, uv_jl_writecb::Ptr{Void})
-function write{T}(s::TTY, a::Array{T}) 
-    if isbits(T)
-        n = uint(length(a)*sizeof(T))
-        @uv_write n ccall(:jl_write_no_copy, Int32, (Ptr{Void}, Ptr{Void}, Uint, Ptr{Void}, Ptr{Void}), handle(s), a, n, uvw, uv_jl_writecb::Ptr{Void})
-    else
-        check_open(s)
-        invoke(write,(IO,Array),s,a)
-    end
-end
-write(s::TTY, p::Ptr, nb::Integer) = @uv_write nb ccall(:jl_write_no_copy, Int32, (Ptr{Void}, Ptr{Void}, Uint, Ptr{Void}, Ptr{Void}), handle(s), p, nb, uvw, uv_jl_writecb::Ptr{Void})
 
 function write(s::AsyncStream, b::Uint8)
     @uv_write 1 ccall(:jl_putc_copy, Int32, (Uint8, Ptr{Void}, Ptr{Void}, Ptr{Void}), b, handle(s), uvw, uv_jl_writecb_task::Ptr{Void})
     ct = current_task()
     uv_req_set_data(uvw,ct)
     ct.state = :waiting
-    wait()
+    stream_wait(ct)
     return 1
 end
 function write(s::AsyncStream, c::Char)
@@ -735,7 +766,7 @@ function write(s::AsyncStream, c::Char)
     ct = current_task()
     uv_req_set_data(uvw,ct)
     ct.state = :waiting
-    wait()
+    stream_wait(ct)
     return utf8sizeof(c)
 end
 function write{T}(s::AsyncStream, a::Array{T})
@@ -745,7 +776,7 @@ function write{T}(s::AsyncStream, a::Array{T})
         ct = current_task()
         uv_req_set_data(uvw,ct)
         ct.state = :waiting
-        wait()
+        stream_wait(ct)
         return int(length(a)*sizeof(T))
     else
         check_open(s)
@@ -757,7 +788,7 @@ function write(s::AsyncStream, p::Ptr, nb::Integer)
     ct = current_task()
     uv_req_set_data(uvw,ct)
     ct.state = :waiting
-    wait()
+    stream_wait(ct)
     return int(nb)
 end
 
@@ -765,9 +796,10 @@ function _uv_hook_writecb_task(s::AsyncStream,req::Ptr{Void},status::Int32)
     d = uv_req_data(req)
     if status < 0
         err = UVError("write",status)
-        close(s)
         if d != C_NULL
             schedule(unsafe_pointer_to_objref(d)::Task,err,error=true)
+        else
+            showerror(STDERR, err, backtrace())
         end
     elseif d != C_NULL
         schedule(unsafe_pointer_to_objref(d)::Task)
@@ -819,7 +851,7 @@ function accept(server::UVServer, client::AsyncStream)
         elseif err != UV_EAGAIN
             uv_error("accept",err)
         end
-        wait(server.connectnotify)
+        stream_wait(server,server.connectnotify)
     end
     error("server was closed while attempting to accept a client")
 end
@@ -828,7 +860,7 @@ const BACKLOG_DEFAULT = 511
 
 function _listen(sock::UVServer; backlog::Integer=BACKLOG_DEFAULT)
     err = ccall(:uv_listen, Cint, (Ptr{Void}, Cint, Ptr{Void}),
-        sock.handle, backlog, uv_jl_connectioncb::Ptr{Void})
+                sock.handle, backlog, uv_jl_connectioncb::Ptr{Void})
     sock.status = StatusActive
     err
 end
@@ -836,8 +868,8 @@ end
 function bind(server::PipeServer, name::ASCIIString)
     @assert server.status == StatusInit
     err = ccall(:uv_pipe_bind, Int32, (Ptr{Void}, Ptr{Uint8}),
-            server.handle, name)
-    if err != 0  
+                server.handle, name)
+    if err != 0
         if err != UV_EADDRINUSE && err != UV_EACCES
             error(UVError("bind",err))
         else
@@ -875,20 +907,34 @@ end
 connect(path::String) = connect(Pipe(),path)
 
 dup(x::RawFD) = RawFD(ccall((@windows? :_dup : :dup),Int32,(Int32,),x.fd))
-dup(src::RawFD,target::RawFD) = systemerror("dup",ccall((@windows? :_dup2 : :dup2),Int32,(Int32,Int32),src.fd,target.fd) == -1)
+dup(src::RawFD,target::RawFD) = systemerror("dup",-1==
+    ccall((@windows? :_dup2 : :dup2),Int32,
+    (Int32,Int32),src.fd,target.fd))
 
-@unix_only _fd(x::AsyncStream) = RawFD(ccall(:jl_uv_pipe_fd,Int32,(Ptr{Void},),x.handle))
-@windows_only _fd(x::Pipe) = WindowsRawSocket(ccall(:jl_uv_pipe_handle,Ptr{Void},(Ptr{Void},),x.handle))
+_fd(x::IOStream) = RawFD(fd(x))
+@unix_only _fd(x::AsyncStream) = RawFD(ccall(:jl_uv_handle,Int32,(Ptr{Void},),x.handle))
+@windows_only _fd(x::AsyncStream) = WindowsRawSocket(
+    ccall(:jl_uv_handle,Ptr{Void},(Ptr{Void},),x.handle))
 
 for (x,writable,unix_fd,c_symbol) in ((:STDIN,false,0,:jl_uv_stdin),(:STDOUT,true,1,:jl_uv_stdout),(:STDERR,true,2,:jl_uv_stderr))
     f = symbol("redirect_"*lowercase(string(x)))
+    _f = symbol(string("_",f))
     @eval begin
-        function ($f)(handle::AsyncStream)
+        function ($_f)(stream)
             global $x
-            @windows? ccall(:SetStdHandle,stdcall,Int32,(Uint32,Ptr{Void}),$(-10-unix_fd),_fd(handle).handle) : dup(_fd(handle),  RawFD($unix_fd))
-            unsafe_store!(cglobal($(Expr(:quote,c_symbol)),Ptr{Void}),handle.handle)
-            $x = handle
+            @windows? (
+                ccall(:SetStdHandle,stdcall,Int32,(Uint32,Ptr{Void}),
+                    $(-10-unix_fd),_get_osfhandle(_fd(stream)).handle) :
+                dup(_fd(stream),  RawFD($unix_fd)) )
+            $x = stream
         end
+        function ($f)(handle::AsyncStream)
+            $(_f)(handle)
+            unsafe_store!(cglobal($(Expr(:quote,c_symbol)),Ptr{Void}),
+                handle.handle)
+            handle
+        end
+        ($f)(handle::IOStream) = ($_f)(handle)
         function ($f)()
             read,write = (Pipe(C_NULL), Pipe(C_NULL))
             link_pipe(read,$(writable),write,$(!writable))

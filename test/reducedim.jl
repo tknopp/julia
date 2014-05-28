@@ -12,12 +12,18 @@ safe_minimum{T}(A::Array{T}, region) = safe_mapslices(minimum, A, region)
 Areduc = rand(3, 4, 5, 6)
 for region in {
         1, 2, 3, 4, 5, (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4),
-	(1, 2, 3), (1, 3, 4), (2, 3, 4), (1, 2, 3, 4)}
+    (1, 2, 3), (1, 3, 4), (2, 3, 4), (1, 2, 3, 4)}
 
-	@test_approx_eq sum(Areduc, region) safe_sum(Areduc, region)
-	@test_approx_eq prod(Areduc, region) safe_prod(Areduc, region)
-	@test_approx_eq maximum(Areduc, region) safe_maximum(Areduc, region)
-	@test_approx_eq minimum(Areduc, region) safe_minimum(Areduc, region)
+    r = fill(NaN, Base.reduced_dims(size(Areduc), region))
+    @test_approx_eq sum!(r, Areduc) safe_sum(Areduc, region)
+    @test_approx_eq prod!(r, Areduc) safe_prod(Areduc, region)
+    @test_approx_eq maximum!(r, Areduc) safe_maximum(Areduc, region)
+    @test_approx_eq minimum!(r, Areduc) safe_minimum(Areduc, region)
+
+    @test_approx_eq sum(Areduc, region) safe_sum(Areduc, region)
+    @test_approx_eq prod(Areduc, region) safe_prod(Areduc, region)
+    @test_approx_eq maximum(Areduc, region) safe_maximum(Areduc, region)
+    @test_approx_eq minimum(Areduc, region) safe_minimum(Areduc, region)
 end
 
 @test reducedim((a,b) -> a|b, [true false; false false], 1, false) == [true false]
@@ -29,3 +35,13 @@ R = reducedim((a,b) -> a+b, [1 2; 3 4], 2, 0.0)
 # inferred return types
 rt = Base.return_types(reducedim, (Function, Array{Float64, 3}, Int, Float64))
 @test length(rt) == 1 && rt[1] == Array{Float64, 3}
+
+## findmin/findmax
+A = [1.0 3.0 6.0;
+     5.0 2.0 4.0]
+@test findmin(A, (1,)) == ([1.0 2.0 4.0], [1 4 6])
+@test findmin(A, (2,)) == (reshape([1.0,2.0], 2, 1), reshape([1,4], 2, 1))
+@test findmin(A, (1,2)) == (fill(1.0,1,1),fill(1,1,1))
+@test findmax(A, (1,)) == ([5.0 3.0 6.0], [2 3 5])
+@test findmax(A, (2,)) == (reshape([6.0,5.0], 2, 1), reshape([5,2], 2, 1))
+@test findmax(A, (1,2)) == (fill(6.0,1,1),fill(5,1,1))

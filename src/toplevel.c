@@ -17,6 +17,10 @@
 #include "julia.h"
 #include "julia_internal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // current line number in a file
 int jl_lineno = 0;
 
@@ -63,6 +67,12 @@ extern void jl_get_uv_hooks(int);
 extern int base_module_conflict;
 jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
 {
+    static arraylist_t module_stack;
+    static int initialized=0;
+    if (!initialized) {
+        arraylist_new(&module_stack, 0);
+        initialized = 1;
+    }
     assert(ex->head == module_sym);
     jl_module_t *last_module = jl_current_module;
     if (jl_array_len(ex->args) != 3 || !jl_is_expr(jl_exprarg(ex,2))) {
@@ -150,6 +160,15 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
         }
     }
 #endif
+
+    arraylist_push(&module_stack, newm);
+
+    if (jl_current_module == jl_main_module) {
+        while (module_stack.len > 0) {
+            jl_module_run_initializer((jl_module_t *) arraylist_pop(&module_stack));
+        }
+    }
+
     return jl_nothing;
 }
 
@@ -273,12 +292,20 @@ static jl_module_t *eval_import_path_(jl_array_t *args, int retrying)
     while (1) {
         if (jl_binding_resolved_p(m, var)) {
             jl_binding_t *mb = jl_get_binding(m, var);
+            jl_module_t *m0 = m;
             assert(mb != NULL);
-            if (mb->owner == m || mb->imported) {
+            if (mb->owner == m0 || mb->imported) {
                 m = (jl_module_t*)mb->value;
-                if (m == NULL || !jl_is_module(m))
+                if ((mb->owner == m0 && m != NULL && !jl_is_module(m)) ||
+                    (mb->imported && (m == NULL || !jl_is_module(m))))
                     jl_errorf("invalid module path (%s does not name a module)", var->name);
-                break;
+                // If the binding has been resolved but is (1) undefined, and (2) owned
+                // by the module we're importing into, then allow the import into the
+                // undefined variable (by setting m back to m0).
+                if (m == NULL)
+                    m = m0;
+                else
+                    break;
             }
         }
         if (m == jl_main_module) {
@@ -533,9 +560,6 @@ jl_value_t *jl_load(const char *fname)
     }
     jl_value_t *result = jl_parse_eval_all(fpath);
     if (fpath != fname) free(fpath);
-    if (jl_current_module == jl_base_module) {
-        jl_printf(JL_STDOUT, "\x1B[1F\x1B[2K");
-    }
     return result;
 }
 
@@ -563,6 +587,7 @@ void jl_set_datatype_super(jl_datatype_t *tt, jl_value_t *super)
 {
     if (!jl_is_datatype(super) || super == (jl_value_t*)jl_undef_type ||
         !jl_is_abstracttype(super) ||
+        tt->name == ((jl_datatype_t*)super)->name ||
         jl_subtype(super,(jl_value_t*)jl_vararg_type,0) ||
         jl_subtype(super,(jl_value_t*)jl_type_type,0)) {
         jl_errorf("invalid subtyping in definition of %s",tt->name->name->name);
@@ -695,3 +720,7 @@ void jl_check_static_parameter_conflicts(jl_lambda_info_t *li, jl_tuple_t *t, jl
         }
     }
 }
+
+#ifdef __cplusplus
+}
+#endif

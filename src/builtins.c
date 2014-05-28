@@ -28,6 +28,10 @@
 #include "julia_internal.h"
 #include "builtin_proto.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // exceptions -----------------------------------------------------------------
 
 DLLEXPORT void jl_error(const char *str)
@@ -241,6 +245,7 @@ JL_CALLABLE(jl_f_typeassert)
 }
 
 static jl_function_t *jl_append_any_func;
+extern size_t jl_page_size;
 
 JL_CALLABLE(jl_f_apply)
 {
@@ -266,6 +271,9 @@ JL_CALLABLE(jl_f_apply)
                             jl_tuple_len(args[1]));
         }
     }
+    jl_value_t *argarr = NULL;
+    JL_GC_PUSH1(&argarr);
+    jl_value_t *result;
     jl_value_t **newargs;
     size_t n=0, i, j;
     for(i=1; i < nargs; i++) {
@@ -285,15 +293,27 @@ JL_CALLABLE(jl_f_apply)
                     JL_TYPECHK(apply, tuple, args[i]);
                 }
             }
-            goto fancy_apply;
+            argarr = jl_apply(jl_append_any_func, &args[1], nargs-1);
+            assert(jl_typeis(argarr, jl_array_any_type));
+            result = jl_apply((jl_function_t*)args[0], jl_cell_data(argarr), jl_array_len(argarr));
+            JL_GC_POP();
+            return result;
         }
     }
-    newargs = (jl_value_t**)alloca(n * sizeof(jl_value_t*));
+    if (n > jl_page_size/sizeof(jl_value_t*)) {
+        // put arguments on the heap if there are too many
+        argarr = (jl_value_t*)jl_alloc_cell_1d(n);
+        newargs = jl_cell_data(argarr);
+    }
+    else {
+        newargs = (jl_value_t**)alloca(n * sizeof(jl_value_t*));
+    }
     n = 0;
     for(i=1; i < nargs; i++) {
         if (jl_is_tuple(args[i])) {
             jl_tuple_t *t = (jl_tuple_t*)args[i];
-            for(j=0; j < jl_tuple_len(t); j++)
+            size_t al = jl_tuple_len(t);
+            for(j=0; j < al; j++)
                 newargs[n++] = jl_tupleref(t, j);
         }
         else {
@@ -302,14 +322,7 @@ JL_CALLABLE(jl_f_apply)
                 newargs[n++] = jl_cellref(args[i], j);
         }
     }
-    return jl_apply((jl_function_t*)args[0], newargs, n);
-
- fancy_apply: ;
-    jl_value_t *argarr = jl_apply(jl_append_any_func, &args[1], nargs-1);
-    JL_GC_PUSH1(&argarr);
-    assert(jl_typeis(argarr, jl_array_any_type));
-    jl_value_t *result = jl_apply((jl_function_t*)args[0],
-                                  jl_cell_data(argarr), jl_array_len(argarr));
+    result = jl_apply((jl_function_t*)args[0], newargs, n);
     JL_GC_POP();
     return result;
 }
@@ -551,51 +564,6 @@ JL_CALLABLE(jl_f_field_type)
 
 // conversion -----------------------------------------------------------------
 
-static jl_value_t *convert(jl_value_t *to, jl_value_t *x, jl_function_t *conv_f)
-{
-    jl_value_t *args[2];
-    if (jl_subtype(x, (jl_value_t*)to, 1))
-        return x;
-    args[0] = (jl_value_t*)to; args[1] = x;
-    return jl_apply(conv_f, args, 2);
-}
-
-JL_CALLABLE(jl_f_convert_tuple)
-{
-    jl_tuple_t *to = (jl_tuple_t*)args[0];
-    jl_tuple_t *x = (jl_tuple_t*)args[1];
-    if (to == jl_tuple_type)
-        return (jl_value_t*)x;
-    size_t i, cl=jl_tuple_len(x), pl=jl_tuple_len(to);
-    jl_tuple_t *out = jl_alloc_tuple(cl);
-    JL_GC_PUSH1(&out);
-    jl_value_t *ce, *pe=NULL;
-    int pseq=0;
-    jl_function_t *f = (jl_function_t*)args[2];
-    for(i=0; i < cl; i++) {
-        ce = jl_tupleref(x,i);
-        if (pseq) {
-        }
-        else if (i < pl) {
-            pe = jl_tupleref(to,i);
-            if (jl_is_vararg_type(pe)) {
-                pe = jl_tparam0(pe);
-                pseq = 1;
-            }
-        }
-        else {
-            out = NULL;
-            break;
-        }
-        assert(pe != NULL);
-        jl_tupleset(out, i, convert((jl_value_t*)pe, ce, f));
-    }
-    JL_GC_POP();
-    if (out == NULL)
-        jl_error("convert: invalid tuple conversion");
-    return (jl_value_t*)out;
-}
-
 JL_CALLABLE(jl_f_convert_default)
 {
     jl_value_t *to = args[0];
@@ -639,18 +607,30 @@ DLLEXPORT int jl_substrtod(char *str, size_t offset, int len, double *out)
     char *p;
     errno = 0;
     char *bstr = str+offset;
-    *out = strtod(bstr, &p);
-    if ((p == bstr) || (p != (bstr+len)) ||
+    char *pend = bstr+len;
+    int err = 0;
+    if (!(*pend == '\0' || isspace(*pend) || *pend == ',')) {
+        // confusing data outside substring. must copy.
+        char *newstr = malloc(len+1);
+        memcpy(newstr, bstr, len);
+        newstr[len] = 0;
+        bstr = newstr;
+        pend = bstr+len;
+    }
+    *out = strtod_c(bstr, &p);
+    if ((p == bstr) || (p != pend) ||
         (errno==ERANGE && (*out==0 || *out==HUGE_VAL || *out==-HUGE_VAL)))
-        return 1;
-    return 0;
+        err = 1;
+    if (bstr != str+offset)
+        free(bstr);
+    return err;
 }
 
 DLLEXPORT int jl_strtod(char *str, double *out)
 {
     char *p;
     errno = 0;
-    *out = strtod(str, &p);
+    *out = strtod_c(str, &p);
     if (p == str ||
         (errno==ERANGE && (*out==0 || *out==HUGE_VAL || *out==-HUGE_VAL)))
         return 1;
@@ -662,21 +642,38 @@ DLLEXPORT int jl_strtod(char *str, double *out)
     return 0;
 }
 
+// MSVC pre-2013 did not define HUGE_VALF
+#ifndef HUGE_VALF
+#define HUGE_VALF (1e25f * 1e25f)
+#endif
+
 DLLEXPORT int jl_substrtof(char *str, int offset, int len, float *out)
 {
     char *p;
     errno = 0;
     char *bstr = str+offset;
+    char *pend = bstr+len;
+    int err = 0;
+    if (!(*pend == '\0' || isspace(*pend) || *pend == ',')) {
+        // confusing data outside substring. must copy.
+        char *newstr = malloc(len+1);
+        memcpy(newstr, bstr, len);
+        newstr[len] = 0;
+        bstr = newstr;
+        pend = bstr+len;
+    }
 #if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-    *out = (float)strtod(bstr, &p);
+    *out = (float)strtod_c(bstr, &p);
 #else
-    *out = strtof(bstr, &p);
+    *out = strtof_c(bstr, &p);
 #endif
 
-    if ((p == bstr) || (p != (bstr+len)) ||
+    if ((p == bstr) || (p != pend) ||
         (errno==ERANGE && (*out==0 || *out==HUGE_VALF || *out==-HUGE_VALF)))
-        return 1;
-    return 0;
+        err = 1;
+    if (bstr != str+offset)
+        free(bstr);
+    return err;
 }
 
 DLLEXPORT int jl_strtof(char *str, float *out)
@@ -684,9 +681,9 @@ DLLEXPORT int jl_strtof(char *str, float *out)
     char *p;
     errno = 0;
 #if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-    *out = (float)strtod(str, &p);
+    *out = (float)strtod_c(str, &p);
 #else
-    *out = strtof(str, &p);
+    *out = strtof_c(str, &p);
 #endif
     if (p == str ||
         (errno==ERANGE && (*out==0 || *out==HUGE_VALF || *out==-HUGE_VALF)))
@@ -882,7 +879,7 @@ JL_CALLABLE(jl_f_invoke)
     JL_TYPECHK(invoke, tuple, args[1]);
     jl_check_type_tuple((jl_tuple_t*)args[1], jl_gf_name(args[0]), "invoke");
     if (!jl_tuple_subtype(&args[2], nargs-2, &jl_tupleref(args[1],0),
-                          jl_tuple_len(args[1]), 1, 0))
+                          jl_tuple_len(args[1]), 1))
         jl_error("invoke: argument type error");
     return jl_gf_invoke((jl_function_t*)args[0],
                         (jl_tuple_t*)args[1], &args[2], nargs-2);
@@ -997,7 +994,6 @@ void jl_init_primitives(void)
     
     // functions for internal use
     add_builtin_func("convert_default", jl_f_convert_default);
-    add_builtin_func("convert_tuple", jl_f_convert_tuple);
     add_builtin_func("tupleref",  jl_f_tupleref);
     add_builtin_func("tuplelen",  jl_f_tuplelen);
     add_builtin_func("getfield",  jl_f_get_field);
@@ -1039,7 +1035,6 @@ void jl_init_primitives(void)
     add_builtin("Task", (jl_value_t*)jl_task_type);
 
     add_builtin("AbstractArray", (jl_value_t*)jl_abstractarray_type);
-    add_builtin("StoredArray", (jl_value_t*)jl_storedarray_type);
     add_builtin("DenseArray", (jl_value_t*)jl_densearray_type);
     add_builtin("Array", (jl_value_t*)jl_array_type);
 
@@ -1084,7 +1079,7 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
     // mimic jl_show, but never calling a julia method
     size_t n = 0;
     if (v == NULL) {
-        n += JL_PRINTF(out, "<null>");
+        n += JL_PRINTF(out, "#<null>");
     }
     else if (jl_is_lambda_info(v)) {
         jl_lambda_info_t *li = (jl_lambda_info_t*)v;
@@ -1130,11 +1125,11 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
             n += JL_PRINTF(out, "%s", jl_gf_name(v)->name);
         }
         else {
-            n += JL_PRINTF(out, "<# function>");
+            n += JL_PRINTF(out, "#<function>");
         }
     }
     else if (jl_typeis(v, jl_intrinsic_type)) {
-        n += JL_PRINTF(out, "<# intrinsic function %d>", *(uint32_t*)jl_data_ptr(v));
+        n += JL_PRINTF(out, "#<intrinsic function %d>", *(uint32_t*)jl_data_ptr(v));
     }
     else if (jl_is_int64(v)) {
         n += JL_PRINTF(out, "%d", jl_unbox_int64(v));
@@ -1227,11 +1222,6 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
         n += jl_static_show(out, jl_fieldref(v,0));
         n += JL_PRINTF(out, " end");
     }
-    else if (jl_is_newvarnode(v)) {
-        n += JL_PRINTF(out, "<newvar ");
-        n += jl_static_show(out, jl_fieldref(v,0));
-        n += JL_PRINTF(out, ">");
-    }
     else if (jl_is_topnode(v)) {
         n += JL_PRINTF(out, "top(");
         n += jl_static_show(out, jl_fieldref(v,0));
@@ -1266,9 +1256,14 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
         n += JL_PRINTF(out, "[");
         size_t j, tlen = jl_array_len(v);
         for (j = 0; j < tlen; j++) {
-            n += jl_static_show(out, jl_arrayref((jl_array_t*)v,j));
+            jl_value_t *elt;
+            if (((jl_array_t*)v)->ptrarray)
+                elt = jl_cellref(v, j);
+            else
+                elt = jl_arrayref((jl_array_t*)v,j);
+            n += jl_static_show(out, elt);
             if (j != tlen-1)
-               n += JL_PRINTF(out, ", ");
+                n += JL_PRINTF(out, ", ");
         }
         n += JL_PRINTF(out, "]");
     }
@@ -1340,3 +1335,7 @@ DLLEXPORT void jl_breakpoint(jl_value_t* v)
 {
     // put a breakpoint in you debugger here
 }
+
+#ifdef __cplusplus
+}
+#endif

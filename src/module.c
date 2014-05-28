@@ -5,6 +5,10 @@
 #include "julia.h"
 #include "julia_internal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 jl_module_t *jl_main_module=NULL;
 jl_module_t *jl_core_module=NULL;
 jl_module_t *jl_base_module=NULL;
@@ -141,7 +145,8 @@ static jl_binding_t *jl_get_binding_(jl_module_t *m, jl_sym_t *var, modstack_t *
             if (b != HT_NOTFOUND && b->exportp) {
                 b = jl_get_binding_(imp, var, &top);
                 if (b == NULL || b->owner == NULL)
-                    return NULL;
+                    // couldn't resolve; try next using (see issue #6105)
+                    continue;
                 // do a full import to prevent the result of this lookup
                 // from changing, for example if this var is assigned to
                 // later.
@@ -418,3 +423,27 @@ DLLEXPORT jl_value_t *jl_module_names(jl_module_t *m, int all, int imported)
 
 DLLEXPORT jl_sym_t *jl_module_name(jl_module_t *m) { return m->name; }
 DLLEXPORT jl_module_t *jl_module_parent(jl_module_t *m) { return m->parent; }
+
+int jl_module_has_initializer(jl_module_t *m)
+{
+    return jl_get_global(m, jl_symbol("__init__")) != NULL;
+}
+
+void jl_module_run_initializer(jl_module_t *m)
+{
+    jl_value_t *f = jl_get_global(m, jl_symbol("__init__"));
+    if (f == NULL || !jl_is_function(f))
+        return;
+    JL_TRY {
+        jl_apply((jl_function_t*)f, NULL, 0);
+    }
+    JL_CATCH {
+        JL_PRINTF(JL_STDERR, "Warning: error initializing module %s:\n", m->name->name);
+        jl_static_show(JL_STDERR, jl_exception_in_transit);
+        JL_PRINTF(JL_STDERR, "\n");
+    }
+}
+
+#ifdef __cplusplus
+}
+#endif

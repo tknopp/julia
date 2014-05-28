@@ -17,6 +17,10 @@ in the :ref:`stdlib-linalg` section of the standard library documentation.
 ``Cholesky``        `Cholesky factorization <http://en.wikipedia.org/wiki/Cholesky_decomposition>`_
 ``CholeskyPivoted`` `Pivoted <http://en.wikipedia.org/wiki/Pivot_element>`_ Cholesky factorization
 ``LU``              `LU factorization <http://en.wikipedia.org/wiki/LU_decomposition>`_
+``LUTridiagonal``   LU factorization for Tridiagonal matrices
+``UmfpackLU``       LU factorization for sparse matrices (computed by UMFPack)
+``QR``              `QR factorization <http://en.wikipedia.org/wiki/QR_decomposition>`_
+``QRCompactWY``     Compact WY form of the QR factorization
 ``QRPivoted``       Pivoted `QR factorization <http://en.wikipedia.org/wiki/QR_decomposition>`_
 ``Hessenberg``      `Hessenberg decomposition <http://mathworld.wolfram.com/HessenbergDecomposition.html>`_
 ``Eigen``           `Spectral decomposition <http://en.wikipedia.org/wiki/Eigendecomposition_(matrix)>`_
@@ -51,7 +55,8 @@ for them in LAPACK are available.
 +--------------------+-----------------------------------------------------------------------------------+
 | ``Diagonal``       | `Diagonal matrix <http://en.wikipedia.org/wiki/Diagonal_matrix>`_                 |
 +--------------------+-----------------------------------------------------------------------------------+
-
+| ``UniformScaling`` | `Uniform scaling operator <http://en.wikipedia.org/wiki/Uniform_scaling>`_        |
++--------------------+-----------------------------------------------------------------------------------+
 
 Elementary operations
 ---------------------
@@ -73,6 +78,8 @@ Elementary operations
 +--------------------+-------+-------+-------+-------+---------------------+
 | ``Diagonal``       |   X   |   X   |  XY   |   XY  | ``inv``, ``det``,   |
 |                    |       |       |       |       | ``logdet``, ``/``   |
++--------------------+-------+-------+-------+-------+---------------------+
+| ``UniformScaling`` |   X   |   X   |  XYZ  |  XYZ  | ``/``               |
 +--------------------+-------+-------+-------+-------+---------------------+
 
 Legend:
@@ -115,4 +122,8 @@ Legend:
 +---+-----------------------------------------------------------------------------------------------------------------------------------+------------------------+
 | D | An optimized method to find the characteristic vectors corresponding to the characteristic values ``x=[x1, x2,...]`` is available | ``eigvecs(M, x)``      |
 +---+-----------------------------------------------------------------------------------------------------------------------------------+------------------------+
+
+The uniform scaling operator
+--------------------------
+A ``UniformScaling`` operator represents a scalar times the identity operator, ``λ*I``. The identity operator ``I`` is defined as a constant and is an instance of ``UniformScaling``. The size of these operators are generic and match the other matrix in the binary operations ``+``,``-``,``*`` and ``\``. For ``A+I`` and ``A-I`` this means that ``A`` must be square. Multiplication with the identity operator ``I`` is a noop (except for checking that the scaling factor is one) and therefore almost without overhead. 
 

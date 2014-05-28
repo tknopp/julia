@@ -14,11 +14,11 @@ export                                  # types
 using Base.LinAlg.UMFPACK               # for decrement, increment, etc.
  
 import Base: (*), convert, copy, ctranspose, eltype, findnz, getindex, hcat,
-             isvalid, nfilled, show, size, sort!, transpose, vcat
+             isvalid, nnz, show, size, sort!, transpose, vcat
 
 import ..LinAlg: (\), A_mul_Bc, A_mul_Bt, Ac_ldiv_B, Ac_mul_B, At_ldiv_B, At_mul_B,
                  cholfact, cholfact!, copy, det, diag,
-                 full, logdet, norm, scale, scale!, solve, sparse
+                 full, isposdef!, logdet, norm, scale, scale!, sparse
 
 include("cholmod_h.jl")
 
@@ -86,7 +86,7 @@ end
 ### These offsets should be reconfigured to be less error-prone in matches
 const chm_com_offsets = Array(Int, length(ChmCommon.types))
 ccall((:jl_cholmod_common_offsets, :libsuitesparse_wrapper),
-      Void, (Ptr{Uint8},), chm_com_offsets)
+      Void, (Ptr{Int},), chm_com_offsets)
 const chm_final_ll_inds = (1:4) + chm_com_offsets[7]
 const chm_prt_inds = (1:4) + chm_com_offsets[13]
 const chm_ityp_inds = (1:4) + chm_com_offsets[18]
@@ -386,7 +386,7 @@ function copy{Tv<:CHMVTypes}(B::CholmodDense{Tv})
                        (Ptr{c_CholmodDense{Tv}},Ptr{Uint8}), &B.c, cmn(Int32)))
 end
 
-function norm{Tv<:CHMVTypes}(D::CholmodDense{Tv},p::Number=1)
+function norm{Tv<:CHMVTypes}(D::CholmodDense{Tv},p::Real=1)
     ccall((:cholmod_norm_dense, :libcholmod), Float64, 
           (Ptr{c_CholmodDense{Tv}}, Cint, Ptr{Uint8}),
           &D.c, p == 1 ? 1 :(p == Inf ? 1 : throw(ArgumentError("p must be 1 or Inf"))),cmn(Int32))
@@ -778,11 +778,11 @@ for Ti in (:Int32,:Int64)
                   (Ptr{c_CholmodSparse{Tv,$Ti}},Ptr{c_CholmodSparse{Tv,$Ti}},Cint,Ptr{Uint8}),
                   &A.c,&B.c,true,cmn($Ti))
         end
-        function nfilled{Tv<:CHMVTypes}(A::CholmodSparse{Tv,$Ti})
+        function nnz{Tv<:CHMVTypes}(A::CholmodSparse{Tv,$Ti})
             ccall((@chm_nm "nnz" $Ti
                    ,:libcholmod), Int, (Ptr{c_CholmodSparse{Tv,$Ti}},Ptr{Uint8}),&A.c,cmn($Ti))
         end
-        function norm{Tv<:CHMVTypes}(A::CholmodSparse{Tv,$Ti},p::Number)
+        function norm{Tv<:CHMVTypes}(A::CholmodSparse{Tv,$Ti},p::Real)
             ccall((@chm_nm "norm_sparse" $Ti
                    , :libcholmod), Float64, 
                   (Ptr{c_CholmodSparse{Tv,$Ti}}, Cint, Ptr{Uint8}),
@@ -1032,4 +1032,17 @@ end
 sparse(L::CholmodFactor) = sparse!(CholmodSparse(L))
 sparse(D::CholmodDense) = sparse!(CholmodSparse(D))
 sparse(T::CholmodTriplet) = sparse!(CholmodSparse(T))
+
+isposdef!{Tv<:CHMVTypes,Ti}(A::SparseMatrixCSC{Tv,Ti}) = ishermitian(A) && cholfact(A).c.minor == size(A,1)
+
 end #module
+
+# placing factorize here for now. Maybe add a new file
+function factorize(A::SparseMatrixCSC)
+    m, n = size(A)
+    if m == n
+        Ac = cholfact(A)
+        Ac.c.minor == m && ishermitian(A) && return Ac
+    end
+    return lufact(A)
+end

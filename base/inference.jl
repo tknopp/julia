@@ -13,6 +13,7 @@ type StaticVarInfo
     sp::Tuple            # static parameters tuple
     cenv::ObjectIdDict   # types of closed vars
     vars::Array{Any,1}   # names of args and locals
+    label_counter::Int   # index of the current highest label for this function
 end
 
 type EmptyCallStack
@@ -123,7 +124,7 @@ t_func[eval(Core.Intrinsics,:select_value)] =
 t_func[is] = (2, 2, cmp_tfunc)
 t_func[issubtype] = (2, 2, cmp_tfunc)
 t_func[isa] = (2, 2, cmp_tfunc)
-t_func[isdefined] = (1, 2, (args...)->Bool)
+t_func[isdefined] = (1, Inf, (args...)->Bool)
 t_func[Union] = (0, Inf,
                  (args...)->(if all(isType,args)
                                  Type{Union(map(t->t.parameters[1],args)...)}
@@ -153,61 +154,20 @@ t_func[arraysize] = (1, 2, arraysize_tfunc)
 t_func[pointerref] = (2,2,(a,i)->(isa(a,DataType) && a<:Ptr ? a.parameters[1] : Any))
 t_func[pointerset] = (3, 3, (a,v,i)->a)
 
-function static_convert(to::ANY, from::ANY)
-    if !isa(to,Tuple) || !isa(from,Tuple)
-        if isa(to,TypeVar)
-            return to
-        end
-        if from <: to
-            return from
-        end
-        return typeintersect(from,to)
+const convert_default_tfunc = function (to, from, f)
+    !isType(to) && return Any
+    to = to.parameters[1]
+
+    if isa(to,TypeVar)
+        return to
     end
-    if is(to,Tuple)
+    if from <: to
         return from
     end
-    pl = length(to)::Int; cl = length(from)::Int
-    pseq = false
-    result = Array(Any, cl)
-    local pe  # used across iterations
-    for i=1:cl
-        ce = from[i]
-        if pseq
-        elseif i <= pl
-            pe = to[i]
-            if isvarargtype(pe)
-                pe = pe.parameters[1]
-                pseq = true
-            elseif isa(pe,TypeVar) && isvarargtype(pe.ub)
-                pe = pe.ub.parameters[1]
-                pseq = true
-            end
-        else
-            return None
-        end
-        # tuple conversion calls convert recursively
-        if isvarargtype(ce)
-            R = abstract_call_gf(convert, (), (Type{pe}, ce.parameters[1]), ())
-            #R = static_convert(pe, ce.parameters[1])
-            isType(R) && (R = R.parameters[1])
-            result[i] = Vararg{R}
-        else
-            R = abstract_call_gf(convert, (), (Type{pe}, ce), ())
-            #R = static_convert(pe, ce)
-            isType(R) && (R = R.parameters[1])
-            result[i] = R
-        end
-    end
-    a2t(result)
+    return typeintersect(from,to)
 end
-t_func[convert_default] =
-    (3, 3, (t,x,f)->(isType(t) ? static_convert(t.parameters[1],x) : Any))
-t_func[convert_tuple] =
-    (3, 3, (t,x,f)->(if isa(t,Tuple) && all(isType,t)
-                         t = Type{map(t->t.parameters[1],t)}
-                     end;
-                     isType(t) ? static_convert(t.parameters[1],x) :
-                     Any))
+t_func[convert_default] = (3, 3, convert_default_tfunc)
+
 const typeof_tfunc = function (t)
     if isType(t)
         t = t.parameters[1]
@@ -285,14 +245,17 @@ const tupleref_tfunc = function (A, t, i)
         else
             types = t
         end
+        if !isa(types, Type)
+            return Any
+        end
         T = reduce(tmerge, None, types)
         if wrapType
-            return isleaftype(T) ? Type{T} : Type{TypeVar(:_,T)}
+            return isleaftype(T) || isa(T,TypeVar) ? Type{T} : Type{TypeVar(:_,T)}
         else
             return T
         end
     end
-    return wrapType ? Type{T} : T
+    return wrapType ? (isa(T,Type) ? Type{T} : typeof(T)) : T
 end
 t_func[tupleref] = (2, 2, tupleref_tfunc)
 
@@ -300,31 +263,45 @@ function limit_type_depth(t::ANY, d::Int, cov::Bool, vars)
     if isa(t,TypeVar) || isa(t,TypeConstructor)
         return t
     end
+    inexact = !cov && d > MAX_TYPE_DEPTH
     if isa(t,Tuple)
+        t === () && return t
         if d > MAX_TYPE_DEPTH
-            R = Tuple
+            if isvatuple(t)
+                R = Tuple
+            else
+                R = NTuple{length(t),Any}
+            end
         else
-            R = map(x->limit_type_depth(x, d+1, cov, vars), t)
+            l0 = length(vars)
+            R = map(x->limit_type_depth(x, d+1, true, vars), t)
+            if !cov && (length(vars) > l0 || d == MAX_TYPE_DEPTH)
+                inexact = true
+            end
         end
     elseif isa(t,UnionType)
+        t === None && return t
         if d > MAX_TYPE_DEPTH
             R = Any
         else
-            R = Union(limit_type_depth(t.types, d, cov, vars)...)
+            R = limit_type_depth(t.types, d, cov, vars)
+            if isa(R,TypeVar)
+                R = Union(R.ub...)
+                inexact = true
+            else
+                R = Union(R...)
+            end
         end
     elseif isa(t,DataType)
         P = t.parameters
-        if P === ()
-            return t
-        end
+        P === () && return t
         if d > MAX_TYPE_DEPTH
             R = t.name.primary
         else
             Q = map(x->limit_type_depth(x, d+1, false, vars), P)
             if !cov && any(p->contains_is(vars,p), Q)
-                R = TypeVar(:_,t.name.primary)
-                push!(vars, R)
-                return R
+                R = t.name.primary
+                inexact = true
             else
                 R = t.name.primary{Q...}
             end
@@ -332,7 +309,7 @@ function limit_type_depth(t::ANY, d::Int, cov::Bool, vars)
     else
         return t
     end
-    if !cov && d > MAX_TYPE_DEPTH
+    if inexact
         R = TypeVar(:_,R)
         push!(vars, R)
     end
@@ -365,19 +342,27 @@ const getfield_tfunc = function (A, s0, name)
         end
         if isType(s0)
             sp = s0.parameters[1]
-            if fld === :parameters && isleaftype(sp.parameters)
-                return Type{sp.parameters}
-            end
-            if fld === :types && isleaftype(sp.types)
-                return Type{sp.types}
-            end
-            if fld === :super && isleaftype(sp)
-                return Type{sp.super}
+            if isa(sp,DataType) && !any(x->isa(x,TypeVar), sp.parameters)
+                if fld === :parameters
+                    return Type{sp.parameters}
+                end
+                if fld === :types
+                    return Type{sp.types}
+                end
+                if fld === :super
+                    return Type{sp.super}
+                end
             end
         end
         for i=1:length(s.names)
             if is(s.names[i],fld)
-                return limit_type_depth(s.types[i], 0, true, {s.parameters...})
+                R = s.types[i]
+                if s.parameters === ()
+                    return R
+                else
+                    return limit_type_depth(R, 0, true,
+                                            filter!(x->isa(x,TypeVar), {s.parameters...}))
+                end
             end
         end
         return None
@@ -481,9 +466,21 @@ t_func[apply_type] = (1, Inf, apply_type_tfunc)
 
 # other: apply
 
+function tuple_tfunc(argtypes::ANY, limit)
+    t = argtypes
+    if limit
+        t = limit_tuple_depth(t)
+    end
+    # tuple(Type{T...}) should give Type{(T...)}
+    if t!==() && all(isType, t) && isvarargtype(t[length(t)].parameters[1])
+        return Type{map(t->t.parameters[1], t)}
+    end
+    return t
+end
+
 function builtin_tfunction(f::ANY, args::ANY, argtypes::ANY)
     if is(f,tuple)
-        return limit_tuple_depth(argtypes)
+        return tuple_tfunc(argtypes, true)
     elseif is(f,arrayset)
         if length(argtypes) < 3
             return None
@@ -565,6 +562,9 @@ function isconstantfunc(f::ANY, sv::StaticVarInfo)
     if isa(f,QuoteNode) && isa(f.value, Function)
         return f.value
     end
+    if isa(f,Function)
+        return f
+    end
     if isa(f,SymbolNode)
         f = f.name
     end
@@ -609,7 +609,7 @@ const limit_tuple_type_n = function (t::Tuple, lim::Int)
 end
 
 function abstract_call_gf(f, fargs, argtypes, e)
-    if length(argtypes)>1 && isa(argtypes[1],Tuple) && argtypes[2]===Int
+    if length(argtypes)>1 && (argtypes[1] <: Tuple) && argtypes[2]===Int
         # allow tuple indexing functions to take advantage of constant
         # index arguments.
         if f === Main.Base.getindex
@@ -635,7 +635,7 @@ function abstract_call_gf(f, fargs, argtypes, e)
                 return Type
             end
         end
-        if f === Main.Base.promote_type
+        if isdefined(Main.Base,:promote_type) && f === Main.Base.promote_type
             try
                 RT = Type{f(c...)}
                 e.head = :call1
@@ -738,6 +738,16 @@ function invoke_tfunc(f, types, argtypes)
     return Any
 end
 
+function to_tuple_of_Types(t::ANY)
+    if isType(t)
+        p1 = t.parameters[1]
+        if isa(p1,Tuple) && !isvatuple(p1)
+            return map(t->Type{t}, p1)
+        end
+    end
+    return t
+end
+
 function abstract_call(f, fargs, argtypes, vtypes, sv::StaticVarInfo, e)
     if is(f,apply) && length(fargs)>0
         if isType(argtypes[1]) && isleaftype(argtypes[1].parameters[1])
@@ -747,7 +757,7 @@ function abstract_call(f, fargs, argtypes, vtypes, sv::StaticVarInfo, e)
             af = isconstantfunc(fargs[1], sv)
         end
         if !is(af,false)
-            aargtypes = argtypes[2:end]
+            aargtypes = map(to_tuple_of_Types, argtypes[2:end])
             if all(x->isa(x,Tuple), aargtypes) &&
                 !any(isvatuple, aargtypes[1:(length(aargtypes)-1)])
                 e.head = :call1
@@ -1001,12 +1011,12 @@ function abstract_eval_global(M, s::Symbol)
     return Any
 end
 
-function abstract_eval_symbol(s::Symbol, vtypes, sv::StaticVarInfo)
+function abstract_eval_symbol(s::Symbol, vtypes::ObjectIdDict, sv::StaticVarInfo)
     if haskey(sv.cenv,s)
         # consider closed vars to always have their propagated (declared) type
         return sv.cenv[s]
     end
-    t = is(vtypes,()) ? NF : get(vtypes,s,NF)
+    t = get(vtypes,s,NF)
     if is(t,NF)
         sp = sv.sp
         for i=1:2:length(sp)
@@ -1025,6 +1035,10 @@ function abstract_eval_symbol(s::Symbol, vtypes, sv::StaticVarInfo)
                 end
                 return abstract_eval_constant(val)
             end
+        end
+        if s in sv.vars
+            # local variable use not reached
+            return Top
         end
         # global
         return abstract_eval_global(s)
@@ -1047,9 +1061,8 @@ function getindex(x::StateUpdate, s::Symbol)
     return get(x.state,s,NF)
 end
 
-abstract_interpret(e, vtypes, sv::StaticVarInfo) = vtypes
-
-function abstract_interpret(e::Expr, vtypes, sv::StaticVarInfo)
+function abstract_interpret(e::ANY, vtypes, sv::StaticVarInfo)
+    !isa(e,Expr) && return vtypes
     # handle assignment
     if is(e.head,:(=))
         t = abstract_eval(e.args[2], vtypes, sv)
@@ -1070,21 +1083,6 @@ function abstract_interpret(e::Expr, vtypes, sv::StaticVarInfo)
         end
     end
     return vtypes
-end
-
-tchanged(n::ANY, o::ANY) = is(o,NF) || (!is(n,NF) && !(n <: o))
-
-function stchanged(new::Union(StateUpdate,VarTable), old, vars)
-    if is(old,())
-        return true
-    end
-    for i = 1:length(vars)
-        v = vars[i]
-        if tchanged(new[v], get(old,v,NF))
-            return true
-        end
-    end
-    return false
 end
 
 function type_too_complex(t::ANY, d)
@@ -1123,6 +1121,9 @@ function tmerge(typea::ANY, typeb::ANY)
     if typeb <: typea
         return typea
     end
+    if typea <: Tuple && typeb <: Tuple
+        return Tuple
+    end
     u = Union(typea, typeb)
     if length(u.types) > MAX_TYPEUNION_LEN || type_too_complex(u, 0)
         # don't let type unions get too big
@@ -1132,10 +1133,12 @@ function tmerge(typea::ANY, typeb::ANY)
     return u
 end
 
-function stupdate(state, changes::Union(StateUpdate,VarTable), vars)
-    if is(state,())
-        state = ObjectIdDict()
-    end
+tchanged(n::ANY, o::ANY) = is(o,NF) || (!is(n,NF) && !(n <: o))
+
+stupdate(state::(), changes::VarTable, vars) = copy(changes)
+stupdate(state::(), changes::StateUpdate, vars) = stupdate(ObjectIdDict(), changes, vars)
+
+function stupdate(state::ObjectIdDict, changes::Union(StateUpdate,VarTable), vars)
     for i = 1:length(vars)
         v = vars[i]
         newtype = changes[v]
@@ -1147,6 +1150,19 @@ function stupdate(state, changes::Union(StateUpdate,VarTable), vars)
     state
 end
 
+function stchanged(new::Union(StateUpdate,VarTable), old, vars)
+    if is(old,())
+        return true
+    end
+    for i = 1:length(vars)
+        v = vars[i]
+        if tchanged(new[v], get(old,v,NF))
+            return true
+        end
+    end
+    return false
+end
+
 function findlabel(body, l)
     for i=1:length(body)
         b = body[i]
@@ -1156,6 +1172,17 @@ function findlabel(body, l)
     end
     error("label ",l," not found")
 end
+
+function label_counter(body)
+    l = 0
+    for b in body
+        if isa(b,LabelNode) && (b::LabelNode).label > l
+            l = (b::LabelNode).label
+        end
+    end
+    l
+end
+genlabel(sv) = LabelNode(sv.label_counter += 1)
 
 f_argnames(ast) =
     map(x->(isa(x,Expr) ? x.args[1] : x), ast.args[1]::Array{Any,1})
@@ -1182,7 +1209,7 @@ CYCLE_ID = 1
 # def is the original unspecialized version of a method. we aggregate all
 # saved type inference data there.
 function typeinf(linfo::LambdaStaticData,atypes::Tuple,sparams::Tuple, def, cop)
-    #dbg = 
+    #dbg =
     #dotrace = true
     local ast::Expr, tfunc_idx
     curtype = None
@@ -1320,7 +1347,7 @@ function typeinf(linfo::LambdaStaticData,atypes::Tuple,sparams::Tuple, def, cop)
             s[1][vname] = vtype
         end
     end
-    sv = StaticVarInfo(sparams, cenv, vars)
+    sv = StaticVarInfo(sparams, cenv, vars, label_counter(body))
     frame.sv = sv
 
     # exception handlers
@@ -1457,32 +1484,45 @@ function typeinf(linfo::LambdaStaticData,atypes::Tuple,sparams::Tuple, def, cop)
     if (toprec && typeseq(curtype, frame.result)) || !isa(frame.prev,CallStack)
         rec = false
     end
-    
     fulltree = type_annotate(ast, s, sv, frame.result, args)
-    
+
     if !rec
+        @assert fulltree.args[3].head === :body
         fulltree.args[3] = inlining_pass(fulltree.args[3], sv, fulltree)[1]
         # inlining can add variables
         sv.vars = append_any(f_argnames(fulltree), fulltree.args[2][1])
         tuple_elim_pass(fulltree)
+        tupleref_elim_pass(fulltree.args[3], sv)
         linfo.inferred = true
         fulltree = ccall(:jl_compress_ast, Any, (Any,Any), def, fulltree)
     end
-    
+
     if !redo
         if is(def.tfunc,())
             def.tfunc = {}
         end
-        push!(def.tfunc::Array{Any,1}, atypes)
+        tfarr = def.tfunc::Array{Any,1}
+        idx = -1
+        for i = 1:3:length(tfarr)
+            if typeseq(tfarr[i],atypes)
+                idx = i; break
+            end
+        end
+        if idx == -1
+            l = length(tfarr)
+            idx = l+1
+            resize!(tfarr, l+3)
+        end
+        tfarr[idx] = atypes
         # in the "rec" state this tree will not be used again, so store
         # just the return type in place of it.
-        push!(def.tfunc::Array{Any,1}, rec ? frame.result : fulltree)
-        push!(def.tfunc::Array{Any,1}, rec)
+        tfarr[idx+1] = rec ? frame.result : fulltree
+        tfarr[idx+2] = rec
     else
         def.tfunc[tfunc_idx] = rec ? frame.result : fulltree
         def.tfunc[tfunc_idx+1] = rec
     end
-    
+
     inference_stack = (inference_stack::CallStack).prev
     return (fulltree, frame.result)
 end
@@ -1587,7 +1627,8 @@ function type_annotate(ast::Expr, states::Array{Any,1}, sv::ANY, rettype::ANY,
     closures = {}
     body = ast.args[3].args::Array{Any,1}
     for i=1:length(body)
-        body[i] = eval_annotate(body[i], states[i], sv, decls, closures)
+        st_i = states[i]
+        body[i] = eval_annotate(body[i], (st_i === () ? emptydict : st_i), sv, decls, closures)
     end
     ast.args[3].typ = rettype
 
@@ -1631,13 +1672,29 @@ function sym_replace(e::ANY, from1, from2, to1, to2)
         return _sym_repl(e::Symbol, from1, from2, to1, to2, e)
     end
     if isa(e,SymbolNode)
-        return _sym_repl(e.name, from1, from2, to1, to2, e)
+        e2 = _sym_repl(e.name, from1, from2, to1, to2, e)
+        if isa(e2, SymbolNode) || !isa(e2, Symbol)
+            return e2
+        else
+            return SymbolNode(e2, e.typ)
+        end
     end
     if !isa(e,Expr)
         return e
     end
     e = e::Expr
-    if !is(e.head,:line)
+    if e.head === :(=)
+        # remove_redundant_temp_vars can only handle Symbols
+        # on the LHS of assignments, so we make sure not to put
+        # something else there
+        @assert length(e.args) == 2
+        e2 = _sym_repl(e.args[1]::Symbol, from1, from2, to1, to2, e.args[1]::Symbol)
+        if isa(e2, SymbolNode)
+            e2 = e2.name
+        end
+        e.args[1] = e2::Symbol
+        e.args[2] = sym_replace(e.args[2], from1, from2, to1, to2)
+    elseif e.head !== :line
         for i=1:length(e.args)
             e.args[i] = sym_replace(e.args[i], from1, from2, to1, to2)
         end
@@ -1660,7 +1717,10 @@ function _sym_repl(s::Symbol, from1, from2, to1, to2, deflt)
 end
 
 # return an expr to evaluate "from.sym" in module "to"
-function resolve_relative(sym, from, to, typ, orig)
+function resolve_relative(sym, locals, args, from, to, typ, orig)
+    if sym in locals || sym in args
+        return GetfieldNode(from, sym, typ)
+    end
     if is(from,to)
         return orig
     end
@@ -1679,13 +1739,13 @@ function resolve_relative(sym, from, to, typ, orig)
 end
 
 # annotate symbols with their original module for inlining
-function resolve_globals(e::ANY, from, to, env1, env2)
+function resolve_globals(e::ANY, locals, args, from, to, env1, env2)
     if isa(e,Symbol)
         s = e::Symbol
         if contains_is(env1, s) || contains_is(env2, s)
             return s
         end
-        return resolve_relative(s, from, to, Any, s)
+        return resolve_relative(s, locals, args, from, to, Any, s)
     end
     if isa(e,SymbolNode)
         s = e::SymbolNode
@@ -1693,17 +1753,34 @@ function resolve_globals(e::ANY, from, to, env1, env2)
         if contains_is(env1, name) || contains_is(env2, name)
             return s
         end
-        return resolve_relative(name, from, to, s.typ, s)
+        return resolve_relative(name, locals, args, from, to, s.typ, s)
     end
     if !isa(e,Expr)
         return e
     end
     e = e::Expr
-    if !is(e.head,:line)
+    if e.head === :(=)
+        # remove_redundant_temp_vars can only handle Symbols
+        # on the LHS of assignments, so we make sure not to put
+        # something else there
+        e2 = resolve_globals(e.args[1]::Symbol, locals, args, from, to, env1, env2)
+        if isa(e2, GetfieldNode)
+            # abort when trying to inline a function which assigns to a global
+            # variable in a different module, since `Mod.X=V` isn't allowed
+            throw(e2)
+#            e2 = e2::GetfieldNode
+#            e = Expr(:call, top_setfield, e2.value, qn(e2.name),
+#                resolve_globals(e.args[2], locals, args, from, to, env1, env2))
+#            e.typ = e2.typ
+        else
+            e.args[1] = e2::Symbol
+            e.args[2] = resolve_globals(e.args[2], locals, args, from, to, env1, env2)
+        end
+    elseif !is(e.head,:line)
         for i=1:length(e.args)
             subex = e.args[i]
             if !(isa(subex,Number) || isa(subex,String))
-                e.args[i] = resolve_globals(subex, from, to, env1, env2)
+                e.args[i] = resolve_globals(subex, locals, args, from, to, env1, env2)
             end
         end
     end
@@ -1729,6 +1806,8 @@ function occurs_more(e::ANY, pred, n)
     return 0
 end
 
+const emptydict = ObjectIdDict()
+
 function exprtype(x::ANY)
     if isa(x,Expr)
         return x.typ
@@ -1741,9 +1820,13 @@ function exprtype(x::ANY)
         if is_local(sv, x)
             return Any
         end
-        return abstract_eval(x, (), sv)
+        return abstract_eval(x, emptydict, sv)
     elseif isa(x,QuoteNode)
-        return typeof(x.value)
+        v = x.value
+        if isa(v,Type)
+            return Type{v}
+        end
+        return typeof(v)
     elseif isa(x,Type)
         return Type{x}
     elseif isa(x,LambdaStaticData)
@@ -1766,31 +1849,95 @@ function without_linenums(a::Array{Any,1})
     l
 end
 
-_pure_builtins = {getfield, tuple, tupleref, tuplelen, fieldtype, apply_type}
+const _pure_builtins = {tuple, tupleref, tuplelen, fieldtype, apply_type, is, isa, typeof} # known affect-free calls (also effect-free)
+const _pure_builtins_volatile = {getfield, arrayref} # known effect-free calls (might not be affect-free)
 
-# detect some important side-effect-free calls
-function effect_free(e::ANY, sv)
+function is_pure_builtin(f)
+    if contains_is(_pure_builtins, f)
+        return true
+    end
+    if contains_is(_pure_builtins_volatile, f)
+        return true
+    end
+    if isa(f,IntrinsicFunction)
+        if !(f === Intrinsics.pointerref || # this one is volatile
+             f === Intrinsics.pointerset || # this one is never effect-free
+             f === Intrinsics.ccall ||      # this one is never effect-free
+             f === Intrinsics.jl_alloca ||  # this one is volatile, TODO: possibly also effect-free?
+             f === Intrinsics.pointertoref) # this one is volatile
+            return true
+        end
+    end
+    return false
+end
+
+# detect some important side-effect-free calls (allow_volatile=true)
+# and some affect-free calls (allow_volatile=false) -- affect_free means the call
+# cannot be affected by previous calls, except assignment nodes
+function effect_free(e::ANY, sv, allow_volatile::Bool)
     if isa(e,Symbol) || isa(e,SymbolNode) || isa(e,Number) || isa(e,String) ||
-        isa(e,TopNode) || isa(e,QuoteNode) || isa(e,Type)
+        isa(e,TopNode) || isa(e,QuoteNode) || isa(e,Type) || isa(e,Tuple)
         return true
     end
     if isa(e,Expr)
+        e = e::Expr
         if e.head === :static_typeof
             return true
         end
         ea = e.args
         if e.head === :call || e.head === :call1
+            if is_known_call_p(e, is_pure_builtin, sv)
+                if !allow_volatile && is_known_call_p(e, (f)->contains_is(_pure_builtins_volatile, f), sv)
+                    # arguments must be immutable to ensure e is affect_free
+                    first = true
+                    for a in ea
+                        if first # first "arg" is the function name
+                            first = false
+                            continue
+                        end
+                        if isa(a,Symbol)
+                            return false
+                        end
+                        if isa(a,SymbolNode)
+                            typ = (a::SymbolNode).typ
+                            if !isa(typ,Tuple)
+                                if !isa(typ,DataType) || typ.mutable
+                                    return false
+                                end
+                            end
+                        end
+                        if !effect_free(a,sv,allow_volatile)
+                            return false
+                        end
+                    end
+                else
+                    # arguments must also be effect_free
+                    for a in ea
+                        if !effect_free(a,sv,allow_volatile)
+                            return false
+                        end
+                    end
+                end
+                return true
+            end
+        elseif e.head == :new
+            first = !allow_volatile
             for a in ea
-                if !effect_free(a,sv)
+                if first
+                    first = false
+                    typ = exprtype(a)
+                    if !isType(typ) || !isa((typ::Type).parameters[1],DataType) || ((typ::Type).parameters[1]::DataType).mutable
+                        return false
+                    end
+                end
+                if !effect_free(a,sv,allow_volatile)
                     return false
                 end
             end
-            if is_known_call(e, _pure_builtins, sv)
-                return true
-            end
-        elseif e.head === :new
+            return true
+        elseif e.head == :return
             for a in ea
-                if !effect_free(a,sv)
+                if !effect_free(a,sv,allow_volatile)
                     return false
                 end
             end
@@ -1800,20 +1947,16 @@ function effect_free(e::ANY, sv)
     return false
 end
 
-# for now, only inline functions whose bodies are of the form "return <expr>"
-# where <expr> doesn't contain any argument more than once.
+# inline functions whose bodies "inline_worthy"
+# where the function body doesn't contain any argument more than once.
 # functions with closure environments or varargs are also excluded.
 # static parameters are ok if all the static parameter values are leaf types,
 # meaning they are fully known.
-function inlineable(f, e::Expr, sv, enclosing_ast)
+function inlineable(f, e::Expr, atypes, sv, enclosing_ast)
     if !(isa(f,Function) || isstructtype(f) || isa(f,IntrinsicFunction))
         return NF
     end
     argexprs = e.args[2:end]
-    atypes = tuple(map(exprtype, argexprs)...)
-    if length(atypes) > MAX_TUPLETYPE_LEN
-        atypes = limit_tuple_type(atypes)
-    end
 
     if is(f, convert_default) && length(atypes)==3
         # builtin case of convert. convert(T,x::S) => x, when S<:T
@@ -1828,7 +1971,7 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
         return (e.args[3],())
     end
     if isdefined(Main.Base,:isbits) && is(f,Main.Base.isbits) &&
-        length(atypes)==1 && isType(atypes[1]) && effect_free(argexprs[1],sv) &&
+        length(atypes)==1 && isType(atypes[1]) && effect_free(argexprs[1],sv,true) &&
         isleaftype(atypes[1].parameters[1])
         return (isbits(atypes[1].parameters[1]),())
     end
@@ -1837,7 +1980,7 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
         if (is(f,apply_type) || is(f,fieldtype) ||
             (isdefined(Main.Base,:typejoin) && is(f,Main.Base.typejoin)) ||
             (isdefined(Main.Base,:promote_type) && is(f,Main.Base.promote_type))) &&
-            isleaftype(e.typ.parameters[1])
+                isleaftype(e.typ.parameters[1])
             return (e.typ.parameters[1],())
         end
         if is(f,Union)
@@ -1847,7 +1990,7 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
             end
         end
     end
-    if is(f,tuple) && isa(e.typ,Tuple) && all(isType,e.typ) && isleaftype(e.typ) && effect_free(e,sv)
+    if is(f,tuple) && isa(e.typ,Tuple) && all(isType,e.typ) && isleaftype(e.typ) && effect_free(e,sv,true)
         return (map(t->t.parameters[1], e.typ), ())
     end
     if isa(f,IntrinsicFunction)
@@ -1918,120 +2061,283 @@ function inlineable(f, e::Expr, sv, enclosing_ast)
         needcopy = false
     end
     ast = ast::Expr
-    for vi in ast.args[2][2]
+    vinflist = ast.args[2][2]::Array{Any,1}
+    for vi in vinflist
         if (vi[3]&1)!=0
             # captures variables (TODO)
             return NF
         end
     end
-    body = without_linenums(ast.args[3].args)::Array{Any,1}
-    # see if body is only "return <expr>"
-    if length(body) != 1
+
+    body = Expr(:block)
+    body.args = without_linenums(ast.args[3].args)::Array{Any,1}
+    if !inline_worthy(body)
         return NF
     end
-    assert(isa(body[1],Expr))
-    assert(is(body[1].head,:return))
+
+    spnames = { sp[i].name for i=1:2:length(sp) }
+    enc_vinflist = enclosing_ast.args[2][2]::Array{Any,1}
+    enc_locllist = enclosing_ast.args[2][1]::Array{Any,1}
+    locllist = ast.args[2][1]::Array{Any,1}
+
     # check for vararg function
     args = f_argnames(ast)
-    expr = body[1].args[1]
     na = length(args)
 
     if na>0 && is_rest_arg(ast.args[1][na])
         vaname = args[na]
         len_argexprs = length(argexprs)
         valen = len_argexprs-na+1
-        if valen>0 && !occurs_outside_tupleref(expr, vaname, sv, valen)
+        if valen>0 && !occurs_outside_tupleref(body, vaname, sv, valen)
             # argument tuple is not used as a whole, so convert function body
             # to one accepting the exact number of arguments we have.
             newnames = unique_names(ast,valen)
             if needcopy
-                expr = astcopy(expr); needcopy = false
+                body = astcopy(body)
+                needcopy = false
             end
-            replace_tupleref!(ast, Expr(:return, expr), vaname, newnames, sv, 1)
+            replace_tupleref!(ast, body, vaname, newnames, sv, 1)
             args = vcat(args[1:na-1], newnames)
+            na = length(args)
+
+            islocal = false # if the argument name is also used as a local variable,
+                            # we need to keep it around as a variable name
+            vnew = unique_name(enclosing_ast, ast)
+            for vi in vinflist
+                if vi[1] === vaname && vi[2] != 0
+                    islocal = true
+                    push!(enc_vinflist, {vnew, vi[2], vi[3]})
+                end
+            end
+            if islocal
+                push!(spnames, vaname)
+                push!(spvals, vnew)
+                push!(enc_locllist, vnew)
+            end
         else
             # construct tuple-forming expression for argument tail
             vararg = mk_tuplecall(argexprs[na:end])
             argexprs = {argexprs[1:(na-1)]..., vararg}
         end
     end
+    @assert na == length(argexprs)
 
-    conflicting = x->(isa(x,Symbol)&&!is_global(sv,x)&&!contains_is(args,x))
-
-    spnames = { sp[i].name for i=1:2:length(sp) }
-
-    if any(conflicting, spnames)
-        # replace static parameters in source function first if there are name conflicts
-        expr = sym_replace(expr, spnames, {}, spvals, {})
-        spnames = spvals = {}
+    if needcopy
+        body = astcopy(body)
     end
 
-    # avoid capture if the function has free variables with the same name
-    # as our vars
-    if occurs_more(expr, conflicting, 0) > 0
-        return NF
+    # avoid capturing free variables in enclosing function with the same name as in our function
+    for localval in locllist
+        localval = localval::Symbol
+        vnew = unique_name(enclosing_ast, ast)
+        push!(spnames, localval)
+        push!(spvals, vnew)
+        push!(enc_locllist, vnew)
+        for vi in vinflist
+            if vi[1] === localval
+                push!(enc_vinflist, {vnew, vi[2], vi[3]})
+            end
+        end
     end
 
-    stmts = {}
+    # annotate variables in the body expression with their module
+    mfrom = linfo.module; mto = (inference_stack::CallStack).mod
+    try
+        body = resolve_globals(body, enc_locllist, enclosing_ast.args[1], mfrom, mto, args, spnames)
+    catch ex
+        if isa(ex,GetfieldNode)
+            return NF
+        end
+        rethrow(ex)
+    end
+
     # see if each argument occurs only once in the body expression
-    for i=1:length(args)
+    stmts = {}
+    stmts_free = true # true = all entries of stmts are effect_free
+    for i=length(args):-1:1 # stmts_free needs to be calculated in reverse-argument order
         a = args[i]
-        occ = occurs_more(expr, x->is(x,a), 1)
-        if occ != 1
-            aei = argexprs[i]; aeitype = exprtype(aei)
-            # ok for argument to occur more than once if the actual argument
-            # is a symbol or constant
-            if !effect_free(aei,sv) || (occ==0 && is(aeitype,None))
-                # introduce variable for this argument
-                if occ > 1
-                    vnew = unique_name(enclosing_ast)
-                    add_variable(enclosing_ast, vnew, aeitype)
-                    push!(stmts, Expr(:(=), vnew, aei))
-                    argexprs[i] = aeitype===Any ? vnew : SymbolNode(vnew,aeitype)
-                elseif !isType(aeitype) && !effect_free(aei,sv)
-                    push!(stmts, aei)
+        aei = argexprs[i]
+        aeitype = exprtype(aei)
+
+        islocal = false # if the argument name is also used as a local variable,
+                        # we need to keep it as a variable name
+        for vi in vinflist
+            if vi[1] === a && vi[3] != 0
+                if !islocal
+                    islocal = true
                 end
+                aeitype = tmerge(aeitype, vi[2])
+                if aeitype === Any
+                    break
+                end
+            end
+        end
+
+        # ok for argument to occur more than once if the actual argument
+        # is a symbol or constant, or is not affected by previous statements
+        # that will exist after the inlining pass finishes
+        affect_free = stmts_free && !islocal # false = previous statements might affect the result of evaluating argument
+        occ = 0
+        for j = length(body.args):-1:1
+            b = body.args[j]
+            if occ < 1
+                occ += occurs_more(b, x->is(x,a), 5)
+            end
+            if occ > 0 && affect_free && !effect_free(b, sv, true) #TODO: we could short-circuit this test better by memoizing effect_free(b) in the for loop over i
+                affect_free = false
+            end
+            if occ > 5
+                occ = 6
+                break
+            end
+        end
+        free = effect_free(aei,sv,true)
+        if ((occ==0 && is(aeitype,None)) || islocal || (occ > 1 && !inline_worthy(aei, occ)) ||
+                (affect_free && !free) || (!affect_free && !effect_free(aei,sv,false)))
+            if occ != 0 # islocal=true is implied
+                # introduce variable for this argument
+                vnew = unique_name(enclosing_ast, ast)
+                add_variable(enclosing_ast, vnew, aeitype, !islocal)
+                unshift!(stmts, Expr(:(=), vnew, aei))
+                argexprs[i] = aeitype===Any ? vnew : SymbolNode(vnew,aeitype)
+                stmts_free &= free
+            elseif !free && !isType(aeitype)
+                unshift!(stmts, aei)
+                stmts_free = false
             end
         end
     end
 
     # ok, substitute argument expressions for argument names in the body
-    if needcopy; expr = astcopy(expr); end
-    mfrom = linfo.module; mto = (inference_stack::CallStack).mod
-    if !is(mfrom, mto)
-        expr = resolve_globals(expr, mfrom, mto, args, spnames)
+    body = sym_replace(body, args, spnames, argexprs, spvals)
+
+    # make labels / goto statements unique
+    newlabels = zeros(Int,label_counter(body.args)+1)
+    for i = 1:length(body.args)
+        a = body.args[i]
+        if isa(a,LabelNode)
+            a = a::LabelNode
+            newlabel = genlabel(sv)
+            newlabels[a.label+1] = newlabel.label
+            body.args[i] = newlabel
+        end
     end
-    return (sym_replace(expr, args, spnames, argexprs, spvals), stmts)
+    for i = 1:length(body.args)
+        a = body.args[i]
+        if isa(a,GotoNode)
+            a = a::GotoNode
+            body.args[i] = gn(newlabels[a.label+1])
+        elseif isa(a,Expr)
+            a = a::Expr
+            if a.head === :enter
+                a.args[1] = newlabels[a.args[1]+1]
+            elseif a.head === :gotoifnot
+                a.args[2] = newlabels[a.args[2]+1]
+            end
+        end
+    end
+
+    # convert return statements into a series of goto's
+    retstmt = genlabel(sv)
+    retval = unique_name(enclosing_ast, ast)
+    multiret = false
+    lastexpr = pop!(body.args)
+    if isa(lastexpr,LabelNode)
+        push!(body.args, lastexpr)
+        push!(body.args, Expr(:call,:error,"fatal error in type inference"))
+        lastexpr = nothing
+    else
+        @assert isa(lastexpr,Expr) "inference.jl:1774"
+        @assert is(lastexpr.head,:return) "inference.jl:1775"
+    end
+    for a in body.args
+        push!(stmts, a)
+        if isa(a,Expr)
+            a = a::Expr
+            if a.head === :return
+                multiret = true
+                unshift!(a.args, retval)
+                a.head = :(=)
+                push!(stmts, gn(retstmt))
+            end
+        end
+    end
+
+    if multiret
+        rettype = exprtype(ast.args[3])
+        add_variable(enclosing_ast, retval, rettype, false)
+        if lastexpr !== nothing
+            unshift!(lastexpr.args, retval)
+            lastexpr.head = :(=)
+            push!(stmts, lastexpr)
+        end
+        push!(stmts, retstmt)
+        expr = rettype===Any ? retval : SymbolNode(retval,rettype)
+    else
+        expr = lastexpr.args[1]
+    end
+
+    if isa(expr,Expr)
+        old_t = e.typ
+        if old_t <: expr.typ
+            expr.typ = old_t
+        end
+    end
+    return (expr, stmts)
 end
 
+inline_worthy(body, occurences::Int) = true
+function inline_worthy(body::Expr, occurences::Int=1) # 0 < occurrences <= 6
+#    if isa(body.args[1],QuoteNode) && (body.args[1]::QuoteNode).value === :inline
+#        shift!(body.args)
+#        return true
+#    end
+    symlim = div(6,occurences)
+    if length(body.args) < symlim
+        symlim *= 6
+        if occurs_more(body, e->true, symlim) < symlim
+            return true
+        end
+    end
+    return false
+end
+
+gn(v) = ccall(:jl_new_struct, Any, (Any,Any...), GotoNode, v)
+gn(v::LabelNode) = ccall(:jl_new_struct, Any, (Any,Any...), GotoNode, v.label)
+
+const top_setfield = TopNode(:setfield)
 const top_tupleref = TopNode(:tupleref)
 const top_tuple = TopNode(:tuple)
 
-function mk_tupleref(texpr, i)
+function mk_tupleref(texpr, i, T)
     e = :(($top_tupleref)($texpr, $i))
-    e.typ = exprtype(texpr)[i]
+    e.typ = T
     e
 end
 
 function mk_tuplecall(args)
     e = Expr(:call1, top_tuple, args...)
-    e.typ = tuple(map(exprtype, args)...)
+    e.typ = tuple_tfunc(tuple(map(exprtype, args)...), false)
     e
 end
 
 const basenumtype = Union(Int32,Int64,Float32,Float64,Complex64,Complex128,Rational)
 
 function inlining_pass(e::Expr, sv, ast)
-    # don't inline first argument of ccall, as this needs to be evaluated
-    # by the interpreter and inlining might put in something it can't handle,
-    # like another ccall.
+    if e.head == :method
+        # avoid running the inlining pass on function definitions
+        return (e,())
+    end
     eargs = e.args
     if length(eargs)<1
         return (e,())
     end
     arg1 = eargs[1]
+    # don't inline first (global) arguments of ccall, as this needs to be evaluated
+    # by the interpreter and inlining might put in something it can't handle,
+    # like another ccall (or try to move the variables out into the function)
     if is_known_call(e, Core.Intrinsics.ccall, sv)
-        i0 = 3
+        i0 = 5
         isccall = true
     else
         i0 = 1
@@ -2056,13 +2362,43 @@ function inlining_pass(e::Expr, sv, ast)
             i += 1
         end
     else
-        for i=i0:length(eargs)
+        has_stmts = false # needed to preserve order-of-execution
+        for i=length(eargs):-1:i0
             ei = eargs[i]
             if isa(ei,Expr)
-                res = inlining_pass(ei, sv, ast)
-                eargs[i] = res[1]
+                if ei.head === :&
+                    argloc = (ei::Expr).args
+                    i = 1
+                    ei = argloc[1]
+                    if !isa(ei,Expr)
+                        continue
+                    end
+                else
+                    argloc = eargs
+                end
+                res = inlining_pass(ei::Expr, sv, ast)
+                res1 = res[1]
+                if has_stmts && !effect_free(res1, sv, false)
+                    restype = exprtype(res1)
+                    vnew = unique_name(ast)
+                    add_variable(ast, vnew, restype, true)
+                    unshift!(stmts, Expr(:(=), vnew, res1))
+                    argloc[i] = restype===Any ? vnew : SymbolNode(vnew,restype)
+                else
+                    argloc[i] = res1
+                end
                 if isa(res[2],Array)
-                    append!(stmts,res[2]::Array{Any,1})
+                    res2 = res[2]::Array{Any,1}
+                    if length(res2) > 0
+                        prepend!(stmts,res2)
+                        if !has_stmts
+                            for stmt in res2
+                                if !effect_free(stmt, sv, true)
+                                    has_stmts = true
+                                end
+                            end
+                        end
+                    end
                 end
             end
         end
@@ -2101,7 +2437,11 @@ function inlining_pass(e::Expr, sv, ast)
         end
 
         for ninline = 1:100
-            res = inlineable(f, e, sv, ast)
+            atypes = tuple(map(exprtype, e.args[2:end])...)
+            if length(atypes) > MAX_TUPLETYPE_LEN
+                atypes = limit_tuple_type(atypes)
+            end
+            res = inlineable(f, e, atypes, sv, ast)
             if isa(res,Tuple)
                 if isa(res[2],Array)
                     append!(stmts,res[2])
@@ -2113,7 +2453,7 @@ function inlining_pass(e::Expr, sv, ast)
                 # iteratively inline apply(f, tuple(...), tuple(...), ...) in order
                 # to simplify long vararg lists as in multi-arg +
                 if isa(res,Expr) && is_known_call(res, apply, sv)
-                    e = res
+                    e = res::Expr
                     f = apply
                 else
                     return (res,stmts)
@@ -2125,13 +2465,15 @@ function inlining_pass(e::Expr, sv, ast)
                 newargs = cell(na-2)
                 for i = 3:na
                     aarg = e.args[i]
-                    t = exprtype(aarg)
+                    t = to_tuple_of_Types(exprtype(aarg))
                     if isa(aarg,Expr) && is_known_call(aarg, tuple, sv)
                         # apply(f,tuple(x,y,...)) => f(x,y,...)
                         newargs[i-2] = aarg.args[2:end]
-                    elseif isa(t,Tuple) && !isvatuple(t) && effect_free(aarg,sv)
+                    elseif isa(aarg, Tuple)
+                        newargs[i-2] = { QuoteNode(x) for x in aarg }
+                    elseif isa(t,Tuple) && !isvatuple(t) && effect_free(aarg,sv,true)
                         # apply(f,t::(x,y)) => f(t[1],t[2])
-                        newargs[i-2] = { mk_tupleref(aarg,j) for j=1:length(t) }
+                        newargs[i-2] = { mk_tupleref(aarg,j,t[j]) for j=1:length(t) }
                     else
                         # not all args expandable
                         return (e,stmts)
@@ -2154,8 +2496,8 @@ function inlining_pass(e::Expr, sv, ast)
     return (e,stmts)
 end
 
-function add_variable(ast, name, typ)
-    vinf = {name,typ,18}
+function add_variable(ast, name, typ, is_sa)
+    vinf = {name,typ,2+16*is_sa}
     locllist = ast.args[2][1]::Array{Any,1}
     vinflist = ast.args[2][2]::Array{Any,1}
     push!(locllist, name)
@@ -2176,6 +2518,22 @@ function unique_name(ast)
     end
     g = gensym()
     while contains_is(locllist, g)
+        g = gensym()
+    end
+    g
+end
+function unique_name(ast1, ast2)
+    locllist1 = ast1.args[2][1]::Array{Any,1}
+    locllist2 = ast2.args[2][1]::Array{Any,1}
+    for g in some_names
+        if !contains_is(locllist1, g) &&
+           !contains_is(locllist2, g)
+            return g
+        end
+    end
+    g = gensym()
+    while contains_is(locllist1, g) |
+          contains_is(locllist2, g)
         g = gensym()
     end
     g
@@ -2210,12 +2568,12 @@ function is_known_call(e::Expr, func, sv)
     return !is(f,false) && is(_ieval(f), func)
 end
 
-function is_known_call(e::Expr, fs::Array, sv)
+function is_known_call_p(e::Expr, pred::Function, sv)
     if !(is(e.head,:call) || is(e.head,:call1))
         return false
     end
     f = isconstantfunc(e.args[1], sv)
-    return !is(f,false) && contains_is(fs, _ieval(f))
+    return !is(f,false) && pred(_ieval(f))
 end
 
 function is_var_assigned(ast, v)
@@ -2250,10 +2608,10 @@ function remove_redundant_temp_vars(ast, sa)
                 # this transformation is not valid for vars used before def.
                 # we need to preserve the point of assignment to know where to
                 # throw errors (issue #4645).
-                delete_var!(ast, v)
-                sym_replace(ast.args[3], {v}, {}, {init}, {})
-            end
+            delete_var!(ast, v)
+            sym_replace(ast.args[3], {v}, {}, {init}, {})
         end
+    end
     end
     ast
 end
@@ -2326,6 +2684,44 @@ function occurs_outside_tupleref(e::ANY, sym::ANY, sv::StaticVarInfo, tuplen::In
     return false
 end
 
+# replace tupleref(tuple(exprs...), i) with exprs[i]
+function tupleref_elim_pass(e::Expr, sv)
+    for i = 1:length(e.args)
+        ei = e.args[i]
+        if isa(ei,Expr)
+            tupleref_elim_pass(ei, sv)
+            if is_known_call(ei, tupleref, sv) && length(ei.args)==3 &&
+                isa(ei.args[3],Int)
+                e1 = ei.args[2]
+                j = ei.args[3]
+                if isa(e1,Expr)
+                    if is_known_call(e1, tuple, sv) && (1 <= j < length(e1.args))
+                        ok = true
+                        for k = 2:length(e1.args)
+                            k == j+1 && continue
+                            if !effect_free(e1.args[k], sv, true)
+                                ok = false; break
+                            end
+                        end
+                        if ok
+                            e.args[i] = e1.args[j+1]
+                        end
+                    end
+                elseif isa(e1,Tuple) && (1 <= j <= length(e1))
+                    e1j = e1[j]
+                    if !(isa(e1j,Number) || isa(e1j,String) || isa(e1j,Tuple) ||
+                         isa(e1j,Type))
+                        e1j = QuoteNode(e1j)
+                    end
+                    e.args[i] = e1j
+                elseif isa(e1,QuoteNode) && isa(e1.value,Tuple) && (1 <= j <= length(e1.value))
+                    e.args[i] = QuoteNode(e1.value[j])
+                end
+            end
+        end
+    end
+end
+
 # eliminate allocation of unnecessary tuples
 function tuple_elim_pass(ast::Expr)
     sv = inference_stack.sv
@@ -2362,7 +2758,7 @@ function tuple_elim_pass(ast::Expr)
                     elty = exprtype(tupelt)
                     tmpv = unique_name(ast)
                     tmp = Expr(:(=), tmpv, tupelt)
-                    add_variable(ast, tmpv, elty)
+                    add_variable(ast, tmpv, elty, true)
                     insert!(body, i+n_ins, tmp)
                     vals[j] = SymbolNode(tmpv, elty)
                     n_ins += 1
@@ -2403,7 +2799,7 @@ function replace_tupleref!(ast, e::ANY, tupname, vals, sv, i0)
     end
 end
 
-function code_typed(f::Callable, types)
+function code_typed(f::Callable, types::(Type...))
     asts = {}
     for x in _methods(f,types,-1)
         linfo = x[3].func.code

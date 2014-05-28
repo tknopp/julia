@@ -15,6 +15,10 @@
 #define GC_PAGE_SZ (2048*sizeof(void*))//bytes
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct _gcpage_t {
     char data[GC_PAGE_SZ];
     union {
@@ -671,7 +675,7 @@ static jl_value_t *lookforme = NULL;
 DLLEXPORT void jl_gc_lookfor(jl_value_t *v) { lookforme = v; }
 */
 
-#define MAX_MARK_DEPTH 1000
+#define MAX_MARK_DEPTH 400
 
 static void push_root(jl_value_t *v, int d)
 {
@@ -779,27 +783,6 @@ extern jl_value_t * volatile jl_task_arg_in_transit;
 double clock_now(void);
 #endif
 
-static void gc_mark_uv_handle(uv_handle_t *handle, void *arg)
-{
-    if (handle->data) {
-        gc_push_root((jl_value_t*)(handle->data), 0);
-    }
-}
-
-#include "../deps/libuv/src/queue.h"
-
-static void gc_mark_uv_state(uv_loop_t *loop)
-{
-    QUEUE *q;
-    uv_walk(loop,gc_mark_uv_handle,0);
-    QUEUE_FOREACH(q,&loop->active_reqs)
-    {
-        uv_req_t *req = QUEUE_DATA(q,uv_req_t,active_queue);
-        if (req->data)
-            gc_push_root((jl_value_t*)(req->data), 0);
-    }
-}
-
 extern jl_module_t *jl_old_base_module;
 extern jl_array_t *typeToTypeId;
 
@@ -831,9 +814,6 @@ static void gc_mark(void)
     gc_push_root(jl_null, 0);
     gc_push_root(jl_true, 0);
     gc_push_root(jl_false, 0);
-
-    // libuv loops
-    gc_mark_uv_state(jl_global_event_loop());
 
     jl_mark_box_caches();
 
@@ -1175,3 +1155,7 @@ static void big_obj_stats(void)
     JL_PRINTF(JL_STDOUT, "%d bytes in %d large objects\n", nbytes, nused);
 }
 #endif //MEMPROFILE
+
+#ifdef __cplusplus
+}
+#endif

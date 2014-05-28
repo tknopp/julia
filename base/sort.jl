@@ -81,9 +81,10 @@ function select!(v::AbstractVector, k::Int, lo::Int, hi::Int, o::Ordering)
     return v[lo]
 end
 
-function select!(v::AbstractVector, r::Range1, lo::Int, hi::Int, o::Ordering)
-    a, b = first(r), last(r)
-    lo <= a <= b <= hi || error("select index $k is out of range $lo:$hi")
+function select!(v::AbstractVector, r::OrdinalRange, lo::Int, hi::Int, o::Ordering)
+    isempty(r) && (return v[r])
+    a, b = extrema(r)
+    lo <= a <= b <= hi || error("selection $r is out of range $lo:$hi")
     @inbounds while true
         if lo == a && hi == b
             sort!(v, lo, hi, DEFAULT_UNSTABLE, o)
@@ -111,12 +112,12 @@ function select!(v::AbstractVector, r::Range1, lo::Int, hi::Int, o::Ordering)
     end
 end
 
-select!(v::AbstractVector, k::Union(Int,Range1), o::Ordering) = select!(v,k,1,length(v),o)
-select!(v::AbstractVector, k::Union(Int,Range1);
+select!(v::AbstractVector, k::Union(Int,OrdinalRange), o::Ordering) = select!(v,k,1,length(v),o)
+select!(v::AbstractVector, k::Union(Int,OrdinalRange);
     lt::Function=isless, by::Function=identity, rev::Bool=false, order::Ordering=Forward) =
     select!(v, k, ord(lt,by,rev,order))
 
-select(v::AbstractVector, k::Union(Int,Range1); kws...) = select!(copy(v), k; kws...)
+select(v::AbstractVector, k::Union(Int,OrdinalRange); kws...) = select!(copy(v), k; kws...)
 
 # reference on sorted binary search:
 #   http://www.tbray.org/ongoing/When/200x/2003/03/22/Binary
@@ -174,7 +175,7 @@ function searchsorted(v::AbstractVector, x, lo::Int, hi::Int, o::Ordering)
     return lo+1:hi-1
 end
 
-function searchsortedlast{T<:Real}(a::Ranges{T}, x::Real, o::Ordering=Forward)
+function searchsortedlast{T<:Real}(a::Range{T}, x::Real, o::DirectOrdering)
     if step(a) == 0
         lt(o, x, first(a)) ? 0 : length(a)
     else
@@ -183,7 +184,7 @@ function searchsortedlast{T<:Real}(a::Ranges{T}, x::Real, o::Ordering=Forward)
     end
 end
 
-function searchsortedfirst{T<:Real}(a::Ranges{T}, x::Real, o::Ordering=Forward)
+function searchsortedfirst{T<:Real}(a::Range{T}, x::Real, o::DirectOrdering)
     if step(a) == 0
         lt(o, first(a), x) ? length(a)+1 : 1
     else
@@ -192,7 +193,7 @@ function searchsortedfirst{T<:Real}(a::Ranges{T}, x::Real, o::Ordering=Forward)
     end
 end
 
-function searchsortedlast{T<:Integer}(a::Ranges{T}, x::Real, o::Ordering=Forward)
+function searchsortedlast{T<:Integer}(a::Range{T}, x::Real, o::DirectOrdering)
     if step(a) == 0
         lt(o, x, first(a)) ? 0 : length(a)
     else
@@ -200,7 +201,7 @@ function searchsortedlast{T<:Integer}(a::Ranges{T}, x::Real, o::Ordering=Forward
     end
 end
 
-function searchsortedfirst{T<:Integer}(a::Ranges{T}, x::Real, o::Ordering=Forward)
+function searchsortedfirst{T<:Integer}(a::Range{T}, x::Real, o::DirectOrdering)
     if step(a) == 0
         lt(o, first(a), x) ? length(a)+1 : 1
     else
@@ -208,8 +209,8 @@ function searchsortedfirst{T<:Integer}(a::Ranges{T}, x::Real, o::Ordering=Forwar
     end
 end
 
-searchsorted{T<:Real}(a::Ranges{T}, x::Real; kws...) =
-    searchsortedfirst(a,x; kws...):searchsortedlast(a,x; kws...)
+searchsorted{T<:Real}(a::Range{T}, x::Real, o::DirectOrdering) =
+    searchsortedfirst(a,x,o):searchsortedlast(a,x,o)
 
 for s in {:searchsortedfirst, :searchsortedlast, :searchsorted}
     @eval begin
@@ -334,7 +335,7 @@ sort(v::AbstractVector; kws...) = sort!(copy(v); kws...)
 
 ## sortperm: the permutation to sort an array ##
 
-sortperm(v::AbstractVector; alg::Algorithm=DEFAULT_STABLE,
+sortperm(v::AbstractVector; alg::Algorithm=DEFAULT_UNSTABLE,
     lt::Function=isless, by::Function=identity, rev::Bool=false, order::Ordering=Forward) =
     sort!([1:length(v)], alg, Perm(ord(lt,by,rev,order),v))
 
@@ -374,8 +375,8 @@ immutable Right <: Ordering end
 left(::DirectOrdering) = Left()
 right(::DirectOrdering) = Right()
 
-left(o::Perm) = Perm(left(o.order),o.data)
-right(o::Perm) = Perm(right(o.order),o.data)
+left(o::Perm) = Perm(left(o.order), o.data)
+right(o::Perm) = Perm(right(o.order), o.data)
 
 lt{T<:Floats}(::Left, x::T, y::T) = slt_int(unbox(T,y),unbox(T,x))
 lt{T<:Floats}(::Right, x::T, y::T) = slt_int(unbox(T,x),unbox(T,y))
@@ -419,7 +420,8 @@ nans2end!(v::AbstractVector, o::ReverseOrdering) = nans2left!(v,o)
 nans2end!{O<:ForwardOrdering}(v::AbstractVector{Int}, o::Perm{O}) = nans2right!(v,o)
 nans2end!{O<:ReverseOrdering}(v::AbstractVector{Int}, o::Perm{O}) = nans2left!(v,o)
 
-issignleft(o::DirectOrdering, x::Floats) = lt(o, x, zero(x))
+issignleft(o::ForwardOrdering, x::Floats) = lt(o, x, zero(x))
+issignleft(o::ReverseOrdering, x::Floats) = lt(o, x, -zero(x))
 issignleft(o::Perm, i::Int) = issignleft(o.order, o.data[i])
 
 function fpsort!(v::AbstractVector, a::Algorithm, o::Ordering)

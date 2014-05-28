@@ -43,7 +43,12 @@ convert(::Type{Rational}, x::Integer) = convert(Rational{typeof(x)},x)
 
 convert(::Type{Bool}, x::Rational) = (x!=0) # to resolve ambiguity
 convert{T<:Integer}(::Type{T}, x::Rational) = (isinteger(x) ? convert(T, x.num) : throw(InexactError()))
-convert{T<:FloatingPoint}(::Type{T}, x::Rational) = convert(T,x.num)/convert(T,x.den)
+
+convert(::Type{FloatingPoint}, x::Rational) = float(x.num)/float(x.den)
+function convert{T<:FloatingPoint,S}(::Type{T}, x::Rational{S})
+    P = promote_type(T,S)
+    convert(P,x.num)/convert(P,x.den)
+end
 
 function convert{T<:Integer}(::Type{Rational{T}}, x::FloatingPoint)
     r = rationalize(T, x, tol=0)
@@ -56,6 +61,8 @@ convert(::Type{Rational}, x::Float32) = convert(Rational{Int}, x)
 promote_rule{T<:Integer,S<:Integer}(::Type{Rational{T}}, ::Type{S}) = Rational{promote_type(T,S)}
 promote_rule{T<:Integer,S<:Integer}(::Type{Rational{T}}, ::Type{Rational{S}}) = Rational{promote_type(T,S)}
 promote_rule{T<:Integer,S<:FloatingPoint}(::Type{Rational{T}}, ::Type{S}) = promote_type(T,S)
+
+widen{T}(::Type{Rational{T}}) = Rational{widen(T)}
 
 function rationalize{T<:Integer}(::Type{T}, x::FloatingPoint; tol::Real=eps(x))
     if isnan(x);       return zero(T)//zero(T); end
@@ -94,16 +101,10 @@ signbit(x::Rational) = signbit(x.num)
 copysign(x::Rational, y::Real) = copysign(x.num,y) // x.den
 copysign(x::Rational, y::Rational) = copysign(x.num,y.num) // x.den
 
-isnan(x::Rational) = false
-isinf(x::Rational) = x.den == 0
-isfinite(x::Rational) = x.den != 0
-
 typemin{T<:Integer}(::Type{Rational{T}}) = -one(T)//zero(T)
 typemax{T<:Integer}(::Type{Rational{T}}) = one(T)//zero(T)
 
 isinteger(x::Rational) = x.den == 1
-
-hash(x::Rational) = bitmix(hash(x.num), ~hash(x.den))
 
 -(x::Rational) = (-x.num) // x.den
 for op in (:+, :-, :rem, :mod)

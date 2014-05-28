@@ -12,9 +12,10 @@ ifeq ($(USE_SYSTEM_BLAS),1)
 ifeq ($(USE_SYSTEM_LAPACK),0)
 
 $(build_libdir)/libgfortblas.dylib:
+	mkdir -p $(build_libdir)
 	make -C ../deps/ $(build_libdir)/libgfortblas.dylib
 
-default: $(build_ibdir)/libgfortblas.dylib
+default: $(build_libdir)/libgfortblas.dylib
 endif
 endif
 endif

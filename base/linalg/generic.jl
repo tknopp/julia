@@ -11,13 +11,14 @@ end
 
 scale{R<:Real}(s::Complex, X::AbstractArray{R}) = scale(X, s)
 
-function scale!(X::AbstractArray, s::Number)
-    for i in 1:length(X)
+function generic_scale!(X::AbstractArray, s::Number)
+    for i = 1:length(X)
         @inbounds X[i] *= s
     end
     X
 end
-scale!(s::Number, X::AbstractArray) = scale!(X, s)
+scale!(X::AbstractArray, s::Number) = generic_scale!(X, s)
+scale!(s::Number, X::AbstractArray) = generic_scale!(X, s)
 
 cross(a::AbstractVector, b::AbstractVector) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
 
@@ -51,103 +52,156 @@ diag(A::AbstractVector) = error("use diagm instead of diag to construct a diagon
 
 #diagm{T}(v::AbstractVecOrMat{T})
 
-function normMinusInf(x::AbstractVector)
-    n = length(x)
-    n > 0 || return real(zero(eltype(x)))
-    a = abs(x[1])
-    @inbounds for i = 2:n
-        a = min(a, abs(x[i]))
+# special cases of vecnorm; note that they don't need to handle isempty(x)
+function generic_vecnormMinusInf(x)
+    s = start(x)
+    (v, s) = next(x, s)
+    minabs = abs(v)
+    while !done(x, s)
+        (v, s) = next(x, s)
+        minabs = Base.scalarmin(minabs, abs(v))
     end
-    return a
-end
-function normInf(x::AbstractVector)
-    a = real(zero(eltype(x)))
-    @inbounds for i = 1:length(x)
-        a = max(a, abs(x[i]))
-    end
-    return a
-end
-function norm1(x::AbstractVector)
-    a = real(zero(eltype(x)))
-    @inbounds for i = 1:length(x)
-        a += abs(x[i])
-    end
-    return a
-end
-function norm2(x::AbstractVector)
-    nrmInfInv = inv(norm(x,Inf))
-    isinf(nrmInfInv) && return zero(nrmInfInv)
-    a = abs2(x[1]*nrmInfInv)
-    @inbounds for i = 2:length(x)
-        a += abs2(x[i]*nrmInfInv)
-    end
-    return sqrt(a)/nrmInfInv
-end
-function normp(x::AbstractVector,p::Number)
-    absx = convert(Vector{typeof(sqrt(abs(x[1])))}, abs(x))
-    dx = maximum(absx)
-    dx == 0 && return zero(typeof(absx))
-    scale!(absx, 1/dx)
-    pp = convert(eltype(absx), p)
-    return dx*sum(absx.^pp)^inv(pp)
-end
-function norm(x::AbstractVector, p::Number=2)
-    p == 0 && return countnz(x)
-    p == Inf && return normInf(x)
-    p == -Inf && return normMinusInf(x)
-    p == 1 && return norm1(x)
-    p == 2 && return norm2(x)
-    normp(x,p)
+    return float(minabs)
 end
 
+function generic_vecnormInf(x)
+    s = start(x)
+    (v, s) = next(x, s)
+    maxabs = abs(v)
+    while !done(x, s)
+        (v, s) = next(x, s)
+        maxabs = Base.scalarmax(maxabs, abs(v))
+    end
+    return float(maxabs)
+end
+
+function generic_vecnorm1(x)
+    s = start(x)
+    (v, s) = next(x, s)
+    av = float(abs(v))
+    T = typeof(av)
+    sum::promote_type(Float64, T) = av
+    while !done(x, s)
+        (v, s) = next(x, s)
+        sum += abs(v)
+    end
+    return convert(T, sum)
+end
+
+function generic_vecnorm2(x)
+    maxabs = vecnormInf(x)
+    maxabs == 0 && return maxabs
+    s = start(x)
+    (v, s) = next(x, s)
+    T = typeof(maxabs)
+    scale::promote_type(Float64, T) = 1/maxabs
+    y = abs(v)*scale
+    sum::promote_type(Float64, T) = y*y
+    while !done(x, s)
+        (v, s) = next(x, s)
+        y = abs(v)*scale
+        sum += y*y
+    end
+    return convert(T, maxabs * sqrt(sum))
+end
+
+function generic_vecnormp(x, p)
+    if p > 1 || p < 0 # need to rescale to avoid overflow/underflow
+        maxabs = vecnormInf(x)
+        maxabs == 0 && return maxabs
+        s = start(x)
+        (v, s) = next(x, s)
+        T = typeof(maxabs)
+        spp::promote_type(Float64, T) = p
+        scale::promote_type(Float64, T) = 1/maxabs
+        ssum::promote_type(Float64, T) = (abs(v)*scale)^spp
+        while !done(x, s)
+            (v, s) = next(x, s)
+            ssum += (abs(v)*scale)^spp
+        end
+        return convert(T, maxabs * ssum^inv(spp))
+    else # 0 < p < 1, no need for rescaling (but technically not a true norm)
+        s = start(x)
+        (v, s) = next(x, s)
+        av = float(abs(v))
+        T = typeof(av)
+        pp::promote_type(Float64, T) = p
+        sum::promote_type(Float64, T) = av^pp
+        while !done(x, s)
+            (v, s) = next(x, s)
+            sum += abs(v)^pp
+        end
+        return convert(T, sum^inv(pp))
+    end
+end
+
+vecnormMinusInf(x) = generic_vecnormMinusInf(x)
+vecnormInf(x) = generic_vecnormInf(x)
+vecnorm1(x) = generic_vecnorm1(x)
+vecnorm2(x) = generic_vecnorm2(x)
+vecnormp(x, p) = generic_vecnormp(x, p)
+
+function vecnorm(itr, p::Real=2)
+    isempty(itr) && return float(real(zero(eltype(itr))))
+    p == 2 && return vecnorm2(itr)
+    p == 1 && return vecnorm1(itr)
+    p == Inf && return vecnormInf(itr)
+    p == 0 && return convert(typeof(float(real(zero(eltype(itr))))),
+                             countnz(itr))
+    p == -Inf && return vecnormMinusInf(itr)
+    vecnormp(itr,p)
+end
+vecnorm(x::Number, p::Real=2) = p == 0 ? real(x==0 ? zero(x) : one(x)) : abs(x)
+
+norm(x::AbstractVector, p::Real=2) = vecnorm(x, p)
+
 function norm1{T}(A::AbstractMatrix{T})
-    m,n = size(A)
-    nrm = zero(real(zero(T)))
+    m, n = size(A)
+    Tnorm = typeof(float(real(zero(T))))
+    Tsum = promote_type(Float64,Tnorm)
+    nrm::Tsum = 0
     @inbounds begin
         for j = 1:n
-            nrmj = zero(real(zero(T)))
+            nrmj::Tsum = 0
             for i = 1:m
                 nrmj += abs(A[i,j])
             end
             nrm = max(nrm,nrmj)
         end
     end
-    return nrm
+    return convert(Tnorm, nrm)
 end
-function norm2(A::AbstractMatrix)
+function norm2{T}(A::AbstractMatrix{T})
     m,n = size(A)
-    if m == 0 || n == 0 return real(zero(eltype(A))) end
-    svdvals(A)[1]
+    if m == 1 || n == 1 return vecnorm2(A) end
+    Tnorm = typeof(float(real(zero(T))))
+    (m == 0 || n == 0) ? zero(Tnorm) : convert(Tnorm, svdvals(A)[1])
 end
 function normInf{T}(A::AbstractMatrix{T})
     m,n = size(A)
-    nrm = zero(real(zero(T)))
+    Tnorm = typeof(float(real(zero(T))))
+    Tsum = promote_type(Float64,Tnorm)
+    nrm::Tsum = 0
     @inbounds begin
         for i = 1:m
-            nrmi = zero(real(zero(T)))
+            nrmi::Tsum = 0
             for j = 1:n
                 nrmi += abs(A[i,j])
             end
             nrm = max(nrm,nrmi)
         end
     end
-    return nrm
+    return convert(Tnorm, nrm)
 end
-function norm{T}(A::AbstractMatrix{T}, p::Number=2)
-    p == 1 && return norm1(A)
+function norm{T}(A::AbstractMatrix{T}, p::Real=2)
     p == 2 && return norm2(A)
+    p == 1 && return norm1(A)
     p == Inf && return normInf(A)
     throw(ArgumentError("invalid p-norm p=$p. Valid: 1, 2, Inf"))
 end
 
-function norm(x::Number, p=2)
-    if p == 1 || p == Inf || p == -Inf return abs(x) end
-    p == 0 && return ifelse(x != 0, 1, 0)
-    float(abs(x))
-end
-
-normfro(A::AbstractMatrix) = norm(reshape(A, length(A)))
-normfro(x::Number) = abs(x)
+norm(x::Number, p::Real=2) =
+    p == 0 ? convert(typeof(real(x)), ifelse(x != 0, 1, 0)) : abs(x)
 
 rank(A::AbstractMatrix, tol::Real) = sum(svdvals(A) .> tol)
 function rank(A::AbstractMatrix)
@@ -170,14 +224,19 @@ trace(x::Number) = x
 #det(a::AbstractMatrix)
 
 inv(a::AbstractVector) = error("argument must be a square matrix")
-inv{T}(A::AbstractMatrix{T}) = A_ldiv_B!(A,eye(T, chksquare(A)))
+function inv{T}(A::AbstractMatrix{T})
+    S = typeof(one(T)/one(T))
+    A_ldiv_B!(convert(AbstractMatrix{S}, A), eye(S, chksquare(A)))
+end
 
-function \{TA<:Number,TB<:Number}(A::AbstractMatrix{TA}, B::AbstractVecOrMat{TB})
+function \{TA,TB,N}(A::AbstractMatrix{TA}, B::AbstractArray{TB,N})
     TC = typeof(one(TA)/one(TB))
-    A_ldiv_B!(convert(typeof(A).name.primary{TC}, A), TB == TC ? copy(B) : convert(typeof(B).name.primary{TC}, B))
+    A_ldiv_B!(TA == TC ? copy(A) : convert(AbstractMatrix{TC}, A), TB == TC ? copy(B) : convert(AbstractArray{TC,N}, B))
 end
 \(a::AbstractVector, b::AbstractArray) = reshape(a, length(a), 1) \ b
 /(A::AbstractVecOrMat, B::AbstractVecOrMat) = (B' \ A')'
+# \(A::StridedMatrix,x::Number) = inv(A)*x Should be added at some point when the old elementwise version has been deprecated long enough
+# /(x::Number,A::StridedMatrix) = x*inv(A)
 
 cond(x::Number) = x == 0 ? Inf : 1.0
 cond(x::Number, p) = cond(x)
@@ -268,7 +327,7 @@ function peakflops(n::Integer=2000; parallel::Bool=false)
     t = @elapsed a*a
     a = rand(n,n)
     t = @elapsed a*a
-    parallel ? sum(pmap(peakflops, [ n for i in 1:nworkers()])) : (2*n^3/t)
+    parallel ? sum(pmap(peakflops, [ n for i in 1:nworkers()])) : (2*float64(n)^3/t)
 end
 
 # BLAS-like in-place y=alpha*x+y function (see also the version in blas.jl

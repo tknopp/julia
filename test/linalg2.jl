@@ -9,7 +9,7 @@ n = 5
 
 srand(123)
 
-d = 1 + rand(n)
+d = 1 .+ rand(n)
 dl = -rand(n-1)
 du = -rand(n-1)
 v = randn(n)
@@ -43,6 +43,7 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
         V = convert(Matrix{elty}, V)
         C = convert(Matrix{elty}, C)
     end
+    ε = eps(abs2(float(one(elty))))
     T = Tridiagonal(dl, d, du)
     @test size(T, 1) == n
     @test size(T) == (n, n)
@@ -67,20 +68,22 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
     @test_approx_eq T*v F*v
     invFv = F\v
     @test_approx_eq T\v invFv
-    @test_approx_eq Base.solve(T,v) invFv
-    @test_approx_eq Base.solve(T, B) F\B
+    # @test_approx_eq Base.solve(T,v) invFv
+    # @test_approx_eq Base.solve(T, B) F\B
     Tlu = factorize(T)
     x = Tlu\v
     @test_approx_eq x invFv
     @test_approx_eq det(T) det(F)
 
     # symmetric tridiagonal
-    Ts = SymTridiagonal(d, dl)
-    Fs = full(Ts)
-    invFsv = Fs\v
-    Tldlt = Base.ldltd(Ts)
-    x = Tldlt\v
-    @test_approx_eq x invFsv
+    if elty <: Real
+        Ts = SymTridiagonal(d, dl)
+        Fs = full(Ts)
+        invFsv = Fs\v
+        Tldlt = ldltfact(Ts)
+        x = Tldlt\v
+        @test_approx_eq x invFsv
+    end
 
     # eigenvalues/eigenvectors of symmetric tridiagonal
     if elty === Float32 || elty === Float64
@@ -95,11 +98,11 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
     F = full(W)
     @test_approx_eq W*v F*v
     iFv = F\v
-    @test_approx_eq W\v iFv
-    @test_approx_eq det(W) det(F)
+    @test norm(W\v - iFv)/norm(iFv) <= n*cond(F)*ε # Revisit. Condition number is wrong
+    @test abs((det(W) - det(F))/det(F)) <= n*cond(F)*ε # Revisit. Condition number is wrong
     iWv = similar(iFv)
     if elty != Int
-        Base.LinAlg.solve!(iWv, W, v)
+        iWv = A_ldiv_B!(W, copy(v))
         @test_approx_eq iWv iFv
     end
 
@@ -130,7 +133,7 @@ for elty in (Float32, Float64, Complex64, Complex128, Int)
             @test_approx_eq convert(elty, det(R)) one(elty)
         end
 
-    # issue 1490
+    # issue #1490
     @test_approx_eq_eps det(ones(elty, 3,3)) zero(elty) 3*eps(real(one(elty)))
     end
 end
@@ -196,7 +199,9 @@ function test_approx_eq_vecs{S<:Real,T<:Real}(a::StridedVecOrMat{S}, b::StridedV
     for i=1:n
         ev1, ev2 = a[:,i], b[:,i]
         deviation = min(abs(norm(ev1-ev2)),abs(norm(ev1+ev2)))
-        @test_approx_eq_eps deviation 0.0 error
+        if !isnan(deviation)
+            @test_approx_eq_eps deviation 0.0 error
+        end
     end
 end
 
@@ -206,7 +211,7 @@ end
 
 #Triangular matrices
 n=12
-for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relty})
+for relty in (Float32, Float64, BigFloat), elty in (relty, Complex{relty})
     A = convert(Matrix{elty}, randn(n, n))
     b = convert(Matrix{elty}, randn(n, 2))
     if elty <: Complex
@@ -216,6 +221,11 @@ for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relt
 
     for M in (triu(A), tril(A))
         TM = Triangular(M)
+        #Multiplication
+        @test_approx_eq A*M A*TM
+        @test_approx_eq M*A TM*A
+        @test_approx_eq M*M TM*TM
+        @test_approx_eq M*b TM*b
         condM = elty <:BlasFloat ? cond(TM, Inf) : convert(relty, cond(complex128(M), Inf))
         #Linear solver
         x = M \ b
@@ -243,7 +253,7 @@ for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relt
 end
 
 #Tridiagonal matrices
-for relty in (Float16, Float32, Float64), elty in (relty, Complex{relty})
+for relty in (Float32, Float64), elty in (relty, Complex{relty})
     a = convert(Vector{elty}, randn(n-1))
     b = convert(Vector{elty}, randn(n))
     c = convert(Vector{elty}, randn(n-1))
@@ -261,11 +271,10 @@ for relty in (Float16, Float32, Float64), elty in (relty, Complex{relty})
 end
 
 #SymTridiagonal (symmetric tridiagonal) matrices
-for relty in (Float16, Float32, Float64), elty in (relty, )#XXX Complex{relty}) doesn't work
+for relty in (Float32, Float64), elty in (relty, )#XXX Complex{relty}) doesn't work
     a = convert(Vector{elty}, randn(n))
     b = convert(Vector{elty}, randn(n-1))
     if elty <: Complex
-        relty==Float16 && continue
         a += im*convert(Vector{elty}, randn(n))
         b += im*convert(Vector{elty}, randn(n-1))
     end
@@ -304,7 +313,7 @@ for elty in (Float32, Float64)
 end
 
 #Bidiagonal matrices
-for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relty})
+for relty in (Float32, Float64, BigFloat), elty in (relty, Complex{relty})
     dv = convert(Vector{elty}, randn(n))
     ev = convert(Vector{elty}, randn(n-1))
     b = convert(Matrix{elty}, randn(n, 2))
@@ -352,14 +361,14 @@ for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relt
                 test_approx_eq_vecs(u1, u2) 
                 test_approx_eq_vecs(v1, v2)
             end
-            @test_approx_eq_eps 0 normfro(u2*diagm(d2)*v2'-Tfull) n*max(n^2*eps(relty), normfro(u1*diagm(d1)*v1'-Tfull))
+            @test_approx_eq_eps 0 vecnorm(u2*diagm(d2)*v2'-Tfull) n*max(n^2*eps(relty), vecnorm(u1*diagm(d1)*v1'-Tfull))
         end
     end
 end
 
 #Diagonal matrices
 n=12
-for relty in (Float16, Float32, Float64, BigFloat), elty in (relty, Complex{relty})
+for relty in (Float32, Float64, BigFloat), elty in (relty, Complex{relty})
     d=convert(Vector{elty}, randn(n))
     v=convert(Vector{elty}, randn(n))
     U=convert(Matrix{elty}, randn(n,n))
@@ -473,9 +482,9 @@ for elty in (Float32, Float64, Complex{Float32}, Complex{Float64})
             A = convert(Matrix{elty}, randn(10,nn))
         else
             A = convert(Matrix{elty}, complex(randn(10,nn),randn(10,nn)))
-        end    ## LU (only equal for real because LAPACK uses difference absolute value when choosing permutations)
+        end    ## LU (only equal for real because LAPACK uses different absolute value when choosing permutations)
         if elty <: Real
-            FJulia  = invoke(lufact!, (AbstractMatrix,), copy(A)) 
+            FJulia  = Base.LinAlg.generic_lufact!(copy(A))
             FLAPACK = Base.LinAlg.LAPACK.getrf!(copy(A))
             @test_approx_eq FJulia.factors FLAPACK[1]
             @test_approx_eq FJulia.ipiv FLAPACK[2]
@@ -527,7 +536,7 @@ end
 nnorm = 1000
 mmat = 100
 nmat = 80
-for elty in (Float16, Float32, Float64, BigFloat, Complex{Float16}, Complex{Float32}, Complex{Float64}, Complex{BigFloat}, Int32, Int64, BigInt)
+for elty in (Float32, Float64, BigFloat, Complex{Float32}, Complex{Float64}, Complex{BigFloat}, Int32, Int64, BigInt)
     debug && println(elty)
 
     ## Vector
@@ -642,11 +651,57 @@ for elty in (Float16, Float32, Float64, BigFloat, Complex{Float16}, Complex{Floa
         @test norm(As + Bs,1) <= norm(As,1) + norm(Bs,1)
         elty <: Union(BigFloat,Complex{BigFloat},BigInt) || @test norm(As + Bs) <= norm(As) + norm(Bs) # two is default
         @test norm(As + Bs,Inf) <= norm(As,Inf) + norm(Bs,Inf)
+
+        # vecnorm:
+        for p = -2:3
+            @test norm(reshape(A, length(A)), p) == vecnorm(A, p)
+        end
     end
 end
 
+# Uniform scaling
+@test I[1,1] == 1 # getindex
+@test I[1,2] == 0 # getindex
+@test I === I' # transpose
+λ = complex(randn(),randn())
+J = UniformScaling(λ)
+@test J*eye(2) == conj(J'eye(2)) # ctranpose (and A(c)_mul_B)
+@test I + I === UniformScaling(2) # +
+B = randbool(2,2)
+@test B + I == B + eye(B)
+@test I + B == B + eye(B)
+A = randn(2,2)
+@test A + I == A + eye(A)
+@test I + A == A + eye(A)
+@test I - I === UniformScaling(0)
+@test B - I == B - eye(B)
+@test I - B == eye(B) - B
+@test A - I == A - eye(A)
+@test I - A == eye(A) - A
+@test I*J === UniformScaling(λ)
+@test B*J == B*λ
+@test J*B == B*λ
+S = sprandn(3,3,0.5)
+@test S*J == S*λ
+@test J*S == S*λ
+@test A*J == A*λ
+@test J*A == A*λ
+@test J*ones(3) == ones(3)*λ
+@test λ*J === UniformScaling(λ*J.λ)
+@test J*λ === UniformScaling(λ*J.λ)
+@test J/I === J
+@test I/A == inv(A)
+@test A/I == A
+@test I/λ === UniformScaling(1/λ)
+@test I\J === J
+T = Triangular(randn(3,3),:L)
+@test T\I == inv(T)
+@test I\A == A
+@test A\I == inv(A)
+@test λ\I === UniformScaling(1/λ)
+
 ## Issue related tests
-# issue 1447
+# issue #1447
 let
     A = [1.+0.im 0; 0 1]
     B = pinv(A)
@@ -655,7 +710,7 @@ let
     end
 end
 
-# issue 2246
+# issue #2246
 let
     A = [1 2 0 0; 0 1 0 0; 0 0 0 0; 0 0 0 0]
     Asq = sqrtm(A)
@@ -670,7 +725,7 @@ let
     @test_approx_eq log(det(eye(N))) logdet(eye(N))
 end
 
-# issue 2637
+# issue #2637
 let
   a = [1, 2, 3]
   b = [4, 5, 6]

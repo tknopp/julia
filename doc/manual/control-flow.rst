@@ -119,6 +119,9 @@ blocks as desired can be used. The condition expressions in the
 evaluates to ``true``, after which the associated block is evaluated,
 and no further condition expressions or blocks are evaluated.
 
+Note that very short conditional statements (one-liners) are frequently expressed using
+Short-Circuit Evaluation in Julia, as outlined in the next section.
+
 Unlike C, MATLAB, Perl, Python, and Ruby — but like Java, and a few
 other stricter, typed languages — it is an error if the value of a
 conditional expression is anything but ``true`` or ``false``:
@@ -276,6 +279,34 @@ this behavior:
 You can easily experiment in the same way with the associativity and
 precedence of various combinations of ``&&`` and ``||`` operators.
 
+This behavior is frequently used in Julia to form an alternative to very short
+``if`` statements. Instead of ``if <cond> <statement> end``, one can write 
+``<cond> && <statement>`` (which could be read as: <cond> *and then* <statement>).
+Similarly, instead of ``if ! <cond> <statement> end``, one can write
+``<cond> || <statement>`` (which could be read as: <cond> *or else* <statement>).
+
+For example, a recursive factorial routine could be defined like this:
+
+.. doctest::
+
+    julia> function factorial(n::Int)
+               n >= 0 || error("n must be non-negative")
+               n == 0 && return 1
+               n * factorial(n-1)
+           end
+    factorial (generic function with 1 method)
+    
+    julia> factorial(5)
+    120
+    
+    julia> factorial(0)
+    1
+    
+    julia> factorial(-1)
+    ERROR: n must be non-negative
+     in factorial at none:2
+
+
 Boolean operations *without* short-circuit evaluation can be done with the
 bitwise boolean operators introduced in :ref:`man-mathematical-operations`:
 ``&`` and ``|``. These are normal functions, which happen to support
@@ -295,12 +326,26 @@ infix operator syntax, but always evaluate their arguments:
 
 Just like condition expressions used in ``if``, ``elseif`` or the
 ternary operator, the operands of ``&&`` or ``||`` must be boolean
-values (``true`` or ``false``). Using a non-boolean value is an error:
+values (``true`` or ``false``). Using a non-boolean value anywhere 
+except for the last entry in a conditional chain is an error:
 
 .. doctest::
 
-    julia> 1 && 2
+    julia> 1 && true
     ERROR: type: non-boolean (Int64) used in boolean context
+
+On the other hand, any type of expression can be used at the end of a conditional chain.  
+It will be evaluated and returned depending on the preceding conditionals:
+
+.. doctest::
+
+    julia> true && (x = rand(2,2))
+    2x2 Array{Float64,2}:
+      0.104159  0.402732
+      0.377173  0.163156
+
+    julia> false && (x = rand(2,2))
+    false
 
 .. _man-loops:
 
@@ -325,7 +370,7 @@ loop:
     4
     5
 
-The ``while`` loop evaluates the condition expression (``i < n`` in this
+The ``while`` loop evaluates the condition expression (``i <= 5`` in this
 case), and as long it remains ``true``, keeps also evaluating the body
 of the ``while`` loop. If the condition expression is ``false`` when the
 ``while`` loop is first reached, the body is never evaluated.
@@ -536,12 +581,18 @@ negative real value:
     try sqrt(complex(x))
      in sqrt at math.jl:284
 
+You may define your own exceptions in the following way:
+
+.. doctest::
+
+    julia> type MyCustomException <: Exception end
+
 The ``throw`` function
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Exceptions can be created explicitly with ``throw``. For example, a function
 defined only for nonnegative numbers could be written to ``throw`` a ``DomainError``
-if the argument is negative. :
+if the argument is negative:
 
 .. doctest::
 
@@ -556,7 +607,7 @@ if the argument is negative. :
      in f at none:1
 
 Note that ``DomainError`` without parentheses is not an exception, but a type of
-exception. It needs to be called to obtain an ``Exception`` object :
+exception. It needs to be called to obtain an ``Exception`` object:
 
 .. doctest::
 
@@ -565,6 +616,24 @@ exception. It needs to be called to obtain an ``Exception`` object :
     
     julia> typeof(DomainError) <: Exception
     false
+
+Additionally, some exception types take one or more arguments that are used for
+error reporting:
+
+.. doctest::
+
+    julia> throw(UndefVarError(:x))
+    ERROR: x not defined
+
+This mechanism can be implemented easily by custom exception types following
+the way ``UndefVarError`` is written:
+
+.. doctest::
+
+    julia> type UndefVarError <: Exception
+               var::Symbol
+           end
+    julia> showerror(io::IO, e::UndefVarError) = print(io, e.var, " not defined")
 
 Errors
 ~~~~~~

@@ -63,7 +63,7 @@ DLLEXPORT int jl_uv_fs_result(uv_fs_t *f);
 
 
 int jl_tuple_subtype(jl_value_t **child, size_t cl,
-                     jl_value_t **parent, size_t pl, int ta, int morespecific);
+                     jl_value_t **parent, size_t pl, int ta);
 
 int jl_subtype_invariant(jl_value_t *a, jl_value_t *b, int ta);
 jl_value_t *jl_type_match(jl_value_t *a, jl_value_t *b);
@@ -76,10 +76,14 @@ void jl_initialize_generic_function(jl_function_t *f, jl_sym_t *name);
 void jl_compute_field_offsets(jl_datatype_t *st);
 jl_array_t *jl_new_array_for_deserialization(jl_value_t *atype, uint32_t ndims, size_t *dims,
                                              int isunboxed, int elsz);
+#ifdef JL_USE_INTEL_JITEVENTS 
+extern char jl_using_intel_jitevents;
+#endif
+extern size_t jl_arr_xtralloc_limit;
 
 void jl_init_types(void);
 void jl_init_box_caches(void);
-void jl_init_frontend(void);
+DLLEXPORT void jl_init_frontend(void);
 void jl_init_primitives(void);
 void jl_init_codegen(void);
 void jl_init_intrinsic_functions(void);
@@ -87,6 +91,7 @@ void jl_init_tasks(void *stack, size_t ssize);
 void jl_init_serializer(void);
 
 void jl_dump_bitcode(char *fname);
+void jl_dump_objfile(char *fname, int jit_model);
 int32_t jl_get_llvm_gv(jl_value_t *p);
 
 #ifdef _OS_LINUX_
@@ -114,6 +119,12 @@ DLLEXPORT size_t rec_backtrace(ptrint_t *data, size_t maxsize);
 DLLEXPORT size_t rec_backtrace_ctx(ptrint_t *data, size_t maxsize, bt_context_t ctx);
 #ifdef LIBOSXUNWIND
 size_t rec_backtrace_ctx_dwarf(ptrint_t *data, size_t maxsize, bt_context_t ctx);
+#endif
+
+#ifndef _OS_WINDOWS_
+DLLEXPORT void jl_dump_linedebug_info(void);
+DLLEXPORT void jl_restore_linedebug_info(uv_lib_t* handle);
+DLLEXPORT void jl_raise_debugger(void);
 #endif
 
 #ifdef __cplusplus

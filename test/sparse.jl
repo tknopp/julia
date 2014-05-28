@@ -80,7 +80,7 @@ for i = 1:5
     @test (maximum(abs(a\b - full(a)\b)) < 1000*eps())
     @test (maximum(abs(a'\b - full(a')\b)) < 1000*eps())
     @test (maximum(abs(a.'\b - full(a.')\b)) < 1000*eps())
-    
+
     a = speye(5) + 0.1*sprandn(5, 5, 0.2) + 0.1*im*sprandn(5, 5, 0.2)
     b = randn(5,3)
     @test (maximum(abs(a*b - full(a)*b)) < 100*eps())
@@ -162,7 +162,7 @@ end
 @test prod(se33, 2) == [0.0 0.0 0.0]'
 
 # spdiagm
-@test full(spdiagm((ones(2), ones(2)), (0, -1), 3, 3)) ==  
+@test full(spdiagm((ones(2), ones(2)), (0, -1), 3, 3)) ==
                        [1.0  0.0  0.0; 1.0  1.0  0.0;  0.0  1.0  0.0]
 
 # elimination tree
@@ -175,32 +175,117 @@ P,post = Base.LinAlg.etree(A, true)
 @test P == int32([6,3,8,6,8,7,9,10,10,11,0])
 @test post == int32([2,3,5,8,1,4,6,7,9,10,11])
 
-# reinterpret issue 4986
+# issue #4986, reinterpret
 sfe22 = speye(Float64, 2)
 mfe22 = eye(Float64, 2)
 @test reinterpret(Int64, sfe22) == reinterpret(Int64, mfe22)
 
-# Issue 5190
-@test_throws sparsevec([3,5,7],[0.1,0.0,3.2],4)
+# issue #5190
+@test_throws DimensionMismatch sparsevec([3,5,7],[0.1,0.0,3.2],4)
 
 # issue #5169
-@test nfilled(sparse([1,1],[1,2],[0.0,-0.0])) == 0
+@test nnz(sparse([1,1],[1,2],[0.0,-0.0])) == 0
 
 # issue #5386
-I,J,V = findnz(SparseMatrixCSC(2,1,[1,3],[1,2],[1.0,0.0]))
-@test length(I) == length(J) == length(V) == 1
+K,J,V = findnz(SparseMatrixCSC(2,1,[1,3],[1,2],[1.0,0.0]))
+@test length(K) == length(J) == length(V) == 1
 
 # issue #5437
-@test nfilled(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2
+@test nnz(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2
 
-# issue 5824
+# issue #5824
 @test sprand(4,5,0.5).^0 == sparse(ones(4,5))
 
-# issue 5853, sparse diff
+# issue #5985
+@test sprandbool(4, 5, 0.0) == sparse(zeros(Bool, 4, 5))
+@test sprandbool(4, 5, 1.00) == sparse(ones(Bool, 4, 5))
+sprb45 = sprandbool(4, 5, 0.5)
+@test length(sprb45) == 20
+@test 4 <= sum(sprb45)[1] <= 16
+
+# issue #5853, sparse diff
 for i=1:2, a={[1 2 3], [1 2 3]', speye(3)}
     @test all(diff(sparse(a),i) == diff(a,i))
 end
 
 # test for "access to undefined error" types that initially allocate elements as #undef
-@test all(sparse(1:2, 1:2, Any[1,2])^2 == sparse(1:2, 1:2, [1,4]))
-sd1 = diff(sparse([1,1,1], [1,2,3], Any[1,2,3]), 1)
+@test all(sparse(1:2, 1:2, Number[1,2])^2 == sparse(1:2, 1:2, [1,4]))
+sd1 = diff(sparse([1,1,1], [1,2,3], Number[1,2,3]), 1)
+
+# issue #6036
+P = spzeros(Float64, 3, 3)
+for i = 1:3
+    P[i,i] = i
+end
+
+@test minimum(P) === 0.0
+@test maximum(P) === 3.0
+@test minimum(-P) === -3.0
+@test maximum(-P) === 0.0
+
+@test maximum(P, (1,)) == [1.0 2.0 3.0]
+@test maximum(P, (2,)) == reshape([1.0,2.0,3.0],3,1)
+@test maximum(P, (1,2)) == reshape([3.0],1,1)
+
+@test maximum(sparse(-ones(3,3))) == -1
+@test minimum(sparse(ones(3,3))) == 1
+
+# Unary functions
+a = sprand(5,15, 0.5)
+afull = full(a)
+for op in (:sin, :cos, :tan, :iceil, :ifloor, :ceil, :floor, :abs, :abs2)
+    @eval begin
+        @test ($op)(afull) == full($(op)(a))
+    end
+end
+
+# setindex tests
+let a = spzeros(Int, 10, 10)
+    @test countnz(a) == 0
+    a[1,:] = 1
+    @test countnz(a) == 10
+    @test a[1,:] == sparse(ones(Int,1,10))
+    a[:,2] = 2
+    @test countnz(a) == 19
+    @test a[:,2] == 2*sparse(ones(Int,10,1))
+
+    a[1,:] = 1:10
+    @test a[1,:] == sparse([1:10]')
+    a[:,2] = 1:10
+    @test a[:,2] == sparse([1:10])
+end
+
+let A = spzeros(Int, 10, 20)
+    A[1:5,1:10] = 10
+    A[1:5,1:10] = 10
+    @test countnz(A) == 50
+    @test A[1:5,1:10] == 10 * ones(Int, 5, 10)
+    A[6:10,11:20] = 0
+    @test countnz(A) == 50
+    A[6:10,11:20] = 20
+    @test countnz(A) == 100
+    @test A[6:10,11:20] == 20 * ones(Int, 5, 10)
+    A[4:8,8:16] = 15
+    @test countnz(A) == 121
+    @test A[4:8,8:16] == 15 * ones(Int, 5, 9)
+end
+
+let ASZ = 1000, TSZ = 800 
+    A = sprand(ASZ, 2*ASZ, 0.0001)
+    B = copy(A)
+    nA = countnz(A)
+    x = A[1:TSZ, 1:(2*TSZ)]
+    nx = countnz(x)
+    A[1:TSZ, 1:(2*TSZ)] = 0
+    nB = countnz(A)
+    @test nB == (nA - nx)
+    A[1:TSZ, 1:(2*TSZ)] = x
+    @test countnz(A) == nA
+    @test A == B
+    A[1:TSZ, 1:(2*TSZ)] = 10
+    @test countnz(A) == nB + 2*TSZ*TSZ
+    A[1:TSZ, 1:(2*TSZ)] = x
+    @test countnz(A) == nA
+    @test A == B
+end
+

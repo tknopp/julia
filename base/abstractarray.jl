@@ -19,7 +19,6 @@ isreal{T<:Real,n}(x::AbstractArray{T,n}) = true
 ndims{T,n}(::AbstractArray{T,n}) = n
 ndims{T,n}(::Type{AbstractArray{T,n}}) = n
 ndims{T<:AbstractArray}(::Type{T}) = ndims(super(T))
-nfilled(t::AbstractArray) = length(t)
 length(t::AbstractArray) = prod(size(t))::Int
 endof(a::AbstractArray) = length(a)
 first(a::AbstractArray) = a[1]
@@ -59,37 +58,19 @@ function trailingsize(A, n)
 end
 
 ## Bounds checking ##
-function checkbounds(sz::Int, I::Real)
-    I = to_index(I)
-    if I < 1 || I > sz
-        throw(BoundsError())
-    end
-end
-
-function checkbounds(sz::Int, I::AbstractVector{Bool})
-    if length(I) != sz
-        throw(BoundsError())
-    end
-end
-
-function checkbounds{T<:Integer}(sz::Int, I::Ranges{T})
-    if !isempty(I) && (minimum(I) < 1 || maximum(I) > sz)
-        throw(BoundsError())
-    end
-end
+checkbounds(sz::Int, i::Int) = 1 <= i <= sz || throw(BoundsError())
+checkbounds(sz::Int, i::Real) = checkbounds(sz, to_index(i))
+checkbounds(sz::Int, I::AbstractVector{Bool}) = length(I) == sz || throw(BoundsError())
+checkbounds(sz::Int, r::Range{Int}) = isempty(r) || (minimum(r) >= 1 && maximum(r) <= sz) || throw(BoundsError())
+checkbounds{T<:Real}(sz::Int, r::Range{T}) = checkbounds(sz, to_index(r))
 
 function checkbounds{T <: Real}(sz::Int, I::AbstractArray{T})
     for i in I
-        i = to_index(i)
-        if i < 1 || i > sz
-            throw(BoundsError())
-        end
+        checkbounds(sz, i)
     end
 end
 
-function checkbounds(A::AbstractArray, I::AbstractArray{Bool})
-    if !isequal(size(A), size(I)) throw(BoundsError()) end
-end
+checkbounds(A::AbstractArray, I::AbstractArray{Bool}) = size(A) == size(I) || throw(BoundsError())
 
 checkbounds(A::AbstractArray, I) = checkbounds(length(A), I)
 
@@ -118,9 +99,7 @@ in_bounds(l::Int, i::Integer) = 1 <= i <= l
 function in_bounds(sz::Dims, I::Int...)
     n = length(I)
     for dim = 1:(n-1)
-        if !(1 <= I[dim] <= sz[dim])
-            return false
-        end
+        1 <= I[dim] <= sz[dim] || return false
     end
     s = sz[n]
     for i = n+1:length(sz)
@@ -163,7 +142,7 @@ function squeeze(A::AbstractArray, dims)
     reshape(A, d)
 end
 
-function copy!(dest::StoredArray, src)
+function copy!(dest::AbstractArray, src)
     i = 1
     for x in src
         dest[i] = x
@@ -174,7 +153,7 @@ end
 
 # copy with minimal requirements on src
 # if src is not an AbstractArray, moving to the offset might be O(n)
-function copy!(dest::StoredArray, doffs::Integer, src, soffs::Integer=1)
+function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer=1)
     st = start(src)
     for j = 1:(soffs-1)
         _, st = next(src, st)
@@ -191,13 +170,13 @@ end
 # NOTE: this is to avoid ambiguity with the deprecation of
 #   copy!(dest::AbstractArray, src, doffs::Integer)
 # Remove this when that deprecation is removed.
-function copy!(dest::StoredArray, doffs::Integer, src::Integer)
+function copy!(dest::AbstractArray, doffs::Integer, src::Integer)
     dest[doffs] = src
     return dest
 end
 
 # this method must be separate from the above since src might not have a length
-function copy!(dest::StoredArray, doffs::Integer, src, soffs::Integer, n::Integer)
+function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer, n::Integer)
     n == 0 && return dest
     st = start(src)
     for j = 1:(soffs-1)
@@ -212,7 +191,7 @@ function copy!(dest::StoredArray, doffs::Integer, src, soffs::Integer, n::Intege
 end
 
 # if src is an AbstractArray and a source offset is passed, use indexing
-function copy!(dest::StoredArray, doffs::Integer, src::AbstractArray, soffs::Integer, n::Integer=length(src))
+function copy!(dest::AbstractArray, doffs::Integer, src::AbstractArray, soffs::Integer, n::Integer=length(src))
     for i = 0:(n-1)
         dest[doffs+i] = src[soffs+i]
     end
@@ -221,6 +200,42 @@ end
 
 copy(a::AbstractArray) = copy!(similar(a), a)
 copy(a::AbstractArray{None}) = a # cannot be assigned into so is immutable
+
+function copy!{R,S}(B::AbstractMatrix{R}, ir_dest::Range{Int}, jr_dest::Range{Int}, A::AbstractMatrix{S}, ir_src::Range{Int}, jr_src::Range{Int})
+    if length(ir_dest) != length(ir_src) || length(jr_dest) != length(jr_src)
+        error("source and destination must have same size")
+    end
+    checkbounds(B, ir_dest, jr_dest)
+    checkbounds(A, ir_src, jr_src)
+    jdest = first(jr_dest)
+    for jsrc in jr_src
+        idest = first(ir_dest)
+        for isrc in ir_src
+            B[idest,jdest] = A[isrc,jsrc]
+            idest += step(ir_dest)
+        end
+        jdest += step(jr_dest)
+    end
+    return B
+end
+
+function copy_transpose!{R,S}(B::AbstractMatrix{R}, ir_dest::Range{Int}, jr_dest::Range{Int}, A::AbstractVecOrMat{S}, ir_src::Range{Int}, jr_src::Range{Int})
+    if length(ir_dest) != length(jr_src) || length(jr_dest) != length(ir_src)
+        error("source and destination must have same size")
+    end
+    checkbounds(B, ir_dest, jr_dest)
+    checkbounds(A, ir_src, jr_src)
+    idest = first(ir_dest)
+    for jsrc in jr_src
+        jdest = first(jr_dest)
+        for isrc in ir_src
+            B[idest,jdest] = A[isrc,jsrc]
+            jdest += step(jr_dest)
+        end
+        idest += step(ir_dest)
+    end
+    return B
+end
 
 zero{T}(x::AbstractArray{T}) = fill!(similar(x), zero(T))
 
@@ -248,9 +263,9 @@ for (f,t) in ((:char,   Char),
               (:uint128,Uint128))
     @eval begin
         ($f)(x::AbstractArray{$t}) = x
-        ($f)(x::StoredArray{$t}) = x
+        ($f)(x::AbstractArray{$t}) = x
 
-        function ($f)(x::StoredArray)
+        function ($f)(x::AbstractArray)
             y = similar(x,$t)
             i = 1
             for e in x
@@ -266,9 +281,9 @@ for (f,t) in ((:integer, Integer),
               (:unsigned, Unsigned))
     @eval begin
         ($f){T<:$t}(x::AbstractArray{T}) = x
-        ($f){T<:$t}(x::StoredArray{T}) = x
+        ($f){T<:$t}(x::AbstractArray{T}) = x
 
-        function ($f)(x::StoredArray)
+        function ($f)(x::AbstractArray)
             y = similar(x,typeof(($f)(one(eltype(x)))))
             i = 1
             for e in x
@@ -283,20 +298,24 @@ end
 bool(x::AbstractArray{Bool}) = x
 bool(x::AbstractArray) = copy!(similar(x,Bool), x)
 
-for (f,t) in ((:float16,    Float16),
+convert{T,N}(::Type{AbstractArray{T,N}}, A::AbstractArray{T,N}) = A
+convert{T,S,N}(::Type{AbstractArray{T,N}}, A::AbstractArray{S,N}) = copy!(similar(A,T), A)
+
+convert{T,N}(::Type{Array}, A::AbstractArray{T,N}) = convert(Array{T,N}, A)
+
+for (f,T) in ((:float16,    Float16),
               (:float32,    Float32),
               (:float64,    Float64),
               (:complex64,  Complex64),
               (:complex128, Complex128))
-    @eval ($f)(x::AbstractArray{$t}) = x
-    @eval ($f)(x::AbstractArray) = copy!(similar(x,$t), x)
+    @eval ($f){S,N}(x::AbstractArray{S,N}) = convert(AbstractArray{$T,N}, x)
 end
 
 float{T<:FloatingPoint}(x::AbstractArray{T}) = x
 complex{T<:Complex}(x::AbstractArray{T}) = x
 
-float   (x::AbstractArray) = copy!(similar(x,typeof(float(one(eltype(x))))), x)
-complex (x::AbstractArray) = copy!(similar(x,typeof(complex(one(eltype(x))))), x)
+float{T,N}(x::AbstractArray{T,N}) = convert(AbstractArray{typeof(float(one(T))),N},x)
+complex{T,N}(x::AbstractArray{T,N}) = convert(AbstractArray{typeof(complex(one(T))),N}, x)
 
 full(x::AbstractArray) = x
 
@@ -304,8 +323,14 @@ full(x::AbstractArray) = x
 
 for fn in _numeric_conversion_func_names
     @eval begin
-        $fn(r::Range ) = Range($fn(r.start), $fn(r.step), r.len)
-        $fn(r::Range1) = Range1($fn(r.start), r.len)
+        $fn(r::StepRange) = $fn(r.start):$fn(r.step):$fn(last(r))
+        $fn(r::UnitRange) = $fn(r.start):$fn(last(r))
+    end
+end
+
+for fn in (:float,:float16,:float32,:float64)
+    @eval begin
+        $fn(r::FloatRange) = FloatRange($fn(r.start), $fn(r.step), r.len, $fn(r.divisor))
     end
 end
 
@@ -325,18 +350,9 @@ imag{T<:Real}(x::AbstractArray{T}) = zero(x)
 *(A::Number, B::AbstractArray) = A .* B
 *(A::AbstractArray, B::Number) = A .* B
 
-/(A::Number, B::AbstractArray) = A ./ B
 /(A::AbstractArray, B::Number) = A ./ B
 
 \(A::Number, B::AbstractArray) = B ./ A
-\(A::AbstractArray, B::Number) = B ./ A
-
-./(x::Number,y::AbstractArray )         = throw(MethodError(./, (x,y)))
-./(x::AbstractArray, y::Number)         = throw(MethodError(./, (x,y)))
-
-.^(x::Number,y::AbstractArray )         = throw(MethodError(.^, (x,y)))
-.^(x::AbstractArray, y::Number)         = throw(MethodError(.^, (x,y)))
-
 
 ## Indexing: getindex ##
 
@@ -397,7 +413,7 @@ function circshift(a, shiftamts)
     for i=1:n
         s = size(a,i)
         d = i<=length(shiftamts) ? shiftamts[i] : 0
-        I[i] = d==0 ? (1:s) : mod([-d:s-1-d], s)+1
+        I[i] = d==0 ? (1:s) : mod([-d:s-1-d], s).+1
     end
     a[I...]::typeof(a)
 end
@@ -442,13 +458,13 @@ end
 
 ## get (getindex with a default value) ##
 
-typealias RangeVecIntList{A<:AbstractVector{Int}} Union((Union(Ranges, AbstractVector{Int})...), AbstractVector{Range1{Int}}, AbstractVector{Range{Int}}, AbstractVector{A})
+typealias RangeVecIntList{A<:AbstractVector{Int}} Union((Union(Range, AbstractVector{Int})...), AbstractVector{UnitRange{Int}}, AbstractVector{Range{Int}}, AbstractVector{A})
 
 get(A::AbstractArray, i::Integer, default) = in_bounds(length(A), i) ? A[i] : default
 get(A::AbstractArray, I::(), default) = similar(A, typeof(default), 0)
 get(A::AbstractArray, I::Dims, default) = in_bounds(size(A), I...) ? A[I...] : default
 
-function get!{T}(X::AbstractArray{T}, A::AbstractArray, I::Union(Ranges, AbstractVector{Int}), default::T)
+function get!{T}(X::AbstractArray{T}, A::AbstractArray, I::Union(Range, AbstractVector{Int}), default::T)
     ind = findin(I, 1:length(A))
     X[ind] = A[I[ind]]
     X[1:first(ind)-1] = default
@@ -456,7 +472,7 @@ function get!{T}(X::AbstractArray{T}, A::AbstractArray, I::Union(Ranges, Abstrac
     X
 end
 
-get(A::AbstractArray, I::Ranges, default) = get!(similar(A, typeof(default), length(I)), A, I, default)
+get(A::AbstractArray, I::Range, default) = get!(similar(A, typeof(default), length(I)), A, I, default)
 
 function get!{T}(X::AbstractArray{T}, A::AbstractArray, I::RangeVecIntList, default::T)
     fill!(X, default)
@@ -814,6 +830,9 @@ function isequal(A::AbstractArray, B::AbstractArray)
     if size(A) != size(B)
         return false
     end
+    if isa(A,Range) != isa(B,Range)
+        return false
+    end
     for i = 1:length(A)
         if !isequal(A[i], B[i])
             return false
@@ -833,6 +852,9 @@ end
 
 function (==)(A::AbstractArray, B::AbstractArray)
     if size(A) != size(B)
+        return false
+    end
+    if isa(A,Range) != isa(B,Range)
         return false
     end
     for i = 1:length(A)
@@ -1183,10 +1205,6 @@ function mapslices(f::Function, A::AbstractArray, dims::AbstractVector)
     ndimsA = ndims(A)
     alldims = [1:ndimsA]
 
-    if dims == alldims
-        return f(A)
-    end
-
     otherdims = setdiff(alldims, dims)
 
     idx = cell(ndimsA)
@@ -1233,7 +1251,7 @@ end
 
 
 ## 1 argument
-function map_to!(f::Callable, first, dest::StoredArray, A::AbstractArray)
+function map_to!(f::Callable, first, dest::AbstractArray, A::AbstractArray)
     dest[1] = first
     for i=2:length(A)
         dest[i] = f(A[i])
@@ -1242,14 +1260,14 @@ function map_to!(f::Callable, first, dest::StoredArray, A::AbstractArray)
 end
 
 function map(f::Callable, A::AbstractArray)
-    if isempty(A); return {}; end
+    if isempty(A); return similar(A); end
     first = f(A[1])
     dest = similar(A, typeof(first))
     return map_to!(f, first, dest, A)
 end
 
 ## 2 argument
-function map_to!(f::Callable, first, dest::StoredArray, A::AbstractArray, B::AbstractArray)
+function map_to!(f::Callable, first, dest::AbstractArray, A::AbstractArray, B::AbstractArray)
     dest[1] = first
     for i=2:length(A)
         dest[i] = f(A[i], B[i])
@@ -1259,8 +1277,8 @@ end
 
 function map(f::Callable, A::AbstractArray, B::AbstractArray)
     shp = promote_shape(size(A),size(B))
-    if isempty(A)
-        return similar(A, Any, shp)
+    if prod(shp) == 0
+        return similar(A, promote_type(eltype(A),eltype(B)), shp)
     end
     first = f(A[1], B[1])
     dest = similar(A, typeof(first), shp)
@@ -1268,7 +1286,7 @@ function map(f::Callable, A::AbstractArray, B::AbstractArray)
 end
 
 ## N argument
-function map_to!(f::Callable, first, dest::StoredArray, As::AbstractArray...)
+function map_to!(f::Callable, first, dest::AbstractArray, As::AbstractArray...)
     n = length(As[1])
     i = 1
     ith = a->a[i]
@@ -1297,3 +1315,44 @@ push!(A, a, b, c...) = push!(push!(A, a, b), c...)
 unshift!(A) = A
 unshift!(A, a, b) = unshift!(unshift!(A, b), a)
 unshift!(A, a, b, c...) = unshift!(unshift!(A, c...), a, b)
+
+# Fill S (resized as needed) with a random subsequence of A, where
+# each element of A is included in S with independent probability p.
+# (Note that this is different from the problem of finding a random
+#  size-m subset of A where m is fixed!)
+function randsubseq!(S::AbstractArray, A::AbstractArray, p::Real)
+    0 <= p <= 1 || throw(ArgumentError("probability $p not in [0,1]"))
+    n = length(A)
+    p == 1 && return copy!(resize!(S, n), A)
+    empty!(S)
+    p == 0 && return S
+    nexpected = p * length(A)
+    sizehint(S, iround(nexpected + 5*sqrt(nexpected)))
+    if p > 0.15 # empirical threshold for trivial O(n) algorithm to be better
+        for i = 1:n
+            rand() <= p && push!(S, A[i])
+        end
+    else
+        # Skip through A, in order, from each element i to the next element i+s
+        # included in S. The probability that the next included element is 
+        # s==k (k > 0) is (1-p)^(k-1) * p, and hence the probability (CDF) that
+        # s is in {1,...,k} is 1-(1-p)^k = F(k).   Thus, we can draw the skip s
+        # from this probability distribution via the discrete inverse-transform
+        # method: s = iceil(F^{-1}(u)) where u = rand(), which is simply
+        # s = iceil(log(rand()) / log1p(-p)).
+        L = 1 / log1p(-p)
+        i = 0
+        while true
+            s = log(rand()) * L # note that rand() < 1, so s > 0
+            s >= n - i && return S # compare before iceil to avoid overflow
+            push!(S, A[i += iceil(s)])
+        end
+        # [This algorithm is similar in spirit to, but much simpler than,
+        #  the one by Vitter for a related problem in "Faster methods for
+        #  random sampling," Comm. ACM Magazine 7, 703-718 (1984).]
+    end
+    return S
+end
+
+randsubseq{T}(A::AbstractArray{T}, p::Real) = randsubseq!(T[], A, p)
+

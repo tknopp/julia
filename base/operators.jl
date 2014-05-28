@@ -4,23 +4,40 @@ const (<:) = issubtype
 
 super(T::DataType) = T.super
 
+## generic comparison ##
+
+==(x,y) = x === y
+
+isequal(x, y) = x == y
+isequal(x::FloatingPoint, y::FloatingPoint) = (isnan(x) & isnan(y)) | (signbit(x) == signbit(y)) & (x == y)
+isequal(x::Real,          y::FloatingPoint) = (isnan(x) & isnan(y)) | (signbit(x) == signbit(y)) & (x == y)
+isequal(x::FloatingPoint, y::Real         ) = (isnan(x) & isnan(y)) | (signbit(x) == signbit(y)) & (x == y)
+
+isless(x::FloatingPoint, y::FloatingPoint) = (!isnan(x) & isnan(y)) | (signbit(x) & !signbit(y)) | (x < y)
+isless(x::Real,          y::FloatingPoint) = (!isnan(x) & isnan(y)) | (signbit(x) & !signbit(y)) | (x < y)
+isless(x::FloatingPoint, y::Real         ) = (!isnan(x) & isnan(y)) | (signbit(x) & !signbit(y)) | (x < y)
+
 # avoid ambiguity with isequal(::Tuple, ::Tuple)
-isequal(T::(Type...), S::(Type...)) = typeseq(T, S)
-isequal(T::Type, S::Type) = typeseq(T, S)
+==(T::(Type...), S::(Type...)) = typeseq(T, S)
+==(T::Type, S::Type) = typeseq(T, S)
 
-## comparison ##
+## comparison fallbacks ##
 
-isequal(x,y) = is(x,y)
-==(x,y) = isequal(x,y)
 !=(x,y) = !(x==y)
+const ≠ = !=
+const ≡ = is
 !==(x,y) = !is(x,y)
+const ≢ = !==
 
-< (x,y) = isless(x,y)
-> (x,y) = y < x
+<(x,y) = isless(x,y)
+>(x,y) = y < x
 <=(x,y) = !(y < x)
+const ≤ = <=
 >=(x,y) = (y <= x)
-.> (x,y) = y.<x
-.>=(x,y) = y.<=x
+const ≥ = >=
+.>(x,y) = y .< x
+.>=(x,y) = y .<= x
+const .≥ = .>=
 
 # this definition allows Number types to implement < instead of isless,
 # which is more idiomatic:
@@ -51,12 +68,6 @@ scalarmin(x::AbstractArray, y               ) = error("ordering is not well-defi
 
 ## definitions providing basic traits of arithmetic operators ##
 
-+() = 0
-*() = 1
-(&)() = error("zero-argument & is ambiguous")
-(|)() = error("zero-argument | is ambiguous")
-($)() = error("zero-argument \$ is ambiguous")
-
 +(x::Number) = x
 *(x::Number) = x
 (&)(x::Integer) = x
@@ -86,18 +97,20 @@ end
 .+(x,y) = x+y
 .-(x,y) = x-y
 
-.==(x::Number,y::Number) = x==y
-.!=(x::Number,y::Number) = x!=y
-.< (x::Real,y::Real) = x<y
-.<=(x::Real,y::Real) = x<=y
+.==(x::Number,y::Number) = x == y
+.!=(x::Number,y::Number) = x != y
+.< (x::Real,y::Real) = x < y
+.<=(x::Real,y::Real) = x <= y
+const .≤ = .<=
+const .≠ = .!=
 
 # core << >> and >>> takes Int32 as second arg
-<<(x,y::Integer)  = x << convert(Int32,y)
 <<(x,y::Int32)    = no_op_err("<<", typeof(x))
->>(x,y::Integer)  = x >> convert(Int32,y)
 >>(x,y::Int32)    = no_op_err(">>", typeof(x))
->>>(x,y::Integer) = x >>> convert(Int32,y)
 >>>(x,y::Int32)   = no_op_err(">>>", typeof(x))
+<<(x,y::Integer)  = x << convert(Int32,y)
+>>(x,y::Integer)  = x >> convert(Int32,y)
+>>>(x,y::Integer) = x >>> convert(Int32,y)
 
 # fallback div and fld implementations
 # NOTE: C89 fmod() and x87 FPREM implicitly provide truncating float division,
@@ -110,6 +123,7 @@ fld{T<:Real}(x::T, y::T) = convert(T,round((x-mod(x,y))/y))
 # operator alias
 const % = rem
 .%(x::Real, y::Real) = x%y
+const ÷ = div
 
 # mod returns in [0,y) whereas mod1 returns in (0,y]
 mod1{T<:Real}(x::T, y::T) = y-mod(y-x,y)
@@ -143,8 +157,7 @@ At_ldiv_Bt(a,b) = transpose(a)\transpose(b)
 oftype{T}(::Type{T},c) = convert(T,c)
 oftype{T}(x::T,c) = convert(T,c)
 
-zero(x) = oftype(x,0)
-one(x)  = oftype(x,1)
+widen{T<:Number}(x::T) = convert(widen(T), x)
 
 sizeof(T::Type) = error(string("size of type ",T," unknown"))
 sizeof(T::DataType) = if isleaftype(T) T.size else error("type does not have a native size") end
@@ -278,14 +291,17 @@ function setindex_shape_check{T}(X::AbstractArray{T,2}, i, j)
 end
 
 # convert to integer index
-to_index(i)       = i
-to_index(i::Real) = convert(Int, i)
-to_index(i::Int)  = i
-to_index(r::Range1{Int}) = r
-to_index{T<:Real}(r::Range1{T}) = to_index(first(r)):to_index(last(r))
-to_index(I::AbstractArray{Bool,1}) = find(I)
-to_index(I::Range1{Bool}) = find(I)
-to_index{T<:Real}(A::AbstractArray{T}) = int(A)
+to_index(i::Int) = i
+to_index(i::Real) = convert(Int,i)::Int
+to_index(r::UnitRange{Int}) = r
+to_index(r::Range{Int}) = r
+to_index(I::UnitRange{Bool}) = find(I)
+to_index(I::Range{Bool}) = find(I)
+to_index{T<:Real}(r::UnitRange{T}) = to_index(first(r)):to_index(last(r))
+to_index{T<:Real}(r::StepRange{T}) = to_index(first(r)):to_index(step(r)):to_index(last(r))
+to_index(I::AbstractArray{Bool}) = find(I)
+to_index(A::AbstractArray{Int}) = A
+to_index{T<:Real}(A::AbstractArray{T}) = [to_index(x) for x in A]
 to_index(i1, i2)         = to_index(i1), to_index(i2)
 to_index(i1, i2, i3)     = to_index(i1), to_index(i2), to_index(i3)
 to_index(i1, i2, i3, i4) = to_index(i1), to_index(i2), to_index(i3), to_index(i4)
@@ -295,6 +311,40 @@ to_index(I::(Any,Any,))        = (to_index(I[1]), to_index(I[2]))
 to_index(I::(Any,Any,Any))     = (to_index(I[1]), to_index(I[2]), to_index(I[3]))
 to_index(I::(Any,Any,Any,Any)) = (to_index(I[1]), to_index(I[2]), to_index(I[3]), to_index(I[4]))
 to_index(I::Tuple) = map(to_index, I)
+to_index(i) = error("invalid index: $i")
+
+# Addition/subtraction of ranges
+for f in (:+, :-)
+    @eval begin
+        function $f(r1::OrdinalRange, r2::OrdinalRange)
+            r1l = length(r1)
+            r1l == length(r2) || error("argument dimensions must match")
+            range($f(r1.start,r2.start), $f(step(r1),step(r2)), r1l)
+        end
+
+        function $f{T<:FloatingPoint}(r1::FloatRange{T}, r2::FloatRange{T})
+            len = r1.len
+            len == r2.len || error("argument dimensions must match")
+            divisor1, divisor2 = r1.divisor, r2.divisor
+            if divisor1 == divisor2
+                FloatRange{T}($f(r1.start,r2.start), $f(r1.step,r2.step),
+                              len, divisor1)
+            else
+                d1 = int(divisor1)
+                d2 = int(divisor2)
+                d = lcm(d1,d2)
+                s1 = div(d,d1)
+                s2 = div(d,d2)
+                FloatRange{T}($f(r1.start*s1, r2.start*s2),
+                              $f(r1.step*s1, r2.step*s2),  len, d)
+            end
+        end
+
+        $f(r1::FloatRange, r2::FloatRange) = $f(promote(r1,r2)...)
+        $f(r1::FloatRange, r2::OrdinalRange) = $f(promote(r1,r2)...)
+        $f(r1::OrdinalRange, r2::FloatRange) = $f(promote(r1,r2)...)
+    end
+end
 
 # vectorization
 
@@ -346,7 +396,7 @@ function ifelse(c::AbstractArray{Bool}, x, y::AbstractArray)
 end
 
 # some operators not defined yet
-global //, .>>, .<<, >:, <|, |>, hcat, hvcat
+global //, .>>, .<<, >:, <|, |>, hcat, hvcat, ⋅, ×, ∈, ∉, ∋, ∌, ⊆, ⊈, ⊊, ∩, ∪, √, ∛
 
 module Operators
 
@@ -383,6 +433,12 @@ export
     ==,
     >,
     >=,
+    ≥,
+    ≤,
+    ≠,
+    .≥,
+    .≤,
+    .≠,
     >>,
     .>>,
     .<<,
@@ -393,6 +449,20 @@ export
     |>,
     <|,
     ~,
+    ÷,
+    ⋅,
+    ×,
+    ∈,
+    ∉,
+    ∋,
+    ∌,
+    ⊆,
+    ⊈,
+    ⊊,
+    ∩,
+    ∪,
+    √,
+    ∛,
     colon,
     hcat,
     vcat,
@@ -405,6 +475,7 @@ export
 import Base: !, !=, $, %, .%, &, *, +, -, .!=, .+, .-, .*, ./, .<, .<=, .==, .>,
     .>=, .\, .^, /, //, <, <:, <<, <=, ==, >, >=, >>, .>>, .<<, >>>,
     <|, |>, \, ^, |, ~, !==, >:, colon, hcat, vcat, hvcat, getindex, setindex!,
-    transpose, ctranspose
+    transpose, ctranspose,
+    ≥, ≤, ≠, .≥, .≤, .≠, ÷, ⋅, ×, ∈, ∉, ∋, ∌, ⊆, ⊈, ⊊, ∩, ∪, √, ∛
 
 end

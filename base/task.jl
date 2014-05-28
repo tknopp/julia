@@ -93,14 +93,20 @@ function produce(v)
     #t = shift!(q.waitq)
     #empty = isempty(q.waitq)
     ct = current_task()
-    q = ct.consumers
-    if isa(q,Condition)
-        t = shift!(q.waitq)
-        empty = isempty(q.waitq)
-    else
-        t = q
-        ct.consumers = nothing
-        empty = true
+    local empty, t, q
+    while true
+        q = ct.consumers
+        if isa(q,Task)
+            t = q
+            ct.consumers = nothing
+            empty = true
+            break
+        elseif isa(q,Condition) && !isempty(q.waitq)
+            t = shift!(q.waitq)
+            empty = isempty(q.waitq)
+            break
+        end
+        wait()
     end
 
     t.state = :runnable
@@ -144,9 +150,7 @@ function consume(P::Task, values...)
     if P.consumers === nothing || (isa(P.consumers,Condition)&&isempty(P.consumers.waitq))
         P.consumers = ct
     else
-        if P.consumers === nothing
-            P.consumers = Condition()
-        elseif isa(P.consumers, Task)
+        if isa(P.consumers, Task)
             t = P.consumers
             P.consumers = Condition()
             push!(P.consumers.waitq, t)
@@ -165,6 +169,7 @@ function done(t::Task, val)
 end
 next(t::Task, val) = (t.result, nothing)
 
+isempty(::Task) = error("isempty not defined for Tasks")
 
 ## condition variables
 
@@ -184,6 +189,9 @@ function wait(c::Condition)
         return wait()
     catch
         filter!(x->x!==ct, c.waitq)
+        if ct.state == :waiting
+            ct.state = :runnable
+        end
         rethrow()
     end
 end
@@ -208,6 +216,8 @@ notify1_error(c::Condition, err) = notify(c, err, error=true, all=false)
 
 
 ## scheduler and work queue
+
+global const Workqueue = Any[]
 
 function enq_work(t::Task)
     ccall(:uv_stop,Void,(Ptr{Void},),eventloop())

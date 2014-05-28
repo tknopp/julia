@@ -12,7 +12,6 @@ OPENBLAS_TARGET_ARCH=
 # Use libraries available on the system instead of building them
 USE_SYSTEM_LLVM=0
 USE_SYSTEM_LIBUNWIND=0
-USE_SYSTEM_READLINE=0
 USE_SYSTEM_PCRE=0
 USE_SYSTEM_LIBM=0
 USE_SYSTEM_OPENLIBM=0
@@ -42,6 +41,10 @@ USE_INTEL_JITEVENTS = 0
 # libc++ is standard on OS X 10.9, but not for earlier releases
 USE_LIBCPP = 0
 
+# Select the cpu architecture to target
+# Current available options are "native" and "core2"
+JULIA_CPU_TARGET = native
+
 # we include twice to pickup user definitions better
 ifeq (exists, $(shell [ -e $(JULIAHOME)/Make.user ] && echo exists ))
 include $(JULIAHOME)/Make.user
@@ -61,7 +64,7 @@ JULIA_VERSION = $(shell cat $(JULIAHOME)/VERSION)
 ifneq ($(NO_GIT), 1)
 JULIA_COMMIT = $(shell git rev-parse --short=10 HEAD)
 else
-JULIA_COMMIT = $JULIA_VERSION
+JULIA_COMMIT = $(JULIA_VERSION)
 endif
 
 # Directories where said libraries get installed to
@@ -131,6 +134,7 @@ endif
 endif
 
 JLDOWNLOAD = $(JULIAHOME)/deps/jldownload
+JLCHECKSUM = $(JULIAHOME)/deps/jlchecksum
 
 # Figure out OS and architecture
 OS := $(BUILD_OS)
@@ -159,18 +163,22 @@ fPIC = -fPIC
 EXE =
 endif
 
-DEFAULT_REPL = readline
 JULIAGC = MARKSWEEP
 USE_COPY_STACKS = 1
 
 # Compiler specific stuff
 
+ifeq ($(USEMSVC), 1)
+USEGCC = 0
+USECLANG = 0
+else
 ifeq ($(CC), clang)
 USEGCC ?= 0
 USECLANG ?= 1
 else
 USEGCC ?= 1
 USECLANG ?= 0
+endif
 endif
 
 STDLIBCPP_FLAG = 
@@ -208,8 +216,9 @@ endif
 CC = $(CROSS_COMPILE)gcc
 CXX = $(CROSS_COMPILE)g++
 JCFLAGS = -std=gnu99 -pipe $(fPIC) -fno-strict-aliasing -D_FILE_OFFSET_BITS=64
+JCPPFLAGS =
 JCXXFLAGS = -pipe $(fPIC) -fno-rtti
-DEBUGFLAGS = -O0 -ggdb3 -DDEBUG -fstack-protector-all
+DEBUGFLAGS = -O0 -ggdb3 -DJL_DEBUG_BUILD -fstack-protector-all
 SHIPFLAGS = -O3 -falign-functions
 endif
 
@@ -217,8 +226,9 @@ ifeq ($(USECLANG),1)
 CC = $(CROSS_COMPILE)clang
 CXX = $(CROSS_COMPILE)clang++
 JCFLAGS = -pipe $(fPIC) -fno-strict-aliasing -D_FILE_OFFSET_BITS=64
+JCPPFLAGS =
 JCXXFLAGS = -pipe $(fPIC) -fno-rtti
-DEBUGFLAGS = -O0 -g -DDEBUG -fstack-protector-all
+DEBUGFLAGS = -O0 -g -DJL_DEBUG_BUILD -fstack-protector-all
 SHIPFLAGS = -O3
 ifeq ($(OS), Darwin)
 ifeq ($(USE_LIBCPP), 1)
@@ -229,17 +239,36 @@ else
 CC += $(STDLIBCPP_FLAG) -mmacosx-version-min=10.6
 CXX += $(STDLIBCPP_FLAG) -mmacosx-version-min=10.6
 endif
-JCFLAGS += -D_LARGEFILE_SOURCE -D_DARWIN_USE_64_BIT_INODE=1
+JCPPFLAGS += -D_LARGEFILE_SOURCE -D_DARWIN_USE_64_BIT_INODE=1
 endif
 endif
 
 JFFLAGS = -O2 $(fPIC)
 JF2CFLAGS = -ff2c -fno-second-underscore
+ifneq ($(USEMSVC),1)
 CPP = $(CC) -E
 AR := $(CROSS_COMPILE)ar
 AS := $(CROSS_COMPILE)as
 LD := $(CROSS_COMPILE)ld
+else
+CPP = $(CC) -EP
+AR := lib
+ifeq ($(ARCH),x86_64)
+AS := ml64
+else
+AS := ml
+endif
+LD := link
+endif
 RANLIB := $(CROSS_COMPILE)ranlib
+
+ifeq ($(JULIA_CPU_TARGET),native)
+  JCPPFLAGS += -DJULIA_TARGET_NATIVE
+else ifeq ($(JULIA_CPU_TARGET),core2)
+  JCPPFLAGS += -DJULIA_TARGET_CORE2
+else
+  $(error Unknown cpu target architecture)
+endif
 
 
 # Calculate relative paths to libdir and private_libdir
@@ -250,7 +279,7 @@ build_private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(build
 private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(private_libdir))
 
 # if not absolute, then relative to the directory of the julia executable
-JCFLAGS += "-DJL_SYSTEM_IMAGE_PATH=\"$(build_private_libdir_rel)/sys.ji\""
+JCPPFLAGS += "-DJL_SYSTEM_IMAGE_PATH=\"$(build_private_libdir_rel)/sys.ji\""
 
 # On Windows, we want shared library files to end up in $(build_bindir), instead of $(build_libdir)
 ifeq ($(OS),WINNT)
@@ -321,7 +350,7 @@ endif
 else
 ifeq ($(OS),Darwin)
 LIBUNWIND=$(build_libdir)/libosxunwind.a
-JCFLAGS+=-DLIBOSXUNWIND
+JCPPFLAGS+=-DLIBOSXUNWIND
 else
 LIBUNWIND=$(build_libdir)/libunwind-generic.a $(build_libdir)/libunwind.a
 endif
@@ -334,22 +363,6 @@ LLVM_LLC ?= llc$(EXE)
 else
 LLVM_CONFIG=$(LLVMROOT)/bin/llvm-config$(EXE)
 LLVM_LLC=$(LLVMROOT)/bin/llc$(EXE)
-endif
-
-ifeq ($(USE_SYSTEM_READLINE), 1)
-READLINE = -lreadline
-else
-ifeq ($(OS),WINNT)
-READLINE = $(build_libdir)/libreadline.a
-else
-READLINE = $(build_libdir)/libreadline.a
-endif
-endif
-
-ifeq ($(OS),WINNT)
-READLINE += $(build_libdir)/libhistory.a
-else
-READLINE += -lncurses
 endif
 
 ifeq ($(USE_SYSTEM_PCRE), 1)
@@ -385,8 +398,8 @@ LIBLAPACK = $(LIBBLAS)
 LIBLAPACKNAME = $(LIBBLASNAME)
 else
 ifeq ($(USE_SYSTEM_LAPACK), 1)
-LIBLAPACK = -llapack
-LIBLAPACKNAME = liblapack
+LIBLAPACK ?= -llapack
+LIBLAPACKNAME ?= liblapack
 else
 LIBLAPACK = -L$(build_shlibdir) -llapack $(LIBBLAS)
 LIBLAPACKNAME = liblapack
@@ -457,7 +470,7 @@ endif
 ifeq ($(OS), Darwin)
   WHOLE_ARCHIVE = -Xlinker -all_load
   NO_WHOLE_ARCHIVE =
-else
+else ifneq ($(USEMSVC), 1)
   WHOLE_ARCHIVE = -Wl,--whole-archive
   NO_WHOLE_ARCHIVE = -Wl,--no-whole-archive
 endif
@@ -483,15 +496,24 @@ JLDFLAGS =
 endif
 
 ifeq ($(OS), WINNT)
+ifneq ($(USEMSVC), 1)
 OSLIBS += -Wl,--export-all-symbols -Wl,--version-script=$(JULIAHOME)/src/julia.expmap \
 	$(NO_WHOLE_ARCHIVE) -lpsapi -lkernel32 -lws2_32 -liphlpapi -lwinmm -ldbghelp -lssp
-JCFLAGS += -D_WIN32_WINNT=0x0600
-JCXXFLAGS += -D_WIN32_WINNT=0x0600
 JLDFLAGS = -Wl,--stack,8388608
 ifeq ($(ARCH),i686)
 JLDFLAGS += -Wl,--large-address-aware
 endif
+else
+OSLIBS += kernel32.lib ws2_32.lib psapi.lib advapi32.lib iphlpapi.lib shell32.lib winmm.lib
+JLDFLAGS =
+endif
+JCPPFLAGS += -D_WIN32_WINNT=0x0600
 UNTRUSTED_SYSTEM_LIBM = 1
+endif
+
+# Intel VTune Amplifier
+ifeq ($(USE_INTEL_JITEVENTS), 1)
+JCPPFLAGS += -DJL_USE_INTEL_JITEVENTS
 endif
 
 # Intel libraries
@@ -604,8 +626,8 @@ wine_pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(shell printf %s\n '
 endif
 pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(2)))))
 
-JULIA_EXECUTABLE_debug = $(build_bindir)/julia-debug-$(DEFAULT_REPL)$(EXE)
-JULIA_EXECUTABLE_release = $(build_bindir)/julia-$(DEFAULT_REPL)$(EXE)
+JULIA_EXECUTABLE_debug = $(build_bindir)/julia-debug$(EXE)
+JULIA_EXECUTABLE_release = $(build_bindir)/julia$(EXE)
 
 ifeq ($(OS), WINNT)
 JULIA_EXECUTABLE = $(JULIA_EXECUTABLE_release)

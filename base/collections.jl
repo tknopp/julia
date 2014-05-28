@@ -9,6 +9,7 @@ export
     dequeue!,
     enqueue!,
     heapify!,
+    heapify,
     heappop!,
     heappush!,
     isheap,
@@ -128,7 +129,7 @@ type PriorityQueue{K,V} <: Associative{K,V}
         if length(ks) != length(vs)
             error("key and value arrays must have equal lengths")
         end
-        PriorityQueue{K,V}(zip(ks, vs))
+        PriorityQueue{K,V}(zip(ks, vs), o)
     end
 
     function PriorityQueue(itr, o::Ordering)

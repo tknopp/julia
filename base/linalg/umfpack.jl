@@ -8,7 +8,7 @@ export UmfpackLU,
 
 import Base: (\), Ac_ldiv_B, At_ldiv_B, findnz, getindex, show, size
 
-import ..LinAlg: A_ldiv_B!, Ac_ldiv_B!, At_ldiv_B!, Factorization, det, lufact, lufact!, solve
+import ..LinAlg: A_ldiv_B!, Ac_ldiv_B!, At_ldiv_B!, Factorization, det, lufact, lufact!
 
 include("umfpack_h.jl")
 type MatrixIllConditionedException <: Exception
@@ -131,9 +131,8 @@ function lufact!{Tv<:UMFVTypes,Ti<:UMFITypes}(S::SparseMatrixCSC{Tv,Ti})
 end
 
 function show(io::IO, f::UmfpackLU)
-    @printf(io, "UMFPACK LU Factorization of a %d-by-%d sparse matrix\n",
-            f.m, f.n)
-    if f.numeric != C_NULL println(f.numeric) end
+    println(io, "UMFPACK LU Factorization of a $(f.m)-by-$(f.n) sparse matrix")
+    f.numeric != C_NULL && println(f.numeric)
 end
 
 ## Wrappers for UMFPACK functions

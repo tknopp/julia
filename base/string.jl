@@ -57,15 +57,15 @@ done(s::String,i) = (i > endof(s))
 getindex(s::String, i::Int) = next(s,i)[1]
 getindex(s::String, i::Integer) = s[int(i)]
 getindex(s::String, x::Real) = s[to_index(x)]
-getindex{T<:Integer}(s::String, r::Range1{T}) = s[int(first(r)):int(last(r))]
+getindex{T<:Integer}(s::String, r::UnitRange{T}) = s[int(first(r)):int(last(r))]
 # TODO: handle other ranges with stride ±1 specially?
 getindex(s::String, v::AbstractVector) =
     sprint(length(v), io->(for i in v write(io,s[i]) end))
 
 symbol(s::String) = symbol(bytestring(s))
 
-print(io::IO, s::String) = write(io, s)
-write(io::IO, s::String) = for c in s write(io, c) end
+print(io::IO, s::String) = (write(io, s); nothing)
+write(io::IO, s::String) = (len = 0; for c in s; len += write(io, c); end; len)
 show(io::IO, s::String) = print_quoted(io, s)
 
 sizeof(s::String) = error("type $(typeof(s)) has no canonical binary representation")
@@ -482,8 +482,8 @@ function cmp(a::String, b::String)
     !done(a,i) && done(b,j) ? +1 : 0
 end
 
-isequal(a::String, b::String) = cmp(a,b) == 0
-isless(a::String, b::String)  = cmp(a,b) <  0
+==(a::String, b::String) = cmp(a,b) == 0
+isless(a::String, b::String) = cmp(a,b) < 0
 
 # begins with and ends with predicates
 
@@ -497,7 +497,7 @@ function beginswith(a::String, b::String)
     end
     done(b,i)
 end
-beginswith(a::String, c::Char) = !isempty(a) && a[start(a)] == c
+beginswith(str::String, chars::Chars) = !isempty(str) && str[start(str)] in chars
 
 function endswith(a::String, b::String)
     i = endof(a)
@@ -513,20 +513,19 @@ function endswith(a::String, b::String)
     end
     j < b1
 end
-endswith(a::String, c::Char) = !isempty(a) && a[end] == c
+endswith(str::String, chars::Chars) = !isempty(str) && str[end] in chars
 
-# faster comparisons for byte strings
+# faster comparisons for byte strings and symbols
 
-cmp(a::ByteString, b::ByteString)     = lexcmp(a.data, b.data)
-isequal(a::ByteString, b::ByteString) = endof(a)==endof(b) && cmp(a,b)==0
+cmp(a::ByteString, b::ByteString) = lexcmp(a.data, b.data)
+cmp(a::Symbol, b::Symbol) = int(sign(ccall(:strcmp, Int32, (Ptr{Uint8}, Ptr{Uint8}), a, b)))
+
+==(a::ByteString, b::ByteString) = endof(a) == endof(b) && cmp(a,b) == 0
+isless(a::Symbol, b::Symbol) = cmp(a,b) < 0
+
 beginswith(a::ByteString, b::ByteString) = beginswith(a.data, b.data)
-
 beginswith(a::Array{Uint8,1}, b::Array{Uint8,1}) =
     (length(a) >= length(b) && ccall(:strncmp, Int32, (Ptr{Uint8}, Ptr{Uint8}, Uint), a, b, length(b)) == 0)
-
-cmp(a::Symbol, b::Symbol) =
-    int(sign(ccall(:strcmp, Int32, (Ptr{Uint8}, Ptr{Uint8}), a, b)))
-isless(a::Symbol, b::Symbol) = cmp(a,b)<0
 
 # TODO: fast endswith
 
@@ -657,7 +656,7 @@ function serialize{T}(s, ss::SubString{T})
     invoke(serialize, (Any,Any), s, convert(SubString{T}, convert(T,ss)))
 end
 
-function getindex(s::String, r::Range1{Int})
+function getindex(s::String, r::UnitRange{Int})
     if first(r) < 1 || endof(s) < last(r)
         error(BoundsError)
     end
@@ -672,6 +671,16 @@ function convert{P<:Union(Int8,Uint8),T<:ByteString}(::Type{Ptr{P}}, s::SubStrin
 end
 
 isascii(s::SubString{ASCIIString}) = true
+
+## hashing strings ##
+
+const memhash = Uint == Uint64 ? :memhash_seed : :memhash32_seed
+
+function hash{T<:ByteString}(s::Union(T,SubString{T}), h::Uint)
+    h += uint(0x71e729fd56419c81)
+    ccall(memhash, Uint, (Ptr{Uint8}, Csize_t, Uint32), s, sizeof(s), h) + h
+end
+hash(s::String, h::Uint) = hash(bytestring(s), h)
 
 ## efficient representation of repeated strings ##
 
@@ -1223,7 +1232,13 @@ end
 
 function parse(str::String; raise::Bool=true)
     ex, pos = parse(str, start(str), greedy=true, raise=raise)
-    done(str, pos) || error("extra token after end of expression")
+    if isa(ex,Expr) && ex.head === :error
+        return ex
+    end
+    if !done(str, pos)
+        raise && error("extra token after end of expression")
+        return Expr(:error, "extra token after end of expression")
+    end
     return ex
 end
 
@@ -1554,9 +1569,9 @@ float32_isvalid(s::String, out::Array{Float32,1}) =
     ccall(:jl_strtof, Int32, (Ptr{Uint8},Ptr{Float32}), s, out) == 0
 
 float64_isvalid(s::SubString, out::Array{Float64,1}) =
-    ccall(:jl_substrtod, Int32, (Ptr{Uint8},Csize_t,Int,Ptr{Float64}), s.string, convert(Csize_t,s.offset), s.endof, out) == 0
+    ccall(:jl_substrtod, Int32, (Ptr{Uint8},Csize_t,Cint,Ptr{Float64}), s.string, s.offset, s.endof, out) == 0
 float32_isvalid(s::SubString, out::Array{Float32,1}) =
-    ccall(:jl_substrtof, Int32, (Ptr{Uint8},Csize_t,Int,Ptr{Float32}), s.string, convert(Csize_t,s.offset), s.endof, out) == 0
+    ccall(:jl_substrtof, Int32, (Ptr{Uint8},Csize_t,Cint,Ptr{Float32}), s.string, s.offset, s.endof, out) == 0
 
 begin
     local tmp::Array{Float64,1} = Array(Float64,1)

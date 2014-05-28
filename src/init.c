@@ -28,9 +28,13 @@
 #include "julia_internal.h"
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef _OS_WINDOWS_
 #define WIN32_LEAN_AND_MEAN
-// Copied from MINGW_FLOAT_H which may not be found due to a colision with the builtin gcc float.h
+// Copied from MINGW_FLOAT_H which may not be found due to a collision with the builtin gcc float.h
 // eventually we can probably integrate this into OpenLibm.
 #if defined(_COMPILER_MINGW_)
 void __cdecl __MINGW_NOTHROW _fpreset (void);
@@ -62,10 +66,13 @@ extern BOOL (WINAPI *hSymRefreshModuleList)(HANDLE);
 
 char *julia_home = NULL;
 jl_compileropts_t jl_compileropts = { NULL, // build_path
-                                      0     // code_coverage
+                                      0,    // code_coverage
+                                      JL_COMPILEROPT_CHECK_BOUNDS_DEFAULT,
+                                      0     // int32_literals
 };
 
 int jl_boot_file_loaded = 0;
+int exit_on_sigint = 0;
 
 char *jl_stack_lo;
 char *jl_stack_hi;
@@ -185,6 +192,7 @@ DLLEXPORT void gdblookup(ptrint_t ip);
 
 static BOOL WINAPI sigint_handler(DWORD wsig) //This needs winapi types to guarantee __stdcall
 {
+    if (exit_on_sigint) jl_exit(0);
     int sig;
     //windows signals use different numbers from unix
     switch(wsig) {
@@ -233,15 +241,11 @@ static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo,
         switch (ExceptionInfo->ExceptionRecord->ExceptionCode) {
             case EXCEPTION_INT_DIVIDE_BY_ZERO:
                 fpreset();
-                if (!in_ctx)
-                    jl_throw(jl_diverror_exception);
-                jl_throw_in_ctx(jl_diverror_exception, ExceptionInfo->ContextRecord, 0);
+                jl_throw_in_ctx(jl_diverror_exception, ExceptionInfo->ContextRecord,in_ctx);
                 return EXCEPTION_CONTINUE_EXECUTION;
             case EXCEPTION_STACK_OVERFLOW:
                 bt_size = 0;
-                if (!in_ctx)
-                    jl_rethrow_other(jl_stackovf_exception);
-                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord, 0);
+                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord,0);
                 return EXCEPTION_CONTINUE_EXECUTION;
         }
         ios_puts("Please submit a bug report with steps to reproduce this fault, and any error messages that follow (in their entirety). Thanks.\nException: ", ios_stderr);
@@ -308,8 +312,22 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
     EXCEPTION_POINTERS ExceptionInfo;
     ExceptionInfo.ExceptionRecord = ExceptionRecord;
     ExceptionInfo.ContextRecord = ContextRecord;
-    return (EXCEPTION_DISPOSITION)_exception_handler(&ExceptionInfo,0);
+    
+    EXCEPTION_DISPOSITION rval;
+    switch (_exception_handler(&ExceptionInfo,1)) {
+        case EXCEPTION_CONTINUE_EXECUTION:
+            rval = ExceptionContinueExecution; break;
+        case EXCEPTION_CONTINUE_SEARCH:
+            rval = ExceptionContinueSearch; break;
+#ifndef _MSC_VER
+        case EXCEPTION_EXECUTE_HANDLER:
+            rval = ExceptionExecuteHandler; break;
+#endif
+    }
+
+    return rval;
 } 
+void* CALLBACK jl_getUnwindInfo(HANDLE hProcess, ULONG64 AddrBase, ULONG64 UserContext);
 #endif
 
 #else // #ifdef _OS_WINDOWS_
@@ -323,6 +341,7 @@ void restore_signals(void)
 
 void sigint_handler(int sig, siginfo_t *info, void *context)
 {
+    if (exit_on_sigint) jl_exit(0);
     if (jl_defer_signal) {
         jl_signal_pending = sig;
     }
@@ -460,21 +479,16 @@ uv_lib_t *jl_winsock_handle=&_jl_winsock_handle;
 #endif
 uv_loop_t *jl_io_loop;
 
-#ifdef COPY_STACKS
-void jl_switch_stack(jl_task_t *t, jl_jmp_buf *where);
-extern jl_jmp_buf * volatile jl_jmp_target;
-#endif
-
 void *init_stdio_handle(uv_file fd,int readable)
 {
     void *handle;
     uv_handle_type type = uv_guess_handle(fd);
     jl_uv_file_t *file;
 #ifndef _OS_WINDOWS_    
-    // Duplicate the file descritor so we can later dup it over if we want to redirect
+    // Duplicate the file descriptor so we can later dup it over if we want to redirect
     // STDIO without having to worry about closing the associated libuv object.
     // On windows however, libuv objects remember streams by their HANDLE, so this is
-    // unnessecary.
+    // unnecessary.
     fd = dup(fd);
 #endif
     //printf("%d: %d -- %d\n", fd, type, 0);
@@ -535,6 +549,16 @@ void init_stdio()
     JL_STDOUT = (uv_stream_t*)init_stdio_handle(1,0);
     JL_STDIN = (uv_stream_t*)init_stdio_handle(0,1);
 }
+
+#ifdef JL_USE_INTEL_JITEVENTS
+char jl_using_intel_jitevents; // Non-zero if running under Intel VTune Amplifier
+#endif
+
+#if defined(JL_USE_INTEL_JITEVENTS) && defined(__linux__)
+unsigned sig_stack_size = SIGSTKSZ; 
+#else
+#define sig_stack_size SIGSTKSZ
+#endif
 
 #ifndef _OS_WINDOWS_
 static void *signal_stack;
@@ -603,13 +627,13 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
         old_state = state;
         // memset(&state,0,sizeof(x86_thread_state64_t));
         // Setup libunwind information
-        state.__rsp = (uint64_t)signal_stack + SIGSTKSZ;
+        state.__rsp = (uint64_t)signal_stack + sig_stack_size;
         state.__rsp -= sizeof(unw_context_t);
         state.__rsp &= -16;
         unw_context_t *uc = (unw_context_t*)state.__rsp;
         state.__rsp -= 512;
         // This is for alignment. In particular note that the sizeof(void*) is necessary
-        // since it would usually specify the return address (i.e. we are aligning the call
+        // since it would usually specify the return address (i.e., we are aligning the call
         // frame to a 16 byte boundary as required by the abi, but the stack pointer
         // to point to the byte beyond that. Not doing this leads to funny behavior on
         // the first access to an external function will fail due to stack misalignment
@@ -634,9 +658,10 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
 
 void julia_init(char *imageFile)
 {
-    jl_io_loop = uv_default_loop(); // this loop will internal events (spawining process etc.),
+    jl_io_loop = uv_default_loop(); // this loop will internal events (spawning process etc.),
                                     // best to call this first, since it also initializes libuv
     jl_page_size = jl_getpagesize();
+    jl_arr_xtralloc_limit = uv_get_total_memory() / 100;  // Extra allocation limited to 1% of total RAM 
     jl_find_stack_bottom();
     jl_dl_handle = jl_load_dynamic_library(NULL, JL_RTLD_DEFAULT);
 #ifdef RTLD_DEFAULT
@@ -653,10 +678,15 @@ void julia_init(char *imageFile)
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                          GetCurrentProcess(), (PHANDLE)&hMainThread, 0,
                          TRUE, DUPLICATE_SAME_ACCESS)) {
-        JL_PRINTF(JL_STDERR, "Couldn't access handle to main thread\n");
+        JL_PRINTF(JL_STDERR, "WARNING: failed to access handle to main thread\n");
     }
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-    SymInitialize(GetCurrentProcess(), NULL, 1);
+    if (!SymInitialize(GetCurrentProcess(), NULL, 1)) {
+        JL_PRINTF(JL_STDERR, "WARNING: failed to initalize stack walk info\n");
+    }
+#if defined(_CPU_X86_64_)
+    if (!SymRegisterFunctionEntryCallback64(GetCurrentProcess(), jl_getUnwindInfo, 0)) JL_PRINTF(JL_STDERR, "WARNING: failed to install backtrace info callback\n");
+#endif
     needsSymRefreshModuleList = 0;
     uv_lib_t jl_dbghelp;
     uv_dlopen("dbghelp.dll",&jl_dbghelp);
@@ -664,6 +694,18 @@ void julia_init(char *imageFile)
         hSymRefreshModuleList = 0;
 #endif
     init_stdio();
+
+#if defined(JL_USE_INTEL_JITEVENTS)
+    const char* jit_profiling = getenv("ENABLE_JITPROFILING");
+    if (jit_profiling && atoi(jit_profiling)) {
+        jl_using_intel_jitevents = 1;
+#if defined(__linux__)
+        // Intel VTune Amplifier needs at least 64k for alternate stack.
+        if (SIGSTKSZ < 1<<16) 
+            sig_stack_size = 1<<16; 
+#endif
+    }
+#endif
 
 #if defined(__linux__)
     int ncores = jl_cpu_cores();
@@ -748,7 +790,7 @@ void julia_init(char *imageFile)
 
 
 #ifndef _OS_WINDOWS_
-    signal_stack = malloc(SIGSTKSZ);
+    signal_stack = malloc(sig_stack_size);
     struct sigaction actf;
     memset(&actf, 0, sizeof(struct sigaction));
     sigemptyset(&actf.sa_mask);
@@ -784,12 +826,12 @@ void julia_init(char *imageFile)
     }     
     pthread_attr_destroy(&attr);
 
-    ret = task_set_exception_ports(self,EXC_MASK_BAD_ACCESS,segv_port,EXCEPTION_DEFAULT,MACHINE_THREAD_STATE);
-    HANDLE_MACH_ERROR("task_set_exception_ports",ret);
+    ret = thread_set_exception_ports(mach_thread_self(),EXC_MASK_BAD_ACCESS,segv_port,EXCEPTION_DEFAULT,MACHINE_THREAD_STATE);
+    HANDLE_MACH_ERROR("thread_set_exception_ports",ret);
 #else // defined(_OS_DARWIN_)
     stack_t ss;
     ss.ss_flags = 0;
-    ss.ss_size = SIGSTKSZ;
+    ss.ss_size = sig_stack_size;
     ss.ss_sp = signal_stack;
     if (sigaltstack(&ss, NULL) < 0) {
         JL_PRINTF(JL_STDERR, "sigaltstack: %s\n", strerror(errno));
@@ -816,6 +858,11 @@ void julia_init(char *imageFile)
 #ifdef JL_GC_MARKSWEEP
     jl_gc_enable();
 #endif
+
+    if (imageFile)
+        jl_init_restored_modules();
+
+    jl_install_sigint_handler();
 }
 
 DLLEXPORT void jl_install_sigint_handler()
@@ -852,13 +899,7 @@ DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *
     p[sizeof(__stack_chk_guard)-1] = 255;
     p[sizeof(__stack_chk_guard)-2] = '\n';
     p[0] = 0;
-#ifdef COPY_STACKS
-    // initialize base context of root task
-    jl_root_task->stackbase = (char*)&argc;
-    if (jl_setjmp(jl_root_task->base_ctx, 0)) {
-        jl_switch_stack(jl_current_task, jl_jmp_target);
-    }
-#endif
+    JL_SET_STACK_BASE;
     int ret = pmain(argc, argv);
     char *build_path = jl_compileropts.build_path;
     if (build_path) {
@@ -866,13 +907,16 @@ DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *
         if (asprintf(&build_ji, "%s.ji",build_path) > 0) {
             jl_save_system_image(build_ji);
             free(build_ji);
-            char *build_bc;
-            if (asprintf(&build_bc, "%s.bc",build_path) > 0) {
-                jl_dump_bitcode(build_bc);
-                free(build_bc);
+            char *build_o;
+            if (asprintf(&build_o, "%s.o",build_path) > 0) {
+#ifndef _OS_WINDOWS_
+                jl_dump_linedebug_info();
+#endif
+                jl_dump_objfile(build_o,0);
+                free(build_o);
             }
             else {
-                ios_printf(ios_stderr,"FATAL: failed to create string for .bc build path");
+                ios_printf(ios_stderr,"FATAL: failed to create string for .o build path");
             }
         }
         else {
@@ -889,7 +933,6 @@ jl_function_t *jl_typeinf_func=NULL;
 
 DLLEXPORT void jl_enable_inference(void)
 {
-    if (jl_typeinf_func != NULL) return;
     jl_typeinf_func = (jl_function_t*)jl_get_global(jl_base_module,
                                                     jl_symbol("typeinf_ext"));
 }
@@ -967,3 +1010,9 @@ DLLEXPORT void jl_get_system_hooks(void)
     jl_loaderror_type = (jl_datatype_t*)basemod("LoadError");
     jl_weakref_type = (jl_datatype_t*)basemod("WeakRef");
 }
+
+DLLEXPORT void jl_exit_on_sigint(int on) {exit_on_sigint = on;}
+
+#ifdef __cplusplus
+}
+#endif

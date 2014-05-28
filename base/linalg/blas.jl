@@ -169,6 +169,7 @@ for (fname, elty, ret_type) in ((:dnrm2_,:Float64,:Float64),
     end
 end
 nrm2(x::StridedVector) = nrm2(length(x), x, stride(x,1))
+nrm2(x::Array) = nrm2(length(x), pointer(x), 1)
 
 ## asum
 for (fname, elty, ret_type) in ((:dasum_,:Float64,:Float64),
@@ -185,6 +186,7 @@ for (fname, elty, ret_type) in ((:dasum_,:Float64,:Float64),
     end
 end
 asum(x::StridedVector) = asum(length(x), x, stride(x,1))
+asum(x::Array) = asum(length(x), pointer(x), 1)
 
 ## axpy
 for (fname, elty) in ((:daxpy_,:Float64),
@@ -212,8 +214,8 @@ function axpy!{T<:BlasFloat,Ta<:Number}(alpha::Ta, x::Array{T}, y::Array{T})
     axpy!(length(x), convert(T,alpha), x, 1, y, 1)
 end
 
-function axpy!{T<:BlasFloat,Ta<:Number,Ti<:Integer}(alpha::Ta, x::Array{T}, rx::Union(Range1{Ti},Range{Ti}),
-                                         y::Array{T}, ry::Union(Range1{Ti},Range{Ti}))
+function axpy!{T<:BlasFloat,Ta<:Number,Ti<:Integer}(alpha::Ta, x::Array{T}, rx::Union(UnitRange{Ti},Range{Ti}),
+                                         y::Array{T}, ry::Union(UnitRange{Ti},Range{Ti}))
 
     length(rx)==length(ry) || throw(DimensionMismatch(""))
 
@@ -266,10 +268,10 @@ for (fname, elty) in ((:dgemv_,:Float64),
             Y
         end
         function gemv(trans::BlasChar, alpha::($elty), A::StridedMatrix{$elty}, X::StridedVector{$elty})
-            gemv!(trans, alpha, A, X, zero($elty), Array($elty, size(A, (trans == 'N' ? 1 : 2))))
+            gemv!(trans, alpha, A, X, zero($elty), similar(X, $elty, size(A, (trans == 'N' ? 1 : 2))))
         end
         function gemv(trans::BlasChar, A::StridedMatrix{$elty}, X::StridedVector{$elty})
-            gemv!(trans, one($elty), A, X, zero($elty), Array($elty, size(A, (trans == 'N' ? 1 : 2))))
+            gemv!(trans, one($elty), A, X, zero($elty), similar(X, $elty, size(A, (trans == 'N' ? 1 : 2))))
         end
     end
 end
@@ -300,7 +302,7 @@ for (fname, elty) in ((:dgbmv_,:Float64),
         end
         function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer, alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty})
             n = stride(A,2)
-            gbmv!(trans, m, kl, ku, alpha, A, x, zero($elty), Array($elty, n))
+            gbmv!(trans, m, kl, ku, alpha, A, x, zero($elty), similar(x, $elty, n))
         end
         function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer, A::StridedMatrix{$elty}, x::StridedVector{$elty})
             gbmv(trans, m, kl, ku, one($elty), A, x)
@@ -369,7 +371,7 @@ for (fname, elty) in ((:dsbmv_,:Float64),
         end
         function sbmv(uplo::BlasChar, k::Integer, alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty})
             n = size(A,2)
-            sbmv!(uplo, k, alpha, A, x, zero($elty), Array($elty, n))
+            sbmv!(uplo, k, alpha, A, x, zero($elty), similar(x, $elty, n))
         end
         function sbmv(uplo::BlasChar, k::Integer, A::StridedMatrix{$elty}, x::StridedVector{$elty})
             sbmv(uplo, k, one($elty), A, x)
@@ -464,7 +466,7 @@ for (fname, elty) in ((:dsyr_,:Float64),
     @eval begin
         function syr!(uplo::Char, α::$elty, x::StridedVector{$elty}, A::StridedMatrix{$elty})
             n = chksquare(A)
-            length(x) == A || throw(DimensionMismatch("Length of vector must be the same as the matrix dimensions"))
+            length(x) == n || throw(DimensionMismatch("Length of vector must be the same as the matrix dimensions"))
             ccall(($(string(fname)), libblas), Void,
                 (Ptr{Uint8}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty},
                  Ptr{BlasInt}, Ptr{$elty}, Ptr{BlasInt}),
@@ -529,7 +531,7 @@ for (gemm, elty) in
             C
         end
         function gemm(transA::BlasChar, transB::BlasChar, alpha::($elty), A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
-            gemm!(transA, transB, alpha, A, B, zero($elty), Array($elty, (size(A, transA == 'N' ? 1 : 2), size(B, transB == 'N' ? 2 : 1))))
+            gemm!(transA, transB, alpha, A, B, zero($elty), similar(B, $elty, (size(A, transA == 'N' ? 1 : 2), size(B, transB == 'N' ? 2 : 1))))
         end
         function gemm(transA::BlasChar, transB::BlasChar, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             gemm(transA, transB, one($elty), A, B)
@@ -606,7 +608,7 @@ end
 function syrk(uplo::BlasChar, trans::BlasChar, alpha::Number, A::StridedVecOrMat)
     T = eltype(A)
     n = size(A, trans == 'N' ? 1 : 2)
-    syrk!(uplo, trans, convert(T,alpha), A, zero(T), Array(T, (n, n)))
+    syrk!(uplo, trans, convert(T,alpha), A, zero(T), similar(A, T, (n, n)))
 end
 syrk(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat) = syrk(uplo, trans, one(eltype(A)), A)
 
@@ -636,7 +638,7 @@ for (fname, elty) in ((:zherk_,:Complex128), (:cherk_,:Complex64))
        end
        function herk(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty})
            n = size(A, trans == 'N' ? 1 : 2)
-           herk!(uplo, trans, alpha, A, zero($elty), Array($elty, (n,n)))
+           herk!(uplo, trans, alpha, A, zero($elty), similar(A, $elty, (n,n)))
        end
        herk(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat{$elty}) = herk(uplo, trans, one($elty), A)
    end
@@ -678,7 +680,7 @@ end
 function syr2k(uplo::BlasChar, trans::BlasChar, alpha::Number, A::StridedVecOrMat, B::StridedVecOrMat)
     T = eltype(A)
     n = size(A, trans == 'N' ? 1 : 2)
-    syr2k!(uplo, trans, convert(T,alpha), A, B, zero(T), Array(T, (n, n)))
+    syr2k!(uplo, trans, convert(T,alpha), A, B, zero(T), similar(A, T, (n, n)))
 end
 syr2k(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat, B::StridedVecOrMat) = syr2k(uplo, trans, one(eltype(A)), A, B)
 
@@ -711,7 +713,7 @@ for (fname, elty1, elty2) in ((:zher2k_,:Complex128,:Float64), (:cher2k_,:Comple
        end
        function her2k(uplo::BlasChar, trans::BlasChar, alpha::($elty1), A::StridedVecOrMat{$elty1}, B::StridedVecOrMat{$elty1})
            n = size(A, trans == 'N' ? 1 : 2)
-           her2k!(uplo, trans, alpha, A, B, zero($elty2), Array($elty1, (n,n)))
+           her2k!(uplo, trans, alpha, A, B, zero($elty2), similar(A, $elty1, (n,n)))
        end
        her2k(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat{$elty1}, B::StridedVecOrMat{$elty1}) = her2k(uplo, trans, one($elty1), A, B)
    end
@@ -743,7 +745,7 @@ for (fname, elty) in ((:dgbmv_,:Float64), (:sgbmv_,:Float32),
        function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer,
                      alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty})
            n = stride(A,2)
-           gbmv!(trans, m, kl, ku, alpha, A, x, zero($elty), Array($elty, n))
+           gbmv!(trans, m, kl, ku, alpha, A, x, zero($elty), similar(x, $elty, n))
        end
        function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer,
                      A::StridedMatrix{$elty}, x::StridedVector{$elty})
@@ -776,7 +778,7 @@ for (fname, elty) in ((:dsbmv_,:Float64), (:ssbmv_,:Float32),
        function sbmv(uplo::BlasChar, k::Integer, alpha::($elty), A::StridedMatrix{$elty},
                      x::StridedVector{$elty})
            n = size(A,2)
-           sbmv!(uplo, k, alpha, A, x, zero($elty), Array($elty, n))
+           sbmv!(uplo, k, alpha, A, x, zero($elty), similar(x, $elty, n))
        end
        function sbmv(uplo::BlasChar, k::Integer, A::StridedMatrix{$elty}, x::StridedVector{$elty})
            sbmv(uplo, k, one($elty), A, x)
@@ -843,8 +845,8 @@ end
 
 end # module
 
-function copy!{T<:BlasFloat,Ti<:Integer}(dest::Array{T}, rdest::Union(Range1{Ti},Range{Ti}), 
-                                          src::Array{T}, rsrc::Union(Range1{Ti},Range{Ti}))
+function copy!{T<:BlasFloat,Ti<:Integer}(dest::Array{T}, rdest::Union(UnitRange{Ti},Range{Ti}), 
+                                          src::Array{T}, rsrc::Union(UnitRange{Ti},Range{Ti}))
     if minimum(rdest) < 1 || maximum(rdest) > length(dest) || minimum(rsrc) < 1 || maximum(rsrc) > length(src)
         throw(BoundsError())
     end

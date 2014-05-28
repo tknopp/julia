@@ -2,7 +2,6 @@ char(x) = convert(Char, x)
 char(x::FloatingPoint) = char(iround(x))
 
 integer(x::Char) = int(x)
-unsigned(x::Char) = uint(x)
 
 ## char promotions ##
 
@@ -20,9 +19,8 @@ promote_rule(::Type{Char}, ::Type{Uint128}) = Uint128
 ## character operations & comparisons ##
 
 # numeric operations
+# TODO: this should be removed, but needs to be here as long as Char <: Integer
 +(x::Char   , y::Char   ) = int(x)+int(y)
-*(x::Char   , y::Char   ) = int(x)*int(y)
-div(x::Char , y::Char   ) = div(int(x),int(y))
 
 # ordinal operations
 +(x::Char   , y::Integer) = char(int(x)+int(y))

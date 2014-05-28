@@ -12,9 +12,16 @@ macro deprecate(old,new)
     elseif isa(old,Expr) && old.head == :call
         oldcall = sprint(io->show_unquoted(io,old))
         newcall = sprint(io->show_unquoted(io,new))
-        oldname = Expr(:quote, old.args[1])
+        oldsym = if isa(old.args[1],Symbol)
+            old.args[1]
+        elseif isa(old.args[1],Expr) && old.args[1].head == :curly
+            old.args[1].args[1]
+        else
+            error("invalid usage of @deprecate")
+        end
+        oldname = Expr(:quote, oldsym)
         Expr(:toplevel,
-            Expr(:export,esc(old.args[1])),
+            Expr(:export,esc(oldsym)),
             :($(esc(old)) = begin
                   depwarn(string($oldcall," is deprecated, use ",$newcall," instead."),
                           $oldname)
@@ -35,12 +42,12 @@ function firstcaller(bt::Array{Ptr{None},1}, funcsym::Symbol)
     # Identify the calling line
     i = 1
     while i <= length(bt)
-        lkup = ccall(:jl_lookup_code_address, Any, (Ptr{Void}, Int32), bt[i], 0)
+        lkup = ccall(:jl_lookup_code_address, Any, (Ptr{Void},), bt[i])
         i += 1
         if lkup === ()
             continue
         end
-        fname, file, line = lkup
+        fname, file, line, fromC = lkup
         if fname == funcsym
             break
         end
@@ -53,10 +60,6 @@ end
 
 # 0.1
 
-const IOString = IOBuffer
-export IOString
-const PipeString = PipeBuffer
-export PipeString
 
 # 0.2
 
@@ -182,6 +185,18 @@ export PipeString
 @deprecate svdfact(A,thin)      svdfact(A,thin=thin)
 @deprecate svdfact!(A,thin)     svdfact(A,thin=thin)
 @deprecate svd(A,thin)          svd(A,thin=thin)
+# Note: These methods need a more helpfull error message than a `NoMethodError`,
+#       when the deprecation is removed
+@deprecate (+)(A::Array{Bool},x::Bool)      A .+ x
+@deprecate (+)(x::Bool,A::Array{Bool})      x .+ A 
+@deprecate (-)(A::Array{Bool},x::Bool)      A .- x
+@deprecate (-)(x::Bool,A::Array{Bool})      x .- A
+@deprecate (+)(A::Array,x::Number)          A .+ x
+@deprecate (+)(x::Number,A::Array)          x .+ A
+@deprecate (-)(A::Array,x::Number)          A .- x
+@deprecate (-)(x::Number,A::Array)          x .- A
+@deprecate (/)(x::Number,A::Array)          x ./ A
+@deprecate (\)(A::Array,x::Number)          A .\ x
 
 deprecated_ls() = run(`ls -l`)
 deprecated_ls(args::Cmd) = run(`ls -l $args`)
@@ -231,13 +246,13 @@ export ComplexPair
 
 # superseded sorting API
 
-@deprecate select(v::AbstractVector,k::Union(Int,Range1),o::Ordering) select(v,k,order=o)
-@deprecate select(v::AbstractVector,k::Union(Int,Range1),f::Function) select(v,k,lt=f)
-@deprecate select(f::Function,v::AbstractVector,k::Union(Int,Range1)) select(v,k,lt=f)
+@deprecate select(v::AbstractVector,k::Union(Int,UnitRange),o::Ordering) select(v,k,order=o)
+@deprecate select(v::AbstractVector,k::Union(Int,UnitRange),f::Function) select(v,k,lt=f)
+@deprecate select(f::Function,v::AbstractVector,k::Union(Int,UnitRange)) select(v,k,lt=f)
 
-# @deprecate select!(v::AbstractVector,k::Union(Int,Range1),o::Ordering) select!(v,k,order=o)
-@deprecate select!(v::AbstractVector,k::Union(Int,Range1),f::Function) select!(v,k,lt=f)
-@deprecate select!(f::Function,v::AbstractVector,k::Union(Int,Range1)) select!(v,k,lt=f)
+# @deprecate select!(v::AbstractVector,k::Union(Int,UnitRange),o::Ordering) select!(v,k,order=o)
+@deprecate select!(v::AbstractVector,k::Union(Int,UnitRange),f::Function) select!(v,k,lt=f)
+@deprecate select!(f::Function,v::AbstractVector,k::Union(Int,UnitRange)) select!(v,k,lt=f)
 
 @deprecate sort(v::AbstractVector,o::Ordering) sort(v,order=o)
 @deprecate sort(v::AbstractVector,a::Algorithm) sort(v,alg=a)
@@ -365,6 +380,17 @@ end
 export mmread
 
 # 0.3 deprecations
+
+function nfilled(X)
+    depwarn("nfilled has been renamed to nnz", :nfilled)
+    nnz(X)
+end
+export nfilled
+
+@deprecate nonzeros(A::StridedArray) A[find(A)]
+@deprecate nonzeros(B::BitArray) trues(countnz(B))
+@deprecate nnz(A::StridedArray) countnz(A)
+
 @deprecate dense  full
 
 export Stat
@@ -372,6 +398,12 @@ const Stat = StatStruct
 
 export CharString
 const CharString = UTF32String
+
+export Ranges
+const Ranges = Range
+
+export Range1
+const Range1 = UnitRange
 
 @deprecate set_rounding(r::RoundingMode) set_rounding(Float64,r)
 @deprecate get_rounding() get_rounding(Float64)
@@ -400,13 +432,33 @@ eval(Sys, :(@deprecate shlib_list dllist))
 IntSet(xs::Integer...) = (s=IntSet(); for a in xs; push!(s,a); end; s)
 Set{T<:Number}(xs::T...) = Set{T}(xs)
 
+@deprecate normfro(A) vecnorm(A)
+
+@deprecate convert{T}(p::Type{Ptr{T}}, a::Array) convert(p, pointer(a))
+
+@deprecate read(from::IOBuffer, a::Array)            read!(from, a)
+@deprecate read(from::IOBuffer, p::Ptr, nb::Integer) read!(from, p, nb)
+@deprecate read(s::IOStream, a::Array)               read!(s, a)
+@deprecate read(this::AsyncStream, a::Array)         read!(this, a)
+@deprecate read(f::File, a::Array, nel)              read!(f, a, nel)
+@deprecate read(f::File, a::Array)                   read!(f, a)
+@deprecate read(s::IO, a::Array)                     read!(s, a)
+@deprecate read(s::IO, B::BitArray)                  read!(s, B)
+
+@deprecate nans{T}(::Type{T}, dims...)   fill(convert(T,NaN), dims)
+@deprecate nans(dims...)                 fill(NaN, dims)
+@deprecate nans{T}(x::AbstractArray{T})  fill(convert(T,NaN), size(x))
+@deprecate infs{T}(::Type{T}, dims...)   fill(convert(T,Inf), dims)
+@deprecate infs(dims...)                 fill(Inf, dims)
+@deprecate infs{T}(x::AbstractArray{T})  fill(convert(T,Inf), size(x))
+
+@deprecate bitmix(x, y::Uint)                 hash(x, y)
+@deprecate bitmix(x, y::Int)                  hash(x, uint(y))
+@deprecate bitmix(x, y::Union(Uint32, Int32)) convert(Uint32, hash(x, uint(y)))
+@deprecate bitmix(x, y::Union(Uint64, Int64)) convert(Uint64, hash(x, hash(y)))
 
 # 0.3 discontinued functions
 
-function nnz(X)
-    depwarn("nnz has been renamed to countnz and is no longer computed in constant time for sparse matrices. Instead, use nfilled() for the number of elements in a sparse matrix.", :nnz)
-    countnz(X)
-end
-export nnz
-
 scale!{T<:Base.LinAlg.BlasReal}(X::Array{T}, s::Complex) = error("scale!: Cannot scale a real array by a complex value in-place.  Use scale(X::Array{Real}, s::Complex) instead.")
+
+@deprecate which(f::Callable, args...) @which f(args...)

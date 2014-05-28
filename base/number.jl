@@ -13,22 +13,25 @@ length(x::Number) = 1
 endof(x::Number) = 1
 getindex(x::Number) = x
 getindex(x::Number, i::Integer) = i == 1 ? x : throw(BoundsError())
-getindex(x::Number, i::Real) = getindex(x, to_index(i))
+getindex(x::Number, I::Integer...) = all([i == 1 for i in I]) ? x : throw(BoundsError())
+getindex(x::Number, I::Real...) = getindex(x, to_index(i)...)
 first(x::Number) = x
 last(x::Number) = x
 
 divrem(x,y) = (div(x,y),rem(x,y))
-signbit(x::Real) = int(x < 0)
-sign(x::Real) = x < 0 ? oftype(x,-1) : x > 0 ? one(x) : x
-abs(x::Real) = x < 0 ? -x : x
+signbit(x::Real) = x < 0
+sign(x::Real) = ifelse(x < 0, oftype(x,-1), ifelse(x > 0, one(x), x))
+abs(x::Real) = ifelse(x < 0, -x, x)
 abs2(x::Real) = x*x
-copysign(x::Real, y::Real) = signbit(x)!=signbit(y) ? -x : x
+copysign(x::Real, y::Real) = ifelse(signbit(x)!=signbit(y), -x, x)
 
 conj(x::Real) = x
 transpose(x::Number) = x
 ctranspose(x::Number) = conj(x)
 inv(x::Number) = one(x)/x
 angle(z::Real) = atan2(zero(z), z)
+
+widemul(x::Number, y::Number) = widen(x)*widen(y)
 
 start(x::Number) = false
 next(x::Number, state) = (x, true)
@@ -39,6 +42,11 @@ in(x::Number, y::Number) = x == y
 reinterpret{T<:Real}(::Type{T}, x::Real) = box(T,x)
 
 map(f::Callable, x::Number) = f(x)
+
+zero(x::Number) = oftype(x,0)
+zero{T<:Number}(::Type{T}) = oftype(T,0)
+one(x::Number)  = oftype(x,1)
+one{T<:Number}(::Type{T}) = oftype(T,1)
 
 const _numeric_conversion_func_names =
     (:int,:integer,:signed,:int8,:int16,:int32,:int64,:int128,

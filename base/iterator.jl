@@ -10,7 +10,8 @@ enumerate(itr) = Enumerate(itr)
 length(e::Enumerate) = length(e.itr)
 start(e::Enumerate) = (1, start(e.itr))
 function next(e::Enumerate, state)
-    (state[1],next(e.itr,state[2])[1]), (state[1]+1,next(e.itr,state[2])[2])
+    n = next(e.itr,state[2])
+    (state[1],n[1]), (state[1]+1,n[2])
 end
 done(e::Enumerate, state) = done(e.itr, state[2])
 
@@ -72,27 +73,27 @@ function start_filter(pred, itr)
     while !done(itr,s)
         v,t = next(itr,s)
         if pred(v)
-            break
+            return (false, v, t)
         end
         s=t
     end
-    s
+    (true,)
 end
 
 next(f::Filter, s) = advance_filter(f.flt, f.itr, s)
-function advance_filter(pred, itr, s)
-    v,s = next(itr,s)
+function advance_filter(pred, itr, st)
+    _, v, s = st
     while !done(itr,s)
         w,t = next(itr,s)
         if pred(w)
-            break
+            return v, (false, w, t)
         end
         s=t
     end
-    v,s
+    v, (true,)
 end
 
-done(f::Filter, s) = done(f.itr,s)
+done(f::Filter, s) = s[1]
 
 eltype(f::Filter) = eltype(f.itr)
 

@@ -36,6 +36,9 @@ ntuple(f::Function, n::Integer) =
     n==5 ? (f(1),f(2),f(3),f(4),f(5),) :
     tuple(ntuple(n-2,f)..., f(n-1), f(n))
 
+argtail(x, rest...) = rest
+tail(x::Tuple) = argtail(x...)
+
 # 0 argument function
 map(f::Callable) = f()
 # 1 argument function
@@ -44,7 +47,7 @@ map(f::Callable, t::(Any,))               = (f(t[1]),)
 map(f::Callable, t::(Any, Any))           = (f(t[1]), f(t[2]))
 map(f::Callable, t::(Any, Any, Any))      = (f(t[1]), f(t[2]), f(t[3]))
 map(f::Callable, t::(Any, Any, Any, Any)) = (f(t[1]), f(t[2]), f(t[3]), f(t[4]))
-map(f::Callable, t::Tuple)                = tuple([f(ti) for ti in t]...)
+map(f::Callable, t::Tuple)                = tuple(f(t[1]), map(f,tail(t))...)
 # 2 argument function
 map(f::Callable, t::(),        s::())        = ()
 map(f::Callable, t::(Any,),    s::(Any,))    = (f(t[1],s[1]),)
@@ -92,6 +95,11 @@ function ==(t1::Tuple, t2::Tuple)
     return true
 end
 
+hash(::(), h::Uint) = h + uint(0x77cfa1eef01bca90)
+hash(x::(Any,), h::Uint)    = hash(x[1], hash((), h))
+hash(x::(Any,Any), h::Uint) = hash(x[1], hash(x[2], hash((), h)))
+hash(x::Tuple, h::Uint)     = hash(x[1], hash(x[2], hash(tupletail(x), h)))
+
 function isless(t1::Tuple, t2::Tuple)
     n1, n2 = length(t1), length(t2)
     for i = 1:min(n1, n2)
@@ -108,15 +116,18 @@ end
 isempty(x::()) = true
 isempty(x::Tuple) = false
 
-reverse(x::Tuple) = (n=length(x); tuple([x[n-k+1] for k=1:n]...))
+revargs() = ()
+revargs(x, r...) = tuple(revargs(r...)..., x)
+
+reverse(t::Tuple) = revargs(t...)
 
 ## specialized reduction ##
 
 # TODO: these definitions cannot yet be combined, since +(x...)
 # where x might be any tuple matches too many methods.
-sum(x::()) = 0
 sum(x::(Any, Any...)) = +(x...)
 
+# NOTE: should remove, but often used on array sizes
 prod(x::()) = 1
 prod(x::(Any, Any...)) = *(x...)
 

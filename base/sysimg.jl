@@ -58,6 +58,7 @@ include("bitarray.jl")
 include("intset.jl")
 include("dict.jl")
 include("set.jl")
+include("hashing.jl")
 include("iterator.jl")
 
 # compiler
@@ -105,33 +106,27 @@ importall .FS
 include("process.jl")
 include("multimedia.jl")
 importall .Multimedia
-reinit_stdio()
+# TODO: should put this in _init, but need to handle its boolean argument correctly
 ccall(:jl_get_uv_hooks, Void, (Cint,), 0)
 include("grisu.jl")
 import .Grisu.print_shortest
-include("printf.jl")
-importall .Printf
 include("file.jl")
 include("methodshow.jl")
+
+# core math functions
+include("floatfuncs.jl")
+include("math.jl")
+importall .Math
+const (√)=sqrt
+const (∛)=cbrt
+include("float16.jl")
 
 # multidimensional arrays
 include("cartesian.jl")
 using .Cartesian
 include("multidimensional.jl")
 
-# FIXME: #5885
-colon{T<:FloatingPoint}(start::T, step::T, stop::T) =
-          step == 0              ? error("step cannot be zero in colon syntax") :
-         start == stop           ? FloatRange{T}(start,step,1,1) :
-    (0 < step) != (start < stop) ? FloatRange{T}(start,step,1,0) :
-                                   FloatRange{T}(frange(start,step,stop)...)
-
-# core math functions
-include("floatfuncs.jl")
-include("math.jl")
-importall .Math
 include("primes.jl")
-include("float16.jl")
 
 # concurrency and parallelism
 include("serialize.jl")
@@ -140,9 +135,7 @@ include("multi.jl")
 # Polling (requires multi.jl)
 include("poll.jl")
 
-# front end & code loading
-include("repl.jl")
-include("client.jl")
+# code loading
 include("loading.jl")
 
 begin
@@ -159,12 +152,6 @@ end
 # reduction along dims
 include("reducedim.jl")  # macros in this file relies on string.jl
 
-# random number generation and statistics
-include("statistics.jl")
-include("librandom.jl")
-include("random.jl")
-importall .Random
-
 # basic data structures
 include("ordering.jl")
 importall .Order
@@ -174,38 +161,6 @@ include("collections.jl")
 include("sort.jl")
 importall .Sort
 include("combinatorics.jl")
-
-# distributed arrays and memory-mapped arrays
-include("darray.jl")
-include("mmap.jl")
-include("sharedarray.jl")
-
-# utilities - version, timing, help, edit, metaprogramming
-include("sysinfo.jl")
-include("version.jl")
-include("datafmt.jl")
-include("deepcopy.jl")
-include("util.jl")
-include("test.jl")
-include("meta.jl")
-include("i18n.jl")
-include("help.jl")
-using .I18n
-using .Help
-push!(I18n.CALLBACKS, Help.clear_cache)
-
-# sparse matrices and linear algebra
-include("sparse.jl")
-importall .SparseMatrix
-include("linalg.jl")
-importall .LinAlg
-include("broadcast.jl")
-importall .Broadcast
-
-# signal processing
-include("fftw.jl")
-include("dsp.jl")
-importall .DSP
 
 # rounding utilities
 include("rounding.jl")
@@ -221,6 +176,72 @@ big(x::FloatingPoint) = convert(BigFloat,x)
 big(q::Rational) = big(num(q))//big(den(q))
 big(z::Complex) = complex(big(real(z)),big(imag(z)))
 @vectorize_1arg Number big
+
+# more hashing definitions
+include("hashing2.jl")
+
+# random number generation
+include("librandom.jl")
+include("random.jl")
+importall .Random
+
+# distributed arrays and memory-mapped arrays
+include("darray.jl")
+include("mmap.jl")
+include("sharedarray.jl")
+
+# utilities - version, timing, help, edit, metaprogramming
+include("version.jl")
+include("datafmt.jl")
+importall .DataFmt
+include("deepcopy.jl")
+include("util.jl")
+include("interactiveutil.jl")
+include("replutil.jl")
+include("test.jl")
+include("meta.jl")
+include("i18n.jl")
+include("help.jl")
+using .I18n
+using .Help
+push!(I18n.CALLBACKS, Help.clear_cache)
+
+# SIMD loops
+include("simdloop.jl")
+importall .SimdLoop
+
+# frontend
+include("Terminals.jl")
+include("LineEdit.jl")
+include("REPLCompletions.jl")
+include("REPL.jl")
+include("client.jl")
+
+# sparse matrices and linear algebra
+include("sparse.jl")
+importall .SparseMatrix
+include("linalg.jl")
+importall .LinAlg
+const ⋅ = dot
+const × = cross
+include("broadcast.jl")
+importall .Broadcast
+
+# statistics
+include("statistics.jl")
+
+# signal processing
+include("fftw.jl")
+include("dsp.jl")
+importall .DSP
+
+# (s)printf macros
+include("printf.jl")
+importall .Printf
+
+# system information
+include("sysinfo.jl")
+import .Sys.CPU_CORES
 
 # mathematical constants
 include("constants.jl")
@@ -243,17 +264,16 @@ include("graphics.jl")
 include("profile.jl")
 importall .Profile
 
+function __init__()
+    # Base library init
+    reinit_stdio()
+    Multimedia.reinit_displays() # since Multimedia.displays uses STDOUT as fallback
+    fdwatcher_init()
+end
+
 include("precompile.jl")
 
 include = include_from_node1
-
-# invoke type inference, running the existing inference code on the new
-# inference code to cache an optimized version of it.
-begin
-    local atypes = (LambdaStaticData, Tuple, (), LambdaStaticData, Bool)
-    local minf = _methods(typeinf, atypes, -1)
-    typeinf_ext(minf[1][3].func.code, atypes, (), minf[1][3].func.code)
-end
 
 end # baremodule Base
 

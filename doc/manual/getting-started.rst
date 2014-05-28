@@ -71,7 +71,9 @@ worker processes, while ``--machinefile file`` will launch a worker
 for each line in file ``file``. The machines defined in ``file`` must be 
 accessible via a passwordless ``ssh`` login, with Julia installed at the
 same location as the current host. Each machine definition takes the form 
-``[user@]host[:port]`` 
+``[user@]host[:port] [bind_addr]`` . ``user`` defaults to current user, 
+``port`` to the standard ssh port. Optionally, in case of multi-homed hosts, 
+``bind_addr`` may be used to explicitly specify an interface.
     
     
 If you have code that you want executed whenever julia is run, you can
@@ -98,6 +100,7 @@ those available for the ``perl`` and ``ruby`` programs::
 
     julia [options] [program] [args...]
      -v --version             Display version information
+     -h --help                Print this message
      -q --quiet               Quiet startup without banner
      -H --home=<dir>          Load files relative to <dir>
      -T --tab=<size>          Set REPL tab width to <size>
@@ -116,7 +119,7 @@ those available for the ``perl`` and ``ruby`` programs::
      -F                       Load ~/.juliarc.jl, then handle remaining inputs
      --color=yes|no           Enable or disable color text
 
-     -h --help                Print this message
+     --check-bounds=yes|no    Emit bounds checks always or never (ignoring declarations)
 
 Resources
 ---------

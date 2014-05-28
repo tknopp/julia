@@ -1,7 +1,7 @@
+.. module:: Base.Collections
+
 Collections and Data Structures
 ===============================
-
-.. module:: Base.Collections
 
 The ``Collections`` module contains implementations of some common data
 structures.
@@ -68,9 +68,9 @@ the heap are given in ascending order.
 
    Return true iff an array is heap-ordered according to the given order.
 
-.. function:: heappush!(v, [ord])
+.. function:: heappush!(v, x, [ord])
 
-   Given a binary heap-ordered array, push a new element, preserving the heap
+   Given a binary heap-ordered array, push a new element ``x``, preserving the heap
    property. For efficiency, this function does not check that the array is
    indeed heap-ordered.
 

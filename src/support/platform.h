@@ -58,7 +58,7 @@
 *******************************************************************************/
 
 #if defined(__FreeBSD__)
-#define _OS_FREEBSD__
+#define _OS_FREEBSD_
 #elif defined(__linux__)
 #define _OS_LINUX_
 #elif defined(_WIN32) || defined(_WIN64)
@@ -79,5 +79,25 @@
 #define _CPU_ARM_
 #endif
 
-#endif /* !PLATFORM_H */
+#if defined(_CPU_X86_64_)
+#  define _P64
+#elif defined(_CPU_X86_)
+#  define _P32
+#elif defined(_OS_WINDOWS_)
+/* Not sure how to determine pointer size on Windows running ARM. */
+#  if _WIN64
+#    define _P64
+#  else
+#    define _P32
+#  endif
+#elif defined(_COMPILER_GCC_)
+#  if __x86_64__ || __ppc64__
+#    define _P64
+#  else
+#    define _P32
+#  endif
+#else
+#  error pointer size not known for your platform / compiler
+#endif
 
+#endif /* !PLATFORM_H */

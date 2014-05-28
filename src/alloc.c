@@ -8,6 +8,10 @@
 #include "julia.h"
 #include "julia_internal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 jl_value_t *jl_true;
 jl_value_t *jl_false;
 
@@ -87,6 +91,7 @@ jl_sym_t *compositetype_sym; jl_sym_t *type_goto_sym;
 jl_sym_t *global_sym; jl_sym_t *tuple_sym;
 jl_sym_t *dot_sym;    jl_sym_t *newvar_sym;
 jl_sym_t *boundscheck_sym; jl_sym_t *copyast_sym;
+jl_sym_t *simdloop_sym;
 
 typedef struct {
     int64_t a;
@@ -411,6 +416,11 @@ jl_lambda_info_t *jl_new_lambda_info(jl_value_t *ast, jl_tuple_t *sparams)
 
 static jl_sym_t *symtab = NULL;
 
+static uptrint_t hash_symbol(const char *str, size_t len)
+{
+    return memhash(str, len) ^ ~(uptrint_t)0/3*2;
+}
+
 static jl_sym_t *mk_symbol(const char *str)
 {
     jl_sym_t *sym;
@@ -419,11 +429,7 @@ static jl_sym_t *mk_symbol(const char *str)
     sym = (jl_sym_t*)malloc((sizeof(jl_sym_t)+len+1+7)&-8);
     sym->type = (jl_value_t*)jl_sym_type;
     sym->left = sym->right = NULL;
-#ifdef _P64
-    sym->hash = memhash(str, len)^0xAAAAAAAAAAAAAAAAL;
-#else
-    sym->hash = memhash32(str, len)^0xAAAAAAAA;
-#endif
+    sym->hash = hash_symbol(str, len);
     strcpy(&sym->name[0], str);
     return sym;
 }
@@ -442,11 +448,16 @@ void jl_unmark_symbols(void) { unmark_symbols_(symtab); }
 static jl_sym_t **symtab_lookup(jl_sym_t **ptree, const char *str)
 {
     int x;
+    uptrint_t h = hash_symbol(str, strlen(str));
 
+    // Tree nodes sorted by major key of (int(hash)) and minor key o (str).
     while(*ptree != NULL) {
-        x = strcmp(str, (*ptree)->name);
-        if (x == 0)
-            return ptree;
+        x = (int)(h-(*ptree)->hash);
+        if (x == 0) {
+            x = strcmp(str, (*ptree)->name);
+            if (x == 0)
+                return ptree;
+        }
         if (x < 0)
             ptree = &(*ptree)->left;
         else
@@ -930,3 +941,7 @@ JL_CALLABLE(jl_f_default_ctor_2)
         jl_type_error(((jl_datatype_t*)F)->name->name->name, ft, args[1]);
     return jl_new_struct((jl_datatype_t*)F, args[0], args[1]);
 }
+
+#ifdef __cplusplus
+}
+#endif

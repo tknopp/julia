@@ -8,6 +8,10 @@
 #include "julia_internal.h"
 #include "builtin_proto.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern int jl_lineno;
 
 static jl_value_t *eval(jl_value_t *e, jl_value_t **locals, size_t nl);
@@ -437,11 +441,16 @@ static jl_value_t *eval(jl_value_t *e, jl_value_t **locals, size_t nl)
         return jl_eval_module_expr(ex);
     }
     else if (ex->head == error_sym || ex->head == jl_incomplete_sym) {
+        if (nargs == 0)
+            jl_error("malformed \"error\" expression");
         if (jl_is_byte_string(args[0]))
             jl_errorf("syntax: %s", jl_string_data(args[0]));
         jl_throw(args[0]);
     }
     else if (ex->head == boundscheck_sym) {
+        return (jl_value_t*)jl_nothing;
+    }
+    else if (ex->head == simdloop_sym) {
         return (jl_value_t*)jl_nothing;
     }
     jl_errorf("unsupported or misplaced expression %s", ex->head->name);
@@ -504,6 +513,10 @@ static jl_value_t *eval_body(jl_array_t *stmts, jl_value_t **locals, size_t nl,
                     return eval_body(stmts, locals, nl, i+1, toplevel);
                 }
                 else {
+#ifdef _OS_WINDOWS_
+                    if (jl_exception_in_transit == jl_stackovf_exception)
+                        _resetstkoflw();
+#endif
                     i = label_idx(jl_exprarg(stmt,0), stmts);
                     continue;
                 }
@@ -561,3 +574,7 @@ jl_value_t *jl_interpret_toplevel_thunk(jl_lambda_info_t *lam)
 {
     return jl_interpret_toplevel_thunk_with(lam, NULL, 0);
 }
+
+#ifdef __cplusplus
+}
+#endif

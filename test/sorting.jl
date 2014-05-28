@@ -6,6 +6,12 @@
 @test reverse([2,3,1]) == [1,3,2]
 @test select([3,6,30,1,9],3) == 6
 @test select([3,6,30,1,9],3:4) == [6,9]
+let a=[1:10]
+    for r in {2:4, 1:2, 10:10, 4:2, 2:1, 4:-1:2, 2:-1:1, 10:-1:10, 4:1:3, 1:2:8, 10:-3:1}
+        @test select(a, r) == [r]
+        @test select(a, r, rev=true) == (11 .- [r])
+    end
+end
 @test sum(randperm(6)) == 21
 @test nthperm([0,1,2],3) == [1,0,2]
 
@@ -15,7 +21,10 @@
 @test searchsorted([1, 1, 2, 2, 3, 3], 4) == 7:6
 @test searchsorted([1.0, 1, 2, 2, 3, 3], 2.5) == 5:4
 
-for (rg,I) in {(49:57,47:59), (1:2:17,-1:19), (-3:0.5:2,-5:.5:4), (3+0*(1:5),-5:.5:4)}
+@test searchsorted([1:10], 1, by=(x -> x >= 5)) == 1:4
+@test searchsorted([1:10], 10, by=(x -> x >= 5)) == 5:10
+
+for (rg,I) in {(49:57,47:59), (1:2:17,-1:19), (-3:0.5:2,-5:.5:4)}
     rg_r = reverse(rg)
     rgv, rgv_r = [rg], [rg_r]
     for i = I
@@ -37,6 +46,9 @@ for i = 1:100
     @test searchsorted(rg_r, prevfloat(rg_r[i]), rev=true) == i+1:i
     @test searchsorted(rg_r, nextfloat(rg_r[i]), rev=true) == i:i-1
 end
+
+@test searchsorted(1:10, 1, by=(x -> x >= 5)) == searchsorted([1:10], 1, by=(x -> x >= 5))
+@test searchsorted(1:10, 10, by=(x -> x >= 5)) == searchsorted([1:10], 10, by=(x -> x >= 5))
 
 a = rand(1:10000, 1000)
 
@@ -100,13 +112,14 @@ end
 srand(0xdeadbeef)
 
 for n in [0:10, 100, 101, 1000, 1001]
-    r = 1:10
-    v = rand(1:10,n)
+    r = -5:5
+    v = rand(r,n)
     h = hist(v,r)
 
     for rev in [false,true]
         # insertion sort (stable) as reference
         pi = sortperm(v, alg=InsertionSort, rev=rev)
+        @test pi == sortperm(float(v), alg=InsertionSort, rev=rev)
         @test isperm(pi)
         si = v[pi]
         @test hist(si,r) == h
@@ -121,6 +134,7 @@ for n in [0:10, 100, 101, 1000, 1001]
         # stable algorithms
         for alg in [MergeSort]
             p = sortperm(v, alg=alg, rev=rev)
+            @test p == sortperm(float(v), alg=alg, rev=rev)
             @test p == pi
             s = copy(v)
             permute!(s, p)
@@ -132,6 +146,7 @@ for n in [0:10, 100, 101, 1000, 1001]
         # unstable algorithms
         for alg in [QuickSort]
             p = sortperm(v, alg=alg, rev=rev)
+            @test p == sortperm(float(v), alg=alg, rev=rev)
             @test isperm(p)
             @test v[p] == si
             s = copy(v)
@@ -203,3 +218,8 @@ for alg in [InsertionSort, MergeSort]
     sp = sortperm(inds, alg=alg)
     @test all(issorted, [sp[inds.==x] for x in 1:200])
 end
+
+# issue #6177
+@test sortperm([ 0.0, 1.0, 1.0], rev=true) == [2, 3, 1]
+@test sortperm([-0.0, 1.0, 1.0], rev=true) == [2, 3, 1]
+@test sortperm([-1.0, 1.0, 1.0], rev=true) == [2, 3, 1]

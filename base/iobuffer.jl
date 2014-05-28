@@ -33,12 +33,14 @@ IOBuffer(data::Vector{Uint8},readable::Bool,writable::Bool,maxsize::Int) =
         IOBuffer(data,readable,writable,true,false,maxsize)
 IOBuffer(data::Vector{Uint8},readable::Bool,writable::Bool) = IOBuffer(data,readable,writable,typemax(Int))
 IOBuffer(data::Vector{Uint8}) = IOBuffer(data, true, false)
-IOBuffer(str::String) = IOBuffer(str.data, true, false)
+IOBuffer(str::ByteString) = IOBuffer(str.data, true, false)
 IOBuffer(readable::Bool,writable::Bool) = IOBuffer(Uint8[],readable,writable)
 IOBuffer() = IOBuffer(Uint8[], true, true)
 IOBuffer(maxsize::Int) = (x=IOBuffer(Array(Uint8,maxsize),true,true,maxsize); x.size=0; x)
 
-read(from::IOBuffer, a::Array) = read_sub(from, a, 1, length(a))
+is_maxsize_unlimited(io::IOBuffer) = (io.maxsize == typemax(Int))
+
+read!(from::IOBuffer, a::Array) = read_sub(from, a, 1, length(a))
 
 function read_sub{T}(from::IOBuffer, a::Array{T}, offs, nel)
     if offs+nel-1 > length(a) || offs < 1 || nel < 0
@@ -47,12 +49,12 @@ function read_sub{T}(from::IOBuffer, a::Array{T}, offs, nel)
     if !isbits(T)
         error("read from IOBuffer only supports bits types or arrays of bits types; got "*string(T))
     end
-    read(from, pointer(a, offs), nel*sizeof(T))
+    read!(from, pointer(a, offs), nel*sizeof(T))
     return a
 end
 
-read(from::IOBuffer, p::Ptr, nb::Integer) = read(from, p, int(nb))
-function read(from::IOBuffer, p::Ptr, nb::Int)
+read!(from::IOBuffer, p::Ptr, nb::Integer) = read!(from, p, int(nb))
+function read!(from::IOBuffer, p::Ptr, nb::Int)
     if !from.readable error("read failed") end
     avail = nb_available(from)
     adv = min(avail,nb)
@@ -182,7 +184,7 @@ function takebuf_array(io::IOBuffer)
     else
         nbytes = nb_available(io)
         a = Array(Uint8, nbytes)
-        data = read(io, a)
+        data = read!(io, a)
     end
     if io.writable
         io.ptr = 1
@@ -191,6 +193,11 @@ function takebuf_array(io::IOBuffer)
     data
 end
 takebuf_string(io::IOBuffer) = bytestring(takebuf_array(io))
+
+function write(to::IOBuffer, from::IOBuffer) 
+    write(to, pointer(from.data,from.ptr), nb_available(from))
+    from.ptr += nb_available(from)
+end
 
 write(to::IOBuffer, p::Ptr, nb::Integer) = write(to, p, int(nb))
 function write(to::IOBuffer, p::Ptr, nb::Int)
@@ -208,10 +215,15 @@ function write_sub{T}(to::IOBuffer, a::Array{T}, offs, nel)
     if offs+nel-1 > length(a) || offs < 1 || nel < 0
         throw(BoundsError())
     end
-    if !isbits(T)
-        error("write to IOBuffer only supports bits types or arrays of bits types; got "*string(T))
+    if isbits(T)
+        write(to, pointer(a,offs), nel*sizeof(T))
+    else
+        nb = 0
+        for i = offs:offs+nel-1
+            nb += write(to, a[i])
+        end
+        nb
     end
-    write(to, pointer(a,offs), nel*sizeof(T))
 end
 
 write(to::IOBuffer, a::Array) = write_sub(to, a, 1, length(a))
@@ -240,8 +252,8 @@ function readbytes!(io::IOBuffer, b::Array{Uint8}, nb=length(b))
     read_sub(io, b, 1, nr)
     return nr
 end
-readbytes(io::IOBuffer) = read(io, Array(Uint8, nb_available(io)))
-readbytes(io::IOBuffer, nb) = read(io, Array(Uint8, min(nb, nb_available(io))))
+readbytes(io::IOBuffer) = read!(io, Array(Uint8, nb_available(io)))
+readbytes(io::IOBuffer, nb) = read!(io, Array(Uint8, min(nb, nb_available(io))))
 
 function search(buf::IOBuffer, delim)
     p = pointer(buf.data, buf.ptr)
@@ -253,5 +265,5 @@ function readuntil(io::IOBuffer, delim::Uint8)
     if nb == 0
         nb = nb_available(io)
     end
-    read(io, Array(Uint8, nb))
+    read!(io, Array(Uint8, nb))
 end

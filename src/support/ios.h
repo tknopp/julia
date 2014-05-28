@@ -4,6 +4,10 @@
 #include <stdarg.h>
 #include "uv.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // this flag controls when data actually moves out to the underlying I/O
 // channel. memory streams are a special case of this where the data
 // never moves out.
@@ -20,10 +24,13 @@ typedef struct {
     // to the buffer. reading: at the end. writing: at the beginning.
     // in general, you can do any operation in any state.
     char *buf;        // start of buffer
-    bufmode_t bm;
 
     int errcode;
 
+#ifdef _P64
+    int _pad_bm;      // put bm at same offset as type field of uv_stream_s
+#endif
+    bufmode_t bm;     //
     bufstate_t state;
 
     off_t maxsize;    // space allocated to buffer
@@ -208,5 +215,9 @@ int ios_ungetc(int c, ios_t *s);
   as optimizations, we do no writing if the buffer isn't "dirty", and we
   do no reading if the data will only be overwritten.
 */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

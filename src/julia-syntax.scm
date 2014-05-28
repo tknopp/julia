@@ -27,7 +27,10 @@
 	((eq? e #f) "false")
 	((eq? (typeof e) 'julia_value)
 	 (let ((s (string e)))
-	   (string.sub s 9 (string.dec s (length s)))))
+	   (if (string.find s "#<julia: ")
+	       ;; successfully printed as a julia value
+	       (string.sub s 9 (string.dec s (length s)))
+	       s)))
 	((atom? e) (string e))
 	((eq? (car e) '|.|)
 	 (string (deparse (cadr e)) '|.|
@@ -800,6 +803,10 @@
 	  (defs2 (if (null? defs)
 		     (list (default-inner-ctor name field-names field-types))
 		     defs)))
+     (for-each (lambda (v)
+		 (if (not (symbol? v))
+		     (error (string "field name \"" (deparse v) "\" is not a symbol"))))
+	       field-names)
      (if (null? params)
 	 `(block
 	   (global ,name)
@@ -1143,6 +1150,51 @@
 	   (expand-binding-forms (cons 'function (cdr e)))
 	   (map expand-binding-forms e)))
 
+      ((const)
+       (if (atom? (cadr e))
+	   e
+	   (case (car (cadr e))
+	     ((global local)
+	      (expand-binding-forms
+	       (qualified-const-expr (cdr (cadr e)) e)))
+	     ((=)
+	      (let ((lhs (cadr (cadr e)))
+		    (rhs (caddr (cadr e))))
+		(let ((vars (if (and (pair? lhs) (eq? (car lhs) 'tuple))
+				(cdr lhs)
+				(list lhs))))
+		  `(block
+		    ,.(map (lambda (v)
+			     `(const ,(const-check-symbol (decl-var v))))
+			   vars)
+		    ,(expand-binding-forms `(= ,lhs ,rhs))))))
+	     (else
+	      e))))
+
+      ((local global)
+       (if (and (symbol? (cadr e)) (length= e 2))
+	   e
+	   (expand-binding-forms (expand-decls (car e) (cdr e)))))
+
+      ((typealias)
+       (if (and (pair? (cadr e))
+		(eq? (car (cadr e)) 'curly))
+	   (let ((name (cadr (cadr e)))
+		 (params (cddr (cadr e)))
+		 (type-ex (caddr e)))
+	     (receive
+	      (params bounds)
+	      (sparam-name-bounds params '() '())
+	      `(call (lambda ,params
+		       (block
+			(const ,name)
+			(= ,name (call (top TypeConstructor)
+				       (call (top tuple) ,@params)
+				       ,(expand-binding-forms type-ex)))))
+		     ,@(symbols->typevars params bounds #t))))
+	   (expand-binding-forms
+	    `(const (= ,(cadr e) ,(caddr e))))))
+
       (else
        (map expand-binding-forms e))))))
 
@@ -1151,8 +1203,14 @@
 (define vars-introduced-by-patterns
   (pattern-set
    ;; function with static parameters
-   (pattern-lambda (function (call (curly name . sparams) . argl) body)
-		   (cons 'varlist (llist-vars (fix-arglist argl))))
+   (pattern-lambda
+    (function (call (curly name . sparams) . argl) body)
+    (cons 'varlist (append (llist-vars (fix-arglist argl))
+			   (apply nconc
+				  (map (lambda (v) (trycatch
+						    (list (sparam-name v))
+						    (lambda (e) '())))
+				       sparams)))))
 
    ;; function definition
    (pattern-lambda (function (call name . argl) body)
@@ -1241,6 +1299,11 @@
 		   `(function (call ,name ,@argl) ,body))
    ))
 
+(define (assigned-name e)
+  (if (and (pair? e) (memq (car e) '(call curly)))
+      (assigned-name (cadr e))
+      e))
+
 ; local x, y=2, z => local x;local y;local z;y = 2
 (define (expand-decls what binds)
   (if (not (list? binds))
@@ -1256,9 +1319,9 @@
 	      ,.(map (lambda (x) `(,what ,x)) vars)
 	      ,.(reverse assigns)))
 	(let ((x (car b)))
-	  (cond ((and (pair? x) (memq (car x) assignment-ops))
+	  (cond ((assignment-like? x)
 		 (loop (cdr b)
-		       (cons (cadr x) vars)
+		       (cons (assigned-name (cadr x)) vars)
 		       (cons `(,(car x) ,(decl-var (cadr x)) ,(caddr x))
 			     assigns)))
 		((and (pair? x) (eq? (car x) '|::|))
@@ -1551,26 +1614,6 @@
 	(receive (name params super) (analyze-type-sig sig)
 		 (bits-def-expr n name params super)))))
 
-   'typealias
-   (lambda (e)
-     (if (and (pair? (cadr e))
-	      (eq? (car (cadr e)) 'curly))
-	 (let ((name (cadr (cadr e)))
-	       (params (cddr (cadr e)))
-	       (type-ex (caddr e)))
-	   (receive
-	    (params bounds)
-	    (sparam-name-bounds params '() '())
-	    `(call (lambda ,params
-		     (block
-		      (const ,name)
-		      (= ,name (call (top TypeConstructor)
-				     (call (top tuple) ,@params)
-				     ,(expand-forms type-ex)))))
-		   ,@(symbols->typevars params bounds #t))))
-	 (expand-forms
-	  `(const (= ,(cadr e) ,(caddr e))))))
-
    'comparison
    (lambda (e)
      (expand-forms (expand-compare-chain (cdr e))))
@@ -1712,20 +1755,6 @@
    'string
    (lambda (e) (expand-forms `(call (top string) ,@(cdr e))))
 
-   'local
-   (lambda (e)
-     (if (and (symbol? (cadr e)) (length= e 2))
-	 e
-	 (expand-forms
-	  (expand-decls 'local (cdr e)))))
-
-   'global
-   (lambda (e)
-     (if (and (symbol? (cadr e)) (length= e 2))
-	 e
-	 (expand-forms
-	  (expand-decls 'global (cdr e)))))
-
    '|::|
    (lambda (e)
      (if (length= e 2)
@@ -1734,28 +1763,6 @@
 	 `(call (top typeassert)
 		,(expand-forms (cadr e)) ,(expand-forms (caddr e)))
 	 (map expand-forms e)))
-
-   'const
-   (lambda (e)
-     (if (atom? (cadr e))
-	 e
-	 (case (car (cadr e))
-	   ((global local)
-	    (expand-forms
-	     (qualified-const-expr (cdr (cadr e)) e)))
-	   ((=)
-	    (let ((lhs (cadr (cadr e)))
-		  (rhs (caddr (cadr e))))
-	      (let ((vars (if (and (pair? lhs) (eq? (car lhs) 'tuple))
-			      (cdr lhs)
-			      (list lhs))))
-		`(block
-		  ,.(map (lambda (v)
-			   `(const ,(const-check-symbol (decl-var v))))
-			 vars)
-		  ,(expand-forms `(= ,lhs ,rhs))))))
-	   (else
-	    e))))
 
    'while
    (lambda (e)
@@ -2323,7 +2330,9 @@
 		 (list* (if tail `(return ,(car r)) (car r))
 		 `(= ,LHS ,(car r))
 		 (cdr r))))
-		 ((effect-free? RHS)
+		 ((and (effect-free? RHS)
+		       ;; need temp var for `x::Int = x` (issue #6896)
+		       (not (eq? RHS (decl-var LHS))))
 		  (cond ((symbol? dest)  (list `(= ,LHS ,RHS)
 					       `(= ,dest ,RHS)))
 			(dest  (list (if tail `(return ,RHS) RHS)
@@ -2798,7 +2807,13 @@ So far only the second case can actually occur.
 	 (letrec ((args (lam:args e))
 		  (locl (cdr (caddr e)))
 		  (allv (nconc (map arg-name args) locl))
-		  (fv   (diff (free-vars (lam:body e)) allv))
+		  (fv   (let* ((fv (diff (free-vars (lam:body e)) allv))
+			       ;; add variables referenced in declared types for free vars
+			       (dv (apply nconc (map (lambda (v)
+						       (let ((vi (var-info-for v env)))
+							 (if vi (free-vars (vinfo:type vi)) '())))
+						     fv))))
+			  (append (diff dv fv) fv)))
 		  (glo  (declared-global-vars (lam:body e)))
 		  ; make var-info records for vars introduced by this lambda
 		  (vi   (nconc
@@ -2856,6 +2871,11 @@ So far only the second case can actually occur.
 
 (define (analyze-variables e) (analyze-vars e '() '()))
 
+(define (not-bool e)
+  (cond ((memq e '(true #t))  'false)
+	((memq e '(false #f)) 'true)
+	(else                 `(call (top !) ,e))))
+
 ; remove if, _while, block, break-block, and break
 ; replaced with goto and gotoifnot
 ; TODO: remove type-assignment-affecting expressions from conditional branch.
@@ -2911,13 +2931,28 @@ So far only the second case can actually occur.
 			(set-car! (cdr end-jump) (make&mark-label)))))
 	    ((block) (for-each (lambda (x) (compile x break-labels vi))
 			       (cdr e)))
-	    ((_while) (let ((topl (make&mark-label))
-			    (endl (make-label)))
-			(compile (cadr e) break-labels vi)
-			(emit `(gotoifnot ,(goto-form (caddr e)) ,endl))
-			(compile (cadddr e) break-labels vi)
-			(emit `(goto ,topl))
-			(mark-label endl)))
+	    ((_while)
+	     (let ((test-blk (cadr e))
+		   (endl (make-label)))
+	       (if (or (atom? test-blk) (equal? test-blk '(block)))
+		   ;; if condition is simple, compile it twice in order
+		   ;; to generate a single branch per iteration.
+		   (let ((topl (make-label)))
+		     (compile test-blk break-labels vi)
+		     (emit `(gotoifnot ,(goto-form (caddr e)) ,endl))
+		     (mark-label topl)
+		     (compile (cadddr e) break-labels vi)
+		     (compile test-blk break-labels vi)
+		     (emit `(gotoifnot ,(not-bool (goto-form (caddr e))) ,topl))
+		     (mark-label endl))
+
+		   (let ((topl (make&mark-label)))
+		     (compile test-blk break-labels vi)
+		     (emit `(gotoifnot ,(goto-form (caddr e)) ,endl))
+		     (compile (cadddr e) break-labels vi)
+		     (emit `(goto ,topl))
+		     (mark-label endl)))))
+
 	    ((break-block) (let ((endl (make-label)))
 			     (compile (caddr e)
 				      (cons (list (cadr e) endl handler-level)
@@ -3087,17 +3122,24 @@ So far only the second case can actually occur.
   (if (symbol? e) e
       (cadr e)))
 
+(define (new-expansion-env-for x env)
+  (append!
+   (filter (lambda (v)
+	     (not (assq (car v) env)))
+	   (append!
+	    (pair-with-gensyms (vars-introduced-by x))
+	    (map (lambda (v) (cons v v))
+		 (keywords-introduced-by x))))
+   env))
+
 (define (resolve-expansion-vars-with-new-env x env m inarg)
   (resolve-expansion-vars-
    x
-   (append!
-    (filter (lambda (x)
-	      (not (assq (car x) env)))
-	    (append!
-	     (pair-with-gensyms (vars-introduced-by x))
-	     (map (lambda (s) (cons s s))
-		  (keywords-introduced-by x))))
-    env)
+   (if (and (pair? x) (eq? (car x) 'let))
+       ;; let is strange in that it needs both old and new envs within
+       ;; the same expression
+       env
+       (new-expansion-env-for x env))
    m inarg))
 
 (define (resolve-expansion-vars- e env m inarg)
@@ -3163,6 +3205,21 @@ So far only the second case can actually occur.
 			  (resolve-expansion-vars- (cadr e) env m inarg)
 			  (cadr e))
 		     ,(resolve-expansion-vars- (caddr e) env m inarg))))
+
+	   ((let)
+	    (let* ((newenv (new-expansion-env-for e env))
+		   (body   (resolve-expansion-vars- (cadr e) newenv m inarg))
+		   ;; expand initial values in old env
+		   (rhss (map (lambda (a)
+				(resolve-expansion-vars- (caddr a) env m inarg))
+			      (cddr e)))
+		   ;; expand binds in old env with dummy RHS
+		   (lhss (map (lambda (a)
+				(cadr
+				 (resolve-expansion-vars- (make-assignment (cadr a) 0)
+							  newenv m inarg)))
+			      (cddr e))))
+	      `(let ,body ,@(map make-assignment lhss rhss))))
 
 	   ;; todo: trycatch
 	   (else

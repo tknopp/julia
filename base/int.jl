@@ -50,6 +50,32 @@ end
 /(x::Integer, y::Integer) = float(x)/float(y)
 inv(x::Integer) = float(one(x))/float(x)
 
+isodd(n::Integer) = bool(rem(n,2))
+iseven(n::Integer) = !isodd(n)
+
+signbit(x::Integer) = x < 0
+signbit(x::Unsigned) = false
+
+flipsign(x::Int,    y::Int)    = box(Int,flipsign_int(unbox(Int,x),unbox(Int,y)))
+flipsign(x::Int64,  y::Int64)  = box(Int64,flipsign_int(unbox(Int64,x),unbox(Int64,y)))
+flipsign(x::Int128, y::Int128) = box(Int128,flipsign_int(unbox(Int128,x),unbox(Int128,y)))
+
+flipsign{T<:Signed}(x::T,y::T)  = flipsign(int(x),int(y))
+flipsign(x::Signed, y::Signed)  = flipsign(promote(x,y)...)
+flipsign(x::Signed, y::Float32) = flipsign(x, reinterpret(Int32,y))
+flipsign(x::Signed, y::Float64) = flipsign(x, reinterpret(Int64,y))
+flipsign(x::Signed, y::Real)    = flipsign(x, -oftype(x,signbit(y)))
+
+copysign(x::Signed, y::Signed)  = flipsign(x, x$y)
+copysign(x::Signed, y::Float32) = copysign(x, reinterpret(Int32,y))
+copysign(x::Signed, y::Float64) = copysign(x, reinterpret(Int64,y))
+copysign(x::Signed, y::Real)    = copysign(x, -oftype(x,signbit(y)))
+
+abs(x::Unsigned) = x
+abs(x::Signed) = flipsign(x,x)
+
+~(n::Integer) = -n-1
+
 div(x::Signed, y::Unsigned) = flipsign(signed(div(unsigned(abs(x)),y)),x)
 div(x::Unsigned, y::Signed) = unsigned(flipsign(signed(div(x,unsigned(abs(y)))),y))
 
@@ -66,6 +92,8 @@ mod(x::Unsigned, y::Signed) = rem(y+signed(rem(x,y)),y)
 # while there is a substantial performance penalty to 64-bit promotion.
 typealias Signed64 Union(Int8,Int16,Int32,Int64)
 typealias Unsigned64 Union(Uint8,Uint16,Uint32,Uint64)
+typealias Integer64 Union(Signed64,Unsigned64)
+
 div{T<:Signed64}  (x::T, y::T) = box(T,sdiv_int(unbox(T,x),unbox(T,y)))
 div{T<:Unsigned64}(x::T, y::T) = box(T,udiv_int(unbox(T,x),unbox(T,y)))
 rem{T<:Signed64}  (x::T, y::T) = box(T,srem_int(unbox(T,x),unbox(T,y)))
@@ -307,6 +335,7 @@ convert(::Type{Signed}, x::Uint64 ) = convert(Int64,x)
 convert(::Type{Signed}, x::Uint128) = convert(Int128,x)
 convert(::Type{Signed}, x::Float32) = convert(Int,x)
 convert(::Type{Signed}, x::Float64) = convert(Int,x)
+convert(::Type{Signed}, x::Char)    = convert(Int,x)
 
 convert(::Type{Unsigned}, x::Int8   ) = convert(Uint,x)
 convert(::Type{Unsigned}, x::Int16  ) = convert(Uint,x)
@@ -315,6 +344,7 @@ convert(::Type{Unsigned}, x::Int64  ) = convert(Uint64,x)
 convert(::Type{Unsigned}, x::Int128 ) = convert(Uint128,x)
 convert(::Type{Unsigned}, x::Float32) = convert(Uint,x)
 convert(::Type{Unsigned}, x::Float64) = convert(Uint,x)
+convert(::Type{Unsigned}, x::Char)    = convert(Uint,x)
 
 convert(::Type{Integer}, x::Float32) = convert(Int,x)
 convert(::Type{Integer}, x::Float64) = convert(Int,x)
@@ -460,14 +490,14 @@ sizeof(::Type{Uint64})  = 8
 sizeof(::Type{Int128})  = 16
 sizeof(::Type{Uint128}) = 16
 
-morebits(::Type{Int8}) = Int16
-morebits(::Type{Int16}) = Int32
-morebits(::Type{Int32}) = Int64
-morebits(::Type{Int64}) = Int128
-morebits(::Type{Uint8}) = Uint16
-morebits(::Type{Uint16}) = Uint32
-morebits(::Type{Uint32}) = Uint64
-morebits(::Type{Uint64}) = Uint128
+widen(::Type{Int8}) = Int
+widen(::Type{Int16}) = Int
+widen(::Type{Int32}) = Int64
+widen(::Type{Int64}) = Int128
+widen(::Type{Uint8}) = Uint
+widen(::Type{Uint16}) = Uint
+widen(::Type{Uint32}) = Uint64
+widen(::Type{Uint64}) = Uint128
 
 ## float to integer coercion ##
 
@@ -485,14 +515,6 @@ for (f,t) in ((:uint8,:Uint8), (:uint16,:Uint16), (:uint32,:Uint32),
 end
 
 ## wide multiplication, Int128 multiply and divide ##
-
-widemul(x::Union(Int8,Uint8,Int16), y::Union(Int8,Uint8,Int16)) = int32(x)*int32(y)
-widemul(x::Uint16, y::Uint16) = uint32(x)*uint32(y)
-
-widemul(x::Int32, y::Int32) = int64(x)*int64(y)
-widemul(x::Uint32, y::Uint32) = uint64(x)*uint64(y)
-
-widemul(x::Integer, y::Integer) = widemul(promote(x,y)...)
 
 if WORD_SIZE==32
     function widemul(u::Int64, v::Int64)
@@ -564,9 +586,6 @@ if WORD_SIZE==32
     >>>(x::Int128,  y::Int32) = y == 0 ? x : box(Int128,lshr_int(unbox(Int128,x),unbox(Int32,y)))
     >>>(x::Uint128, y::Int32) = y == 0 ? x : box(Uint128,lshr_int(unbox(Uint128,x),unbox(Int32,y)))
 else
-    widemul(u::Int64, v::Int64) = int128(u)*int128(v)
-    widemul(u::Uint64, v::Uint64) = uint128(u)*uint128(v)
-
     *(x::Int128,  y::Int128)  = box(Int128,mul_int(unbox(Int128,x),unbox(Int128,y)))
     *(x::Uint128, y::Uint128) = box(Uint128,mul_int(unbox(Uint128,x),unbox(Uint128,y)))
 

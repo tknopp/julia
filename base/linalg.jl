@@ -1,7 +1,7 @@
 module LinAlg
 
 importall Base
-import Base: USE_BLAS64, size, copy, copy_transpose!, power_by_squaring, print_matrix
+import Base: USE_BLAS64, size, copy, copy_transpose!, power_by_squaring, print_matrix, transpose!
 
 export 
 # Modules
@@ -24,7 +24,7 @@ export
     Hessenberg,
     LU,
     LUTridiagonal,
-    LDLTTridiagonal,
+    LDLt,
     QR,
     QRPivoted,
     Schur,
@@ -33,12 +33,12 @@ export
     Symmetric,
     Triangular,
     Diagonal,
+    UniformScaling,
 
 # Functions
     axpy!,
     bkfact,
     bkfact!,
-    check_blas,
     chol,
     cholfact,
     cholfact!,
@@ -78,15 +78,14 @@ export
     istril,
     istriu,
     kron,
-    ldltd!,
-    ldltd,
+    ldltfact!,
+    ldltfact,
     linreg,
     logdet,
     lu,
     lufact,
     lufact!,
     norm,
-    normfro,
     null,
     peakflops,
     pinv,
@@ -115,6 +114,7 @@ export
     triu,
     tril!,
     triu!,
+    vecnorm,
 
 # Operators
     \,
@@ -146,7 +146,10 @@ export
     At_mul_Bt,
     At_mul_Bt!,
     At_rdiv_B,
-    At_rdiv_Bt
+    At_rdiv_Bt,
+
+# Constants
+    I
 
 typealias BlasFloat Union(Float64,Float32,Complex128,Complex64)
 typealias BlasReal Union(Float64,Float32)
@@ -193,19 +196,22 @@ include("linalg/matmul.jl")
 include("linalg/lapack.jl")
 
 include("linalg/dense.jl")
+include("linalg/tridiag.jl")
 include("linalg/factorization.jl")
+include("linalg/lu.jl")
 
 include("linalg/bunchkaufman.jl")
 include("linalg/triangular.jl")
 include("linalg/symmetric.jl")
 include("linalg/woodbury.jl")
-include("linalg/tridiag.jl")
 include("linalg/diagonal.jl")
 include("linalg/bidiag.jl")
+include("linalg/uniformscaling.jl")
 include("linalg/rectfullpacked.jl")
 include("linalg/givens.jl")
 include("linalg/special.jl")
 include("linalg/bitarray.jl")
+include("linalg/ldlt.jl")
 
 include("linalg/sparse.jl")
 include("linalg/umfpack.jl")
@@ -214,7 +220,8 @@ include("linalg/cholmod.jl")
 include("linalg/arpack.jl")
 include("linalg/arnoldi.jl")
 
-function init()
+function __init__()
+    Base.check_blas()
     if Base.blas_vendor() == :mkl
         ccall((:MKL_Set_Interface_Layer, Base.libblas_name), Void, (Cint,), USE_BLAS64 ? 1 : 0)
     end

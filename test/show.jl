@@ -9,6 +9,11 @@ immutable T5589
 end
 @test replstr(T5589(Array(UTF8String,100))) == "T5589(UTF8String[#undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef  …  #undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef,#undef])"
 
+@test replstr(parse("type X end")) == ":(type X\n    end)"
+@test replstr(parse("immutable X end")) == ":(immutable X\n    end)"
+s = "ccall(:f,Int,(Ptr{Void},),&x)"
+@test replstr(parse(s)) == ":($s)"
+
 # expression printing
 
 macro test_repr(x)
@@ -57,6 +62,8 @@ end
 @test_repr "x^-f(y+z)"
 @test_repr "+(w-x)^-f(y+z)"
 @test_repr "w = (x = y) = z"
+@test_repr "a & b && c"
+@test_repr "a & (b && c)"
 
 # precedence tie resolution
 @test_repr "(a * b) * (c * d)"

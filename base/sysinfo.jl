@@ -12,14 +12,16 @@ export  CPU_CORES,
         free_memory,
         total_memory,
         dlext,
-	shlib_ext,
+        shlib_ext,
         dllist,
         dlpath
 
 import ..Base: WORD_SIZE, OS_NAME, ARCH, MACHINE
 import ..Base: show, uv_error
 
-function init()
+global CPU_CORES
+
+function init_sysinfo()
     # set CPU core count
     global const CPU_CORES = int(
         haskey(ENV,"JULIA_CPU_CORES") ?
@@ -194,11 +196,18 @@ function dllist()
         end
     end
 
+    @windows_only begin
+        ccall(:jl_dllist, Cint, (Any,), dynamic_libraries)
+    end
+
     dynamic_libraries
 end
 
 function dlpath( handle::Ptr{Void} )
-    return bytestring(ccall( :jl_pathname_for_handle, Ptr{Uint8}, (Ptr{Void},), handle ))
+    p = ccall( :jl_pathname_for_handle, Ptr{Uint8}, (Ptr{Void},), handle )
+    s = bytestring(p)
+    @windows_only c_free(p)
+    return s
 end
 
 function dlpath( libname::String )

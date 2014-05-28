@@ -4,6 +4,10 @@
 #include "julia.h"
 #include "julia_internal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static volatile ptrint_t* bt_data_prof = NULL;
 static volatile size_t bt_size_max = 0;
 static volatile size_t bt_size_cur = 0;
@@ -12,7 +16,7 @@ static volatile int running = 0;
 /////////////////////////////////////////
 // Timers to take samples at intervals //
 /////////////////////////////////////////
-#if defined(__WIN32__)
+#if defined(_WIN32)
 //
 // Windows
 //
@@ -348,6 +352,13 @@ DLLEXPORT int jl_profile_start_timer(void)
 {
     struct sigevent sigprof;
     struct sigaction sa;
+    sigset_t ss;
+
+    // Make sure SIGUSR1 is unblocked
+    sigemptyset(&ss);
+    sigaddset(&ss, SIGUSR1);
+    if (sigprocmask(SIG_UNBLOCK, &ss, NULL) == -1)
+        return -4;
 
     // Establish the signal handler
     memset(&sa, 0, sizeof(struct sigaction));
@@ -427,3 +438,7 @@ DLLEXPORT int jl_profile_is_running(void)
 {
     return running;
 }
+
+#ifdef __cplusplus
+}
+#endif

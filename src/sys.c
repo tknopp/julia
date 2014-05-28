@@ -11,23 +11,19 @@
 #ifndef _OS_WINDOWS_
 #include <sys/sysctl.h>
 #include <sys/wait.h>
+#include <sys/ptrace.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <dlfcn.h>
 #endif
 #include <errno.h>
 #include <signal.h>
-#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-char *basename(char *);
-char *dirname(char *);
-#else
-#include <libgen.h>
-#endif
 #include <fcntl.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <mach-o/nlist.h>
+#include <sys/types.h> // for jl_raise_debugger
 #endif
 
 #ifdef _OS_LINUX_
@@ -44,6 +40,18 @@ char *dirname(char *);
 
 #if defined _MSC_VER
 #include <io.h>
+#include <intrin.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
+DLLEXPORT char *basename(char *);
+DLLEXPORT char *dirname(char *);
+#else
+#include <libgen.h>
 #endif
 
 DLLEXPORT uint32_t jl_getutf8(ios_t *s)
@@ -409,16 +417,13 @@ JL_STREAM *jl_stdin_stream(void)  { return (JL_STREAM*)JL_STDIN; }
 JL_STREAM *jl_stdout_stream(void) { return (JL_STREAM*)JL_STDOUT; }
 JL_STREAM *jl_stderr_stream(void) { return (JL_STREAM*)JL_STDERR; }
 
-// -- set/clear the FZ/DAZ flags on x86 & x86-64 --
+// CPUID
 
-#ifdef __SSE__
-
-#ifdef _OS_WINDOWS_
-#define cpuid    __cpuid
-#else
-
-void cpuid(int32_t CPUInfo[4], int32_t InfoType)
+DLLEXPORT void jl_cpuid(int32_t CPUInfo[4], int32_t InfoType)
 {
+#if defined _MSC_VER
+    __cpuid(CPUInfo, InfoType);
+#else
     __asm__ __volatile__ (
         #if defined(__i386__) && defined(__PIC__)
         "xchg %%ebx, %%esi;"
@@ -434,18 +439,20 @@ void cpuid(int32_t CPUInfo[4], int32_t InfoType)
         "=d" (CPUInfo[3]) :
         "a" (InfoType)
     );
+#endif
 }
 
-#endif
+// -- set/clear the FZ/DAZ flags on x86 & x86-64 --
+#ifdef __SSE__
 
 DLLEXPORT uint8_t jl_zero_subnormals(uint8_t isZero)
 {
     uint32_t flags = 0x00000000;
     int32_t info[4];
 
-    cpuid(info, 0);
+    jl_cpuid(info, 0);
     if (info[0] >= 1) {
-        cpuid(info, 0x00000001);
+        jl_cpuid(info, 0x00000001);
         if ((info[3] & ((int)1 << 26)) != 0) {
             // SSE2 supports both FZ and DAZ
             flags = 0x00008040;
@@ -621,7 +628,46 @@ DLLEXPORT const char *jl_pathname_for_handle(uv_lib_t *uv_lib)
 #endif
 
 #ifdef _OS_WINDOWS_
-    // Not supported yet...
+    char tclfile[260];
+    int len = GetModuleFileNameA(handle,tclfile,sizeof(tclfile));
+    if (len)
+        return strdup(tclfile);
 #endif
     return NULL;
 }
+
+#ifdef _OS_WINDOWS_
+#include <dbghelp.h>
+static BOOL CALLBACK jl_EnumerateLoadedModulesProc64(
+  _In_      PCTSTR ModuleName,
+  _In_      DWORD64 ModuleBase,
+  _In_      ULONG ModuleSize,
+  _In_opt_  PVOID a
+)
+{
+    jl_array_grow_end(a, 1);
+    //XXX: change to jl_arrayset if array storage allocation for Array{String,1} changes:
+    jl_value_t *v = jl_cstr_to_string(ModuleName);
+    jl_cellset(a, jl_array_dim0(a)-1, v);
+    return TRUE;
+}
+// Takes a handle (as returned from dlopen()) and returns the absolute path to the image loaded
+DLLEXPORT int jl_dllist(jl_array_t *list)
+{
+    return EnumerateLoadedModules64(GetCurrentProcess(), jl_EnumerateLoadedModulesProc64, list);
+}
+#endif
+
+DLLEXPORT void jl_raise_debugger(void)
+{
+#if defined(_OS_WINDOWS_)
+    if (IsDebuggerPresent() == 1)
+        DebugBreak();
+#else
+    raise(SIGINT);
+#endif // _OS_WINDOWS_
+}
+
+#ifdef __cplusplus
+}
+#endif

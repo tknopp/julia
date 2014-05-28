@@ -20,17 +20,23 @@ export sin, cos, tan, sinh, cosh, tanh, asin, acos, atan,
 
 import Base: log, exp, sin, cos, tan, sinh, cosh, tanh, asin,
              acos, atan, asinh, acosh, atanh, sqrt, log2, log10,
-             max, min, minmax, ceil, floor, trunc, round, ^, exp2, exp10
+             max, min, minmax, ceil, floor, trunc, round, ^, exp2,
+             exp10, expm1, log1p
 
-import Core.Intrinsics.nan_dom_err
+import Core.Intrinsics: nan_dom_err, sqrt_llvm, box, unbox, powi_llvm
 
 # non-type specific math functions
 
-clamp(x::Real, lo::Real, hi::Real) = (x > hi ? hi : (x < lo ? lo : x))
-clamp{T<:Real}(x::AbstractArray{T,1}, lo::Real, hi::Real) = [clamp(xx, lo, hi) for xx in x]
-clamp{T<:Real}(x::AbstractArray{T,2}, lo::Real, hi::Real) =
+clamp{X,L,H}(x::X, lo::L, hi::H) =
+    ifelse(x > hi, convert(promote_type(X,L,H), hi),
+           ifelse(x < lo,
+                  convert(promote_type(X,L,H), lo),
+                  convert(promote_type(X,L,H), x)))
+
+clamp{T}(x::AbstractArray{T,1}, lo, hi) = [clamp(xx, lo, hi) for xx in x]
+clamp{T}(x::AbstractArray{T,2}, lo, hi) =
     [clamp(x[i,j], lo, hi) for i in 1:size(x,1), j in 1:size(x,2)]
-clamp{T<:Real}(x::AbstractArray{T}, lo::Real, hi::Real) =
+clamp{T}(x::AbstractArray{T}, lo, hi) =
     reshape([clamp(xx, lo, hi) for xx in x], size(x))
 
 # evaluate p[1] + x * (p[2] + x * (....)), i.e. a polynomial via Horner's rule
@@ -49,25 +55,22 @@ function sinpi(x::Real)
         return nan(x)
     end
 
-    rx = float(rem(x,2))
+    rx = copysign(float(rem(x,2)),x)
     arx = abs(rx)
 
-    if arx == 0.0
-        # return -0.0 iff x == -0.0
-        return x == 0.0 ? x : arx
-    elseif arx < 0.25
+    if arx < oftype(rx,0.25)
         return sin(pi*rx)
-    elseif arx <= 0.75
-        arx = 0.5 - arx
+    elseif arx <= oftype(rx,0.75)
+        arx = oftype(rx,0.5) - arx
         return copysign(cos(pi*arx),rx)
-    elseif arx < 1.25
-        rx = copysign(1.0,rx) - rx
+    elseif arx < oftype(rx,1.25)
+        rx = (one(rx) - arx)*sign(rx)
         return sin(pi*rx)
-    elseif arx <= 1.75
-        arx = 1.5 - arx
+    elseif arx <= oftype(rx,1.75)
+        arx = oftype(rx,1.5) - arx
         return -copysign(cos(pi*arx),rx)
     else
-        rx = rx - copysign(2.0,rx)
+        rx = rx - copysign(oftype(rx,2.0),rx)
         return sin(pi*rx)
     end
 end
@@ -81,19 +84,19 @@ function cospi(x::Real)
 
     rx = abs(float(rem(x,2)))
 
-    if rx <= 0.25
+    if rx <= oftype(rx,0.25)
         return cos(pi*rx)
-    elseif rx < 0.75
-        rx = 0.5 - rx
+    elseif rx < oftype(rx,0.75)
+        rx = oftype(rx,0.5) - rx
         return sin(pi*rx)
-    elseif rx <= 1.25
-        rx = 1.0 - rx
+    elseif rx <= oftype(rx,1.25)
+        rx = one(rx) - rx
         return -cos(pi*rx)
-    elseif rx < 1.75
-        rx = rx - 1.5
+    elseif rx < oftype(rx,1.75)
+        rx = rx - oftype(rx,1.5)
         return sin(pi*rx)
     else
-        rx = 2.0 - rx
+        rx = oftype(rx,2.0) - rx
         return cos(pi*rx)
     end
 end
@@ -172,25 +175,22 @@ function sind(x::Real)
         return nan(x)
     end
 
-    rx = rem(x,360.0)
+    rx = copysign(float(rem(x,360)),x)
     arx = abs(rx)
 
-    if arx == 0.0
-        # return -0.0 iff x == -0.0
-        return x == 0.0 ? 0.0 : arx
-    elseif arx < 45.0
+    if arx < oftype(rx,45.0)
         return sin(deg2rad(rx))
-    elseif arx <= 135.0
-        arx = 90.0 - arx
+    elseif arx <= oftype(rx,135.0)
+        arx = oftype(rx,90.0) - arx
         return copysign(cos(deg2rad(arx)),rx)
-    elseif arx < 225.0
-        rx = copysign(180.0,rx) - rx
+    elseif arx < oftype(rx,225.0)
+        rx = (oftype(rx,180.0) - arx)*sign(rx)
         return sin(deg2rad(rx))
     elseif arx <= 315.0
-        arx = 270.0 - arx
+        arx = oftype(rx,270.0) - arx
         return -copysign(cos(deg2rad(arx)),rx)
     else
-        rx = rx - copysign(360.0,rx)
+        rx = rx - copysign(oftype(rx,360.0),rx)
         return sin(deg2rad(rx))
     end
 end
@@ -203,21 +203,21 @@ function cosd(x::Real)
         return nan(x)
     end
 
-    rx = abs(rem(x,360.0))
+    rx = abs(float(rem(x,360)))
 
-    if rx <= 45.0
+    if rx <= oftype(rx,45.0)
         return cos(deg2rad(rx))
-    elseif rx < 135.0
-        rx = 90.0 - rx
+    elseif rx < oftype(rx,135.0)
+        rx = oftype(rx,90.0) - rx
         return sin(deg2rad(rx))
-    elseif rx <= 225.0
-        rx = 180.0 - rx
+    elseif rx <= oftype(rx,225.0)
+        rx = oftype(rx,180.0) - rx
         return -cos(deg2rad(rx))
-    elseif rx < 315.0
-        rx = rx - 270.0
+    elseif rx < oftype(rx,315.0)
+        rx = rx - oftype(rx,270.0)
         return sin(deg2rad(rx))
     else
-        rx = 360.0 - rx
+        rx = oftype(rx,360.0) - rx
         return cos(deg2rad(rx))
     end
 end
@@ -272,7 +272,7 @@ exp10(x::Integer) = exp10(float(x))
 
 # functions that return NaN on non-NaN argument for domain error
 for f in (:sin, :cos, :tan, :asin, :acos, :acosh, :atanh, :log, :log2, :log10,
-          :lgamma, :sqrt, :log1p)
+          :lgamma, :log1p)
     @eval begin
         ($f)(x::Float64) = nan_dom_err(ccall(($(string(f)),libm), Float64, (Float64,), x), x)
         ($f)(x::Float32) = nan_dom_err(ccall(($(string(f,"f")),libm), Float32, (Float32,), x), x)
@@ -280,6 +280,11 @@ for f in (:sin, :cos, :tan, :asin, :acos, :acosh, :atanh, :log, :log2, :log10,
         @vectorize_1arg Number $f
     end
 end
+
+sqrt(x::Float64) = box(Float64,sqrt_llvm(unbox(Float64,x)))
+sqrt(x::Float32) = box(Float32,sqrt_llvm(unbox(Float32,x)))
+sqrt(x::Real) = sqrt(float(x))
+@vectorize_1arg Number sqrt
 
 for f in (:ceil, :trunc, :significand) # :rint, :nearbyint
     @eval begin
@@ -306,6 +311,11 @@ function hypot{T<:FloatingPoint}(x::T, y::T)
         r = y/one(x)
     else
         r = y/x
+        if isnan(r)
+            isinf(x) && return x
+            isinf(y) && return y
+            return r
+        end
     end
     x * sqrt(one(r)+r*r)
 end
@@ -405,8 +415,10 @@ modf(x) = rem(x,one(x)), trunc(x)
 ^(x::Float64, y::Float64) = nan_dom_err(ccall((:pow,libm),  Float64, (Float64,Float64), x, y), x+y)
 ^(x::Float32, y::Float32) = nan_dom_err(ccall((:powf,libm), Float32, (Float32,Float32), x, y), x+y)
 
-^(x::Float64, y::Integer) = x^float64(y)
-^(x::Float32, y::Integer) = x^float32(y)
+^(x::Float64, y::Integer) =
+    box(Float64, powi_llvm(unbox(Float64,x), unbox(Int32,int32(y))))
+^(x::Float32, y::Integer) =
+    box(Float32, powi_llvm(unbox(Float32,x), unbox(Int32,int32(y))))
 
 # special functions
 
@@ -594,15 +606,13 @@ function besselj(nu::Float64, z::Complex128)
     end
 end
 
-function besselj(nu::Integer, x::FloatingPoint)
-    nu > typemax(Int32) && throw(DomainError())
-    return oftype(x, ccall((:jn, libm), Float64, (Cint, Float64), nu, x))
-end
+besselj(nu::Integer, x::FloatingPoint) = typemin(Int32) <= nu <= typemax(Int32) ?
+    oftype(x, ccall((:jn, libm), Float64, (Cint, Float64), nu, x)) :
+    besselj(float64(nu), x)
 
-function besselj(nu::Integer, x::Float32)
-    nu > typemax(Int32) && throw(DomainError())
-    return ccall((:jnf, libm), Float32, (Cint, Float32), nu, x)
-end
+besselj(nu::Integer, x::Float32) = typemin(Int32) <= nu <= typemax(Int32) ?
+    ccall((:jnf, libm), Float32, (Cint, Float32), nu, x) :
+    besselj(float64(nu), x)
 
 besselk(nu::Float64, z::Complex128) = _besselk(abs(nu), z)
 
@@ -620,7 +630,7 @@ besselh(nu::Real, k::Integer, z::Complex) = besselh(float64(nu), k, complex128(z
 besselh(nu::Real, k::Integer, x::Real) = besselh(float64(nu), k, complex128(x))
 @vectorize_2arg Number besselh
 
-besseli(nu::Real, z::Complex64) = complex64(bessely(float64(nu), complex128(z)))
+besseli(nu::Real, z::Complex64) = complex64(besseli(float64(nu), complex128(z)))
 besseli(nu::Real, z::Complex) = besseli(float64(nu), complex128(z))
 besseli(nu::Real, x::Integer) = besseli(nu, float64(x))
 function besseli(nu::Real, x::FloatingPoint)
@@ -653,6 +663,9 @@ besselk(nu::Real, x::Integer) = besselk(nu, float64(x))
 function besselk(nu::Real, x::FloatingPoint)
     if x < 0
         throw(DomainError())
+    end
+    if x == 0
+        return oftype(x, Inf)
     end
     oftype(x, real(besselk(float64(nu), complex128(x))))
 end

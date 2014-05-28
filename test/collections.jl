@@ -61,7 +61,7 @@ _d = {"a"=>0}
 let
     d = Dict{UTF8String, Vector{Int}}()
     d["a"] = [1, 2]
-    @test_throws d["b"] = 1
+    @test_throws MethodError d["b"] = 1
     @test isa(repr(d), String)  # check that printable without error
 end
 
@@ -80,7 +80,7 @@ type I1438T
     id
 end
 import Base.hash
-hash(x::I1438T) = x.id
+hash(x::I1438T, h::Uint) = hash(x.id, h)
 
 begin
     local seq, xs, s
@@ -433,10 +433,10 @@ s = IntSet(0,1,10,20,200,300,1000,10000,10002)
 @test !in(0,s)
 @test !in(10002,s)
 @test in(10000,s)
-@test_throws first(IntSet())
-@test_throws last(IntSet())
+@test_throws ErrorException first(IntSet())
+@test_throws ErrorException last(IntSet())
 
 # Ranges
 
 @test isempty((1:4)[5:4])
-@test_throws (1:10)[8:-1:-2]
+@test_throws BoundsError (1:10)[8:-1:-2]

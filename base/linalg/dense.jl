@@ -1,29 +1,35 @@
 # Linear algebra functions for dense matrices in column major format
 
-scale!{T<:BlasFloat}(X::Array{T}, s::Number) = BLAS.scal!(length(X), convert(T,s), X, 1)
+function scale!{T<:BlasFloat}(X::Array{T}, s::T)
+    if length(X) < 2048
+        generic_scale!(X, s)
+    else
+        BLAS.scal!(length(X), s, X, 1)
+    end
+    X
+end
+
+scale!{T<:BlasFloat}(X::Array{T}, s::Number) = scale!(X, convert(T, s))
 scale!{T<:BlasComplex}(X::Array{T}, s::Real) = BLAS.scal!(length(X), oftype(real(zero(T)),s), X, 1)
 
 #Test whether a matrix is positive-definite
-isposdef!{T<:BlasFloat}(A::Matrix{T}, UL::Char) = LAPACK.potrf!(UL, A)[2] == 0
-isposdef!(A::Matrix) = ishermitian(A) && isposdef!(A, 'U')
+isposdef!{T<:BlasFloat}(A::StridedMatrix{T}, UL::Symbol) = LAPACK.potrf!(string(UL)[1], A)[2] == 0
+isposdef!(A::StridedMatrix) = ishermitian(A) && isposdef!(A, :U)
 
-isposdef{T<:BlasFloat}(A::Matrix{T}, UL::Char) = isposdef!(copy(A), UL)
-isposdef{T<:BlasFloat}(A::Matrix{T}) = isposdef!(copy(A))
-isposdef{T<:Number}(A::Matrix{T}, UL::Char) = isposdef!(float64(A), UL)
-isposdef{T<:Number}(A::Matrix{T}) = isposdef!(float64(A))
+isposdef{T}(A::AbstractMatrix{T}, UL::Symbol) = (S = typeof(sqrt(one(T))); isposdef!(S == T ? copy(A) : convert(AbstractMatrix{S}, A), UL))
+isposdef{T}(A::AbstractMatrix{T}) = (S = typeof(sqrt(one(T))); isposdef!(S == T ? copy(A) : convert(AbstractMatrix{S}, A)))
 isposdef(x::Number) = imag(x)==0 && real(x) > 0
 
-function norm{T<:BlasFloat, TI<:Integer}(x::StridedVector{T}, rx::Union(Range1{TI},Range{TI}))
+function norm{T<:BlasFloat, TI<:Integer}(x::StridedVector{T}, rx::Union(UnitRange{TI},Range{TI}))
     (minimum(rx) < 1 || maximum(rx) > length(x)) && throw(BoundsError())
     BLAS.nrm2(length(rx), pointer(x)+(first(rx)-1)*sizeof(T), step(rx))
 end
 
-function norm{T<:BlasFloat}(x::StridedVector{T}, p::Number=2)
-    length(x) == 0 && return zero(T)
-    p == 1 && T <: Real && return BLAS.asum(x)
-    p == 2 && return BLAS.nrm2(x)
-    invoke(norm, (AbstractVector, Number), x, p)
-end
+vecnorm1{T<:BlasReal}(x::Union(Array{T},StridedVector{T})) = 
+    length(x) > 16 ? BLAS.asum(x) : generic_vecnorm1(x)
+
+vecnorm2{T<:BlasFloat}(x::Union(Array{T},StridedVector{T})) = 
+    length(x) > 8 ? BLAS.nrm2(x) : generic_vecnorm2(x)
 
 function triu!{T}(M::Matrix{T}, k::Integer)
     m, n = size(M)
@@ -74,9 +80,9 @@ end
 
 function diagind(m::Integer, n::Integer, k::Integer=0)
     if 0 < k < n
-        return Range(k*m+1,m+1,min(m,n-k))
+        return range(k*m+1, m+1, min(m, n-k))
     elseif 0 <= -k <= m
-        return Range(1-k,m+1,min(m+k,n))
+        return range(1-k, m+1, min(m+k,n))
     end
     throw(BoundsError())
 end
@@ -306,7 +312,7 @@ function factorize{T}(A::Matrix{T})
         if m == 1 return A[1] end
         utri    = true
         utri1   = true
-        herm    = T <: Complex
+        herm    = true
         sym     = true
         for j = 1:n-1, i = j+1:m
             if utri1
@@ -318,7 +324,7 @@ function factorize{T}(A::Matrix{T})
             if sym
                 sym &= A[i,j] == A[j,i]
             end
-            if (T <: Complex) & herm
+            if herm
                 herm &= A[i,j] == conj(A[j,i])
             end
             if !(utri1|herm|sym) break end
@@ -350,7 +356,9 @@ function factorize{T}(A::Matrix{T})
             end
             if utri1
                 if (herm & (T <: Complex)) | sym
-                    return ldltd(SymTridiagonal(diag(A), diag(A, -1)))
+                    try 
+                        return ldltfact!(SymTridiagonal(diag(A), diag(A, -1)))
+                    end
                 end
                 return lufact(Tridiagonal(diag(A, -1), diag(A), diag(A, 1)))
             end
@@ -359,31 +367,12 @@ function factorize{T}(A::Matrix{T})
             return Triangular(A, :U)
         end
         if herm
-            if T <: BlasFloat
-                C, info = LAPACK.potrf!('U', copy(A))
-            else 
-                S = typeof(one(T)/one(T))
-                if S <: BlasFloat
-                    C, info = LAPACK.potrf!('U', convert(Matrix{S}, A))
-                else
-                    C, info = S <: Real ? LAPACK.potrf!('U', complex128(A)) : LAPACK.potrf!('U', complex128(A))
-                end
+            try
+                return cholfact(A)
             end
-            if info == 0 return Cholesky(C, 'U') end
             return factorize(Hermitian(A))
         end
         if sym
-            if T <: BlasFloat
-                C, info = LAPACK.potrf!('U', copy(A))
-            else
-                S = eltype(one(T)/one(T))
-                if S <: BlasFloat
-                    C, info = LAPACK.potrf!('U', convert(Matrix{S},A))
-                else
-                    C, info = S <: Real ? LAPACK.potrf!('U', float64(A)) : LAPACK.potrf!('U', complex(A))
-                end
-            end
-            if info == 0 return Cholesky(C, 'U') end
             return factorize(Symmetric(A))
         end
         return lufact(A)

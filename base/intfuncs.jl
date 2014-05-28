@@ -1,35 +1,3 @@
-## integer functions ##
-
-isodd(n::Integer) = bool(rem(n,2))
-iseven(n::Integer) = !isodd(n)
-
-signbit(x::Unsigned) = 0
-signbit(x::Int8) = int(x>>>7)
-signbit(x::Int16) = int(x>>>15)
-signbit(x::Int32) = int(x>>>31)
-signbit(x::Int64) = int(x>>>63)
-signbit(x::Int128) = int(x>>>127)
-
-flipsign(x::Int,    y::Int)    = box(Int,flipsign_int(unbox(Int,x),unbox(Int,y)))
-flipsign(x::Int64,  y::Int64)  = box(Int64,flipsign_int(unbox(Int64,x),unbox(Int64,y)))
-flipsign(x::Int128, y::Int128) = box(Int128,flipsign_int(unbox(Int128,x),unbox(Int128,y)))
-
-flipsign{T<:Signed}(x::T,y::T)  = flipsign(int(x),int(y))
-flipsign(x::Signed, y::Signed)  = flipsign(promote(x,y)...)
-flipsign(x::Signed, y::Float32) = flipsign(x, reinterpret(Int32,y))
-flipsign(x::Signed, y::Float64) = flipsign(x, reinterpret(Int64,y))
-flipsign(x::Signed, y::Real)    = flipsign(x, -oftype(x,signbit(y)))
-
-copysign(x::Signed, y::Signed)  = flipsign(x, x$y)
-copysign(x::Signed, y::Float32) = copysign(x, reinterpret(Int32,y))
-copysign(x::Signed, y::Float64) = copysign(x, reinterpret(Int64,y))
-copysign(x::Signed, y::Real)    = copysign(x, -oftype(x,signbit(y)))
-
-abs(x::Unsigned) = x
-abs(x::Signed) = flipsign(x,x)
-
-~(n::Integer) = -n-1
-
 ## number-theoretic functions ##
 
 function gcd{T<:Integer}(a::T, b::T)
@@ -107,6 +75,11 @@ function power_by_squaring(x, p::Integer)
     end
     return y
 end
+power_by_squaring(x::Bool, p::Unsigned) = ((p==0) | x)
+function power_by_squaring(x::Bool, p::Integer)
+    p < 0 && throw(DomainError())
+    return (p==0) | x
+end
 
 ^{T<:Integer}(x::T, p::T) = power_by_squaring(x,p)
 ^(x::Number, p::Integer)  = power_by_squaring(x,p)
@@ -141,7 +114,7 @@ nextpow2(x::Integer) = oftype(x,x < 0 ? -nextpow2(unsigned(-x)) : nextpow2(unsig
 prevpow2(x::Unsigned) = (one(x)>>(x==0)) << ((sizeof(x)<<3)-leading_zeros(x)-1)
 prevpow2(x::Integer) = oftype(x,x < 0 ? -prevpow2(unsigned(-x)) : prevpow2(unsigned(x)))
 
-ispow2(x::Integer) = ((x<=0) == (x&(x-1)))
+ispow2(x::Integer) = count_ones(x)==1
 
 # smallest a^n >= x, with integer n
 function nextpow(a::Real, x::Real)
@@ -202,12 +175,12 @@ function ndigits0z(n::Unsigned, b::Int)
     end
     return d
 end
-ndigits0z(x::Integer, b::Integer) = ndigits0z(unsigned(abs(x)),b)
+ndigits0z(x::Integer, b::Integer) = ndigits0z(unsigned(abs(x)),int(b))
 
-ndigits(x::Unsigned, b::Integer) = x==0 ? 1 : ndigits0z(x,b)
+ndigits(x::Unsigned, b::Integer) = x==0 ? 1 : ndigits0z(x,int(b))
 ndigits(x::Unsigned)             = x==0 ? 1 : ndigits0z(x)
 
-ndigits(x::Integer, b::Integer) = ndigits(unsigned(abs(x)),b)
+ndigits(x::Integer, b::Integer) = ndigits(unsigned(abs(x)),int(b))
 ndigits(x::Integer) = ndigits(unsigned(abs(x)))
 
 ## integer to string functions ##
@@ -285,6 +258,8 @@ for sym in (:bin, :oct, :dec, :hex)
     @eval begin
         ($sym)(x::Unsigned, p::Int) = ($sym)(x,p,false)
         ($sym)(x::Unsigned)         = ($sym)(x,1,false)
+        ($sym)(x::Char, p::Int)     = ($sym)(unsigned(x),p,false)
+        ($sym)(x::Char)             = ($sym)(unsigned(x),1,false)
         ($sym)(x::Integer, p::Int)  = ($sym)(unsigned(abs(x)),p,x<0)
         ($sym)(x::Integer)          = ($sym)(unsigned(abs(x)),1,x<0)
     end

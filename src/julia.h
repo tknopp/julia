@@ -327,7 +327,6 @@ extern DLLEXPORT jl_datatype_t *jl_module_type;
 extern DLLEXPORT jl_datatype_t *jl_vararg_type;
 extern DLLEXPORT jl_datatype_t *jl_function_type;
 extern DLLEXPORT jl_datatype_t *jl_abstractarray_type;
-extern DLLEXPORT jl_datatype_t *jl_storedarray_type;
 extern DLLEXPORT jl_datatype_t *jl_densearray_type;
 extern DLLEXPORT jl_datatype_t *jl_array_type;
 extern DLLEXPORT jl_typename_t *jl_array_typename;
@@ -384,10 +383,10 @@ extern DLLEXPORT jl_datatype_t *jl_methtable_type;
 extern DLLEXPORT jl_datatype_t *jl_method_type;
 extern DLLEXPORT jl_datatype_t *jl_task_type;
 
-extern jl_tuple_t *jl_null;
+extern DLLEXPORT jl_tuple_t *jl_null;
 #define JL_NULL ((void*)jl_null)
-extern jl_value_t *jl_true;
-extern jl_value_t *jl_false;
+DLLEXPORT extern jl_value_t *jl_true;
+DLLEXPORT extern jl_value_t *jl_false;
 DLLEXPORT extern jl_value_t *jl_nothing;
 
 DLLEXPORT extern uv_lib_t *jl_dl_handle;
@@ -427,6 +426,7 @@ extern jl_sym_t *abstracttype_sym; extern jl_sym_t *bitstype_sym;
 extern jl_sym_t *compositetype_sym; extern jl_sym_t *type_goto_sym;
 extern jl_sym_t *global_sym;  extern jl_sym_t *tuple_sym;
 extern jl_sym_t *boundscheck_sym; extern jl_sym_t *copyast_sym;
+extern jl_sym_t *simdloop_sym;
 
 
 // object accessors -----------------------------------------------------------
@@ -488,6 +488,7 @@ extern jl_sym_t *boundscheck_sym; extern jl_sym_t *copyast_sym;
 // basic predicates -----------------------------------------------------------
 
 #define jl_is_null(v)        (((jl_value_t*)(v)) == ((jl_value_t*)jl_null))
+#define jl_is_nothing(v)     (((jl_value_t*)(v)) == ((jl_value_t*)jl_nothing))
 #define jl_is_tuple(v)       jl_typeis(v,jl_tuple_type)
 #define jl_is_datatype(v)    jl_typeis(v,jl_datatype_type)
 #define jl_is_pointerfree(t) (((jl_datatype_t*)t)->pointerfree)
@@ -611,8 +612,8 @@ jl_value_t *jl_full_type(jl_value_t *v);
 int jl_is_type(jl_value_t *v);
 DLLEXPORT int jl_is_leaf_type(jl_value_t *v);
 int jl_has_typevars(jl_value_t *v);
-int jl_subtype(jl_value_t *a, jl_value_t *b, int ta);
-int jl_type_morespecific(jl_value_t *a, jl_value_t *b, int ta);
+DLLEXPORT int jl_subtype(jl_value_t *a, jl_value_t *b, int ta);
+int jl_type_morespecific(jl_value_t *a, jl_value_t *b);
 DLLEXPORT int jl_types_equal(jl_value_t *a, jl_value_t *b);
 jl_value_t *jl_type_union(jl_tuple_t *types);
 jl_value_t *jl_type_intersection_matching(jl_value_t *a, jl_value_t *b,
@@ -638,6 +639,7 @@ DLLEXPORT jl_datatype_t *jl_new_datatype(jl_sym_t *name, jl_datatype_t *super,
 DLLEXPORT jl_datatype_t *jl_new_bitstype(jl_value_t *name, jl_datatype_t *super,
                                jl_tuple_t *parameters, size_t nbits);
 jl_datatype_t *jl_wrap_Type(jl_value_t *t);  // x -> Type{x}
+jl_datatype_t *jl_wrap_vararg(jl_value_t *t); // x -> x...
 
 // constructors
 DLLEXPORT jl_value_t *jl_new_bits(jl_value_t *bt, void *data);
@@ -797,6 +799,8 @@ STATIC_INLINE jl_function_t *jl_get_function(jl_module_t *m, const char *name)
 {
     return  (jl_function_t*) jl_get_global(m, jl_symbol(name));
 }
+DLLEXPORT int jl_module_has_initializer(jl_module_t *m);
+DLLEXPORT void jl_module_run_initializer(jl_module_t *m);
 
 // eq hash tables
 DLLEXPORT jl_array_t *jl_eqtable_put(jl_array_t *h, void *key, void *val);
@@ -830,10 +834,6 @@ DLLEXPORT void jl_undefined_var_error(jl_sym_t *var);
 void jl_check_type_tuple(jl_tuple_t *t, jl_sym_t *name, const char *ctx);
 DLLEXPORT jl_value_t *jl_exception_occurred(void);
 DLLEXPORT void jl_exception_clear(void);
-STATIC_INLINE char *jl_get_exception_str(jl_value_t *exception)
-{
-    return jl_string_data(jl_fieldref(exception, 0));
-}
 
 #define JL_NARGS(fname, min, max)                               \
     if (nargs < min) jl_too_few_args(#fname, min);              \
@@ -855,11 +855,13 @@ STATIC_INLINE char *jl_get_exception_str(jl_value_t *exception)
 DLLEXPORT void julia_init(char *imageFile);
 DLLEXPORT int julia_trampoline(int argc, char *argv[], int (*pmain)(int ac,char *av[]));
 DLLEXPORT void jl_init(char *julia_home_dir);
+DLLEXPORT void jl_init_with_image(char *julia_home_dir, char *image_relative_path);
 DLLEXPORT int jl_is_initialized(void);
 DLLEXPORT extern char *julia_home;
 
 DLLEXPORT void jl_save_system_image(char *fname);
 DLLEXPORT void jl_restore_system_image(char *fname);
+void jl_init_restored_modules();
 
 // front end interface
 DLLEXPORT jl_value_t *jl_parse_input_line(const char *str);
@@ -967,6 +969,24 @@ DLLEXPORT jl_value_t *jl_call1(jl_function_t *f, jl_value_t *a);
 DLLEXPORT jl_value_t *jl_call2(jl_function_t *f, jl_value_t *a, jl_value_t *b);
 DLLEXPORT jl_value_t *jl_call3(jl_function_t *f, jl_value_t *a, jl_value_t *b, jl_value_t *c);
 
+// interfacing with Task runtime
+DLLEXPORT void jl_yield();
+DLLEXPORT void jl_handle_stack_switch();
+
+#ifdef COPY_STACKS
+// initialize base context of root task
+#define JL_SET_STACK_BASE                               \
+    {                                                   \
+        int __stk;                                      \
+        jl_root_task->stackbase = (char*)&__stk;        \
+        if (jl_setjmp(jl_root_task->base_ctx, 1)) {     \
+            jl_handle_stack_switch();                   \
+        }                                               \
+    }
+#else
+#define JL_SET_STACK_BASE
+#endif
+
 // gc -------------------------------------------------------------------------
 
 #ifdef JL_GC_MARKSWEEP
@@ -1071,6 +1091,8 @@ DLLEXPORT extern volatile sig_atomic_t jl_defer_signal;
     } while(0)
 
 DLLEXPORT void restore_signals(void);
+DLLEXPORT void jl_install_sigint_handler();
+
 
 // tasks and exceptions -------------------------------------------------------
 
@@ -1217,7 +1239,7 @@ DLLEXPORT uv_idle_t * jl_make_idle(uv_loop_t *loop, jl_value_t *julia_struct);
 DLLEXPORT int jl_idle_start(uv_idle_t *idle);
 DLLEXPORT int jl_idle_stop(uv_idle_t *idle);
 
-DLLEXPORT int jl_putc(unsigned char c, uv_stream_t *stream);
+DLLEXPORT int jl_putc(char c, uv_stream_t *stream);
 DLLEXPORT int jl_puts(char *str, uv_stream_t *stream);
 DLLEXPORT int jl_pututf8(uv_stream_t *s, uint32_t wchar);
 
@@ -1273,10 +1295,16 @@ void jl_print_gc_stats(JL_STREAM *s);
 
 typedef struct {
     char *build_path;
-    int code_coverage;
+    int8_t code_coverage;
+    int8_t check_bounds;
+    int int_literals;
 } jl_compileropts_t;
 
 extern DLLEXPORT jl_compileropts_t jl_compileropts;
+
+#define JL_COMPILEROPT_CHECK_BOUNDS_DEFAULT 0
+#define JL_COMPILEROPT_CHECK_BOUNDS_ON 1
+#define JL_COMPILEROPT_CHECK_BOUNDS_OFF 2
 
 #ifdef __cplusplus
 }

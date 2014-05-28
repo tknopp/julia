@@ -1,8 +1,50 @@
+const _fact_table64 =
+    Int64[1,2,6,24,120,720,5040,40320,362880,3628800,39916800,479001600,6227020800,
+          87178291200,1307674368000,20922789888000,355687428096000,6402373705728000,
+          121645100408832000,2432902008176640000]
+
+const _fact_table128 =
+    Uint128[0x00000000000000000000000000000001, 0x00000000000000000000000000000002,
+            0x00000000000000000000000000000006, 0x00000000000000000000000000000018,
+            0x00000000000000000000000000000078, 0x000000000000000000000000000002d0,
+            0x000000000000000000000000000013b0, 0x00000000000000000000000000009d80,
+            0x00000000000000000000000000058980, 0x00000000000000000000000000375f00,
+            0x00000000000000000000000002611500, 0x0000000000000000000000001c8cfc00,
+            0x0000000000000000000000017328cc00, 0x0000000000000000000000144c3b2800,
+            0x00000000000000000000013077775800, 0x00000000000000000000130777758000,
+            0x00000000000000000001437eeecd8000, 0x00000000000000000016beecca730000,
+            0x000000000000000001b02b9306890000, 0x000000000000000021c3677c82b40000,
+            0x0000000000000002c5077d36b8c40000, 0x000000000000003ceea4c2b3e0d80000,
+            0x000000000000057970cd7e2933680000, 0x00000000000083629343d3dcd1c00000,
+            0x00000000000cd4a0619fb0907bc00000, 0x00000000014d9849ea37eeac91800000,
+            0x00000000232f0fcbb3e62c3358800000, 0x00000003d925ba47ad2cd59dae000000,
+            0x0000006f99461a1e9e1432dcb6000000, 0x00000d13f6370f96865df5dd54000000,
+            0x0001956ad0aae33a4560c5cd2c000000, 0x0032ad5a155c6748ac18b9a580000000,
+            0x0688589cc0e9505e2f2fee5580000000, 0xde1bc4d19efcac82445da75b00000000]
+
+function factorial_lookup(n::Integer, table, lim)
+    n < 0 && throw(DomainError())
+    n > lim && throw(OverflowError())
+    n == 0 && return one(n)
+    @inbounds f = table[n]
+    return oftype(n, f)
+end
+
+factorial(n::Int128) = factorial_lookup(n, _fact_table128, 33)
+factorial(n::Uint128) = factorial_lookup(n, _fact_table128, 34)
+factorial(n::Union(Int64,Uint64)) = factorial_lookup(n, _fact_table64, 20)
+
+if Int === Int32
+factorial(n::Union(Int8,Uint8,Int16,Uint16)) = factorial(int32(n))
+factorial(n::Union(Int32,Uint32)) = factorial_lookup(n, _fact_table64, 12)
+else
+factorial(n::Union(Int8,Uint8,Int16,Uint16,Int32,Uint32)) = factorial(int64(n))
+end
+
 function factorial(n::Integer)
-    if n < 0
-        return zero(n)
-    end
-    f = one(n)
+    n < 0 && throw(DomainError())
+    local f::typeof(n*n), i::typeof(n*n)
+    f = 1
     for i = 2:n
         f *= i
     end
@@ -37,15 +79,17 @@ function binomial{T<:Integer}(n::T, k::T)
     if k > (n>>1)
         k = (n - k)
     end
-    x = nn = n - k + 1.0
-    nn += 1.0
-    rr = 2.0
+    x::T = nn = n - k + 1
+    nn += 1
+    rr = 2
     while rr <= k
-        x *= nn/rr
+        xt = div(widemul(x, nn), rr)
+        x = xt
+        x == xt || throw(OverflowError())
         rr += 1
         nn += 1
     end
-    sgn*iround(T,x)
+    convert(T, copysign(x, sgn))
 end
 
 ## other ordering related functions ##
@@ -85,6 +129,7 @@ end
 function nthperm!(a::AbstractVector, k::Integer)
     k -= 1 # make k 1-indexed
     n = length(a)
+    n == 0 && return a
     f = factorial(oftype(k, n-1))
     for i=1:n-1
         j = div(k, f) + 1
@@ -189,7 +234,7 @@ immutable Combinations{T}
 end
 
 eltype(c::Combinations) = typeof(c.a)
-eltype{T}(c::Combinations{Range1{T}}) = Array{T,1}
+eltype{T}(c::Combinations{UnitRange{T}}) = Array{T,1}
 eltype{T}(c::Combinations{Range{T}}) = Array{T,1}
 
 length(c::Combinations) = binomial(length(c.a),c.t)
@@ -229,7 +274,7 @@ immutable Permutations{T}
 end
 
 eltype(c::Permutations) = typeof(c.a)
-eltype{T}(c::Permutations{Range1{T}}) = Array{T,1}
+eltype{T}(c::Permutations{UnitRange{T}}) = Array{T,1}
 eltype{T}(c::Permutations{Range{T}}) = Array{T,1}
 
 length(c::Permutations) = factorial(length(c.a))
@@ -531,7 +576,7 @@ function nextprod(a::Vector{Int}, x)
     v = ones(Int, k)                  # current value of each counter
     mx = [nextpow(ai,x) for ai in a]  # maximum value of each counter
     v[1] = mx[1]                      # start at first case that is >= x
-    p::morebits(Int) = mx[1]          # initial value of product in this case
+    p::widen(Int) = mx[1]             # initial value of product in this case
     best = p
     icarry = 1
     
@@ -573,7 +618,7 @@ function prevprod(a::Vector{Int}, x)
     mx = [nextpow(ai,x) for ai in a]  # allow each counter to exceed p (sentinel)
     first = int(prevpow(a[1], x))     # start at best case in first factor
     v[1] = first
-    p::morebits(Int) = first
+    p::widen(Int) = first
     best = p
     icarry = 1
     

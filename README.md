@@ -5,7 +5,7 @@
 </a>
 </div>
 
-[![Build Status](https://api.travis-ci.org/JuliaLang/julia.png?branch=master)](https://travis-ci.org/JuliaLang/julia)
+[![Build Status](https://api.travis-ci.org/JuliaLang/julia.svg?branch=master)](https://travis-ci.org/JuliaLang/julia)
 
 <a name="The-Julia-Language"/>
 ## The Julia Language
@@ -15,6 +15,7 @@ The main homepage for Julia can be found at [julialang.org](http://julialang.org
 This is the GitHub repository of Julia source code, including instructions for compiling and installing Julia, below.
 
 <a name="Resources"/>
+## Resources
 
 - **Homepage:** <http://julialang.org>
 - **Binaries:** <http://julialang.org/downloads/>
@@ -29,6 +30,16 @@ The mailing list for developer discussion is
 <http://groups.google.com/group/julia-dev/>. All are welcome, but the volume
 of messages is higher, and the discussions tend to be more esoteric. New
 developers may find the notes in [CONTRIBUTING](https://github.com/JuliaLang/julia/blob/master/CONTRIBUTING.md) helpful to start contributing to the Julia codebase.
+
+### External Resources
+<a name="External-Resources"/>
+
+- [**StackOverflow**](https://stackoverflow.com/questions/tagged/julia-lang)
+- [**Youtube**](https://www.youtube.com/channel/UC9IuUwwE2xdjQUT_LMLONoA)
+- [**Twitter**](https://twitter.com/JuliaLanguage)
+- [**Facebook Group**](https://www.facebook.com/juliaLanguageUserGroup)
+- [**Google+**](https://plus.google.com/communities/111295162646766639102)
+- [**Meetup**](http://julia.meetup.com/)
 
 <a name="Currently-Supported-Platforms"/>
 ## Currently Supported Platforms
@@ -75,6 +86,12 @@ Now you should be able to run Julia like this:
 
 If everything works correctly, you will see a Julia banner and an interactive prompt into which you can enter expressions for evaluation. (Errors related to libraries might be caused by old, incompatible libraries sitting around in your PATH. In that case, try moving the `julia` directory earlier in the PATH).
 
+Your first test of Julia should be to determine whether your
+build is working properly. From the UNIX/Windows command prompt inside
+the julia source directory, type `make testall`. You should see output
+that lists a series of tests being run; if they complete without
+error, you should be in good shape to start using Julia.
+
 You can read about [getting started](http://julialang.org/manual/getting-started) in the manual.
 
 If you are building a Julia package for distribution on Linux, OS X,
@@ -116,13 +133,26 @@ If the `gcc44` and `gfortran44` packages are installed, you can specify their us
 
 Otherwise, install or contact your systems administrator to install a more recent version of `gcc`.
 
+#### Google Compute Engine
+
+Google Compute Engine is evolving rapidly, as is Julia.  This section is current as of March 2014 and assumes working knowledge of Google Cloud Services.
+
+These notes apply to the Debian 7 image currently available on Google Compute Engine and Julia pre-0.3.  There are only two things you need to do:
+
+1. Install packages required to build on your instance:
+  ```
+  apt-get install bzip2 gcc gfortran git g++ make m4 ncurses-dev
+  ```
+
+2. Now clone `JuliaLang:master` and edit `deps/Versions.make` to select `OPENBLAS_VER = v0.2.9.rc2`. This picks up changes to support the Sandybridge cores used by Google Compute Engine. (Alternatively, you could fall back to the Nehelem architecture via a `make` option, but that would entail performance penalties.)
+
+Now you should be able to build using the generic Linux instructions. These instructions were tested on a `g1-small` instance on 2014-03-28. Other resources include [information on Google Compute Engine](https://cloud.google.com/products/compute-engine/) and a series of [tutorials by Julia Ferraioli](http://www.blog.juliaferraioli.com/2013/12/julia-on-google-compute-engine.html).
+
 #### Linux Build Troubleshooting
 
  Problem              | Possible Solution
 ------------------------|---------------------
  OpenBLAS build failure | Set one of the following build options in `Make.user` and build again: <ul><li> `OPENBLAS_TARGET_ARCH=BARCELONA` (AMD CPUs) or `OPENBLAS_TARGET_ARCH=NEHALEM` (Intel CPUs)<ul>Set `OPENBLAS_DYNAMIC_ARCH = 0` to disable compiling multiple architectures in a single binary.</ul></li><li> `USE_SYSTEM_BLAS=1` uses the system provided `libblas` <ul><li>Set `LIBBLAS=-lopenblas` and `LIBBLASNAME=libopenblas` to force the use of the system provided OpenBLAS when multiple BLAS versions are installed </li></ul></li></ul>
- readline build error   | Set `USE_SYSTEM_READLINE=1` in `Make.user`
- ncurses build error    | Install the `libncurses5` development package <ul><li> Debian/Ubuntu: `apt-get install libncurses5-dev` </li><li> RPM-based systems: `yum install libncurses5-devel` </li></ul>
  Illegal Instruction error | Check if your CPU supports AVX while your OS does not (e.g. through virtualization, as described in [this issue](https://github.com/JuliaLang/julia/issues/3263)), and try installing LLVM 3.3 instead of LLVM 3.2.
 
 ### OS X
@@ -168,7 +198,6 @@ Julia uses the following external libraries, which are automatically downloaded 
 
 - **[LLVM]**                — compiler infrastructure.
 - **[FemtoLisp]**           — packaged with Julia source, and used to implement the compiler front-end.
-- **[readline]**            — library allowing shell-like line editing in the terminal, with history and familiar key bindings.
 - **[libuv]**               — portable, high-performance event-based I/O library
 - **[OpenLibm]**            — a portable libm library containing elementary math functions.
 - **[OpenSpecFun]**         — a library containing Bessel and error functions of complex arguments.
@@ -208,7 +237,6 @@ Julia uses the following external libraries, which are automatically downloaded 
 [PCRE]:         http://www.pcre.org/
 [LLVM]:         http://www.llvm.org/
 [FemtoLisp]:    https://github.com/JeffBezanson/femtolisp
-[readline]:     http://cnswww.cns.cwru.edu/php/chet/readline/rltop.html
 [GMP]:          http://gmplib.org/
 [MPFR]:         http://www.mpfr.org/
 [double-conversion]: http://double-conversion.googlecode.com/
@@ -287,16 +315,6 @@ The following distributions include julia, but the versions may be out of date d
 <a name="Editor-Terminal-Setup"/>
 ## Editor and Terminal Setup
 
-Currently, Julia editing mode support is available for Emacs, Vim, Textmate, Sublime Text, Notepad++, and Kate, in `contrib/`
+Currently, Julia editing mode support is available for Emacs, Vim, Textmate, Sublime Text, Notepad++, and Kate, in `contrib/`.
 
-Adjusting your terminal bindings is optional; everything will work fine without these key bindings.
-For the best interactive session experience, however, make sure that your terminal emulator (`Terminal`, `iTerm`, `xterm`, etc.) sends the `^H` sequence for `Backspace` (delete key) and that the `Shift-Enter` key combination sends a `\n` newline character to distinguish it from just pressing `Enter`, which sends a `\r` carriage return character.
-These bindings allow custom readline handlers to trap and correctly deal with these key sequences; other programs will continue to behave normally with these bindings.
-The first binding makes backspacing through text at the prompt behave more intuitively.
-The second binding allows `Shift-Enter` to insert a newline without evaluating the current expression, even when the current expression is complete.
-(Pressing an unmodified `Enter` inserts a newline if the current expression is incomplete, evaluates the expression if it is complete, or shows an error if the syntax is irrecoverably invalid.)
-
-On Linux systems, the `Shift-Enter` binding can be set by placing the following line in the file `.xmodmaprc` in your home directory:
-
-    keysym Return = Return Linefeed
-
+In the terminal, Julia makes great use of both control-key and meta-key bindings. To make the meta-key bindings more accessible, many terminal emulator programs (e.g., `Terminal`, `iTerm`, `xterm`, etc) allow you to use the alt or option key as meta.  See the section in the manual on [interacting with Julia](http://docs.julialang.org/en/latest/manual/interacting-with-julia/) for more details.

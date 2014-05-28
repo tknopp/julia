@@ -11,6 +11,10 @@
 #include "julia_internal.h"
 #include "builtin_proto.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static htable_t ser_tag;
 static htable_t deser_tag;
 static htable_t backref_table;
@@ -38,6 +42,9 @@ static jl_value_t *jl_idtable_type=NULL;
 
 // queue of types to cache
 static jl_array_t *datatype_list=NULL;
+
+// queue of modules to initialize
+static arraylist_t modules_to_init;
 
 #define write_uint8(s, n) ios_putc((n), (s))
 #define read_uint8(s) ((uint8_t)ios_getc(s))
@@ -92,19 +99,43 @@ static void write_as_tag(ios_t *s, uint8_t tag)
 static void jl_serialize_value_(ios_t *s, jl_value_t *v);
 static jl_value_t *jl_deserialize_value(ios_t *s);
 static jl_value_t *jl_deserialize_value_internal(ios_t *s);
-static jl_value_t ***sysimg_gvars = NULL;
+jl_value_t ***sysimg_gvars = NULL;
 
 extern int globalUnique;
+extern void jl_cpuid(int32_t CPUInfo[4], int32_t InfoType);
+extern const char *jl_cpu_string;
+uv_lib_t *jl_sysimg_handle = NULL;
 
 static void jl_load_sysimg_so(char *fname)
 {
     // attempt to load the pre-compiled sysimg at fname
     // if this succeeds, sysimg_gvars will be a valid array
     // otherwise, it will be NULL
-    uv_lib_t *sysimg_handle = jl_load_dynamic_library_e(fname, JL_RTLD_DEFAULT);
-    if (sysimg_handle != 0) {
-        sysimg_gvars = (jl_value_t***)jl_dlsym(sysimg_handle, "jl_sysimg_gvars");
-        globalUnique = *(size_t*)jl_dlsym(sysimg_handle, "jl_globalUnique");
+    jl_sysimg_handle = jl_load_dynamic_library_e(fname, JL_RTLD_DEFAULT | JL_RTLD_GLOBAL);
+    if (jl_sysimg_handle != 0) {
+        sysimg_gvars = (jl_value_t***)jl_dlsym(jl_sysimg_handle, "jl_sysimg_gvars");
+        globalUnique = *(size_t*)jl_dlsym(jl_sysimg_handle, "jl_globalUnique");
+        const char *cpu_target = (const char*)jl_dlsym(jl_sysimg_handle, "jl_sysimg_cpu_target");
+        if (strcmp(cpu_target,jl_cpu_string) != 0)
+            jl_error("Julia and the system image were compiled for different architectures.\n"
+                     "Please delete or regenerate sys.{so,dll,dylib}.");
+        uint32_t info[4];
+        jl_cpuid((int32_t*)info, 1);
+        if (strcmp(cpu_target, "native") == 0) {
+            uint64_t saved_cpuid = *(uint64_t*)jl_dlsym(jl_sysimg_handle, "jl_sysimg_cpu_cpuid");
+            if (saved_cpuid != (((uint64_t)info[2])|(((uint64_t)info[3])<<32)))
+                jl_error("Target architecture mismatch. Please delete or regenerate sys.{so,dll,dylib}.");
+        }
+        else if(strcmp(cpu_target,"core2") == 0) {
+            int HasSSSE3 = (info[3] & 1<<9);
+            if (!HasSSSE3)
+                jl_error("The current host does not support SSSE3, but the system image was compiled for Core2.\n"
+                         "Please delete or regenerate sys.{so,dll,dylib}.");
+        }
+        else {
+            jl_error("System image has unknown target cpu architecture.\n"
+                     "Please delete or regenerate sys.{so,dll,dylib}.");
+        }
     }
     else {
         sysimg_gvars = 0;
@@ -631,7 +662,7 @@ static jl_value_t *jl_deserialize_datatype(ios_t *s, int pos)
     dt->fptr = jl_deserialize_fptr(s);
     if (dt->name == jl_array_type->name || dt->name == jl_pointer_type->name ||
         dt->name == jl_type_type->name || dt->name == jl_vararg_type->name ||
-        dt->name == jl_abstractarray_type->name || dt->name == jl_storedarray_type->name ||
+        dt->name == jl_abstractarray_type->name ||
         dt->name == jl_densearray_type->name) {
         // builtin types are not serialized, so their caches aren't
         // explicitly saved. so we reconstruct the caches of builtin
@@ -833,6 +864,8 @@ static jl_value_t *jl_deserialize_value_internal(ios_t *s)
             arraylist_push(&m->usings, jl_deserialize_value(s));
         }
         m->constant_table = (jl_array_t*)jl_deserialize_value(s);
+        if (jl_module_has_initializer(m))
+            arraylist_push(&modules_to_init, m);
         return (jl_value_t*)m;
     }
     else if (vtag == (jl_value_t*)SmallInt64_tag) {
@@ -1071,6 +1104,17 @@ void jl_restore_system_image(char *fname)
     jl_get_binding_wr(jl_core_module, jl_symbol("JULIA_HOME"))->value =
         jl_cstr_to_string(julia_home);
     jl_update_all_fptrs();
+#ifndef _OS_WINDOWS_
+    // restore the line information for Julia backtraces
+    if (jl_sysimg_handle != NULL) jl_restore_linedebug_info(jl_sysimg_handle);
+#endif
+}
+
+void jl_init_restored_modules()
+{
+    while (modules_to_init.len > 0) {
+        jl_module_run_initializer((jl_module_t *) arraylist_pop(&modules_to_init));
+    }
 }
 
 DLLEXPORT
@@ -1153,6 +1197,7 @@ void jl_init_serializer(void)
     htable_new(&fptr_to_id, 0);
     htable_new(&id_to_fptr, 0);
     htable_new(&backref_table, 50000);
+    arraylist_new(&modules_to_init, 0);
 
     void *tags[] = { jl_symbol_type, jl_datatype_type,
                      jl_function_type, jl_tuple_type, jl_array_type,
@@ -1245,7 +1290,7 @@ void jl_init_serializer(void)
                      jl_gotonode_type, jl_quotenode_type, jl_topnode_type,
                      jl_type_type, jl_bottom_type, jl_pointer_type,
                      jl_vararg_type, jl_ntuple_type, jl_abstractarray_type,
-                     jl_storedarray_type, jl_densearray_type, jl_box_type,
+                     jl_densearray_type, jl_box_type,
                      jl_typector_type, jl_undef_type, jl_top_type, jl_typename_type,
                      jl_task_type, jl_uniontype_type, jl_typetype_type, jl_typetype_tvar,
                      jl_ANY_flag, jl_array_any_type, jl_intrinsic_type, jl_method_type,
@@ -1257,7 +1302,7 @@ void jl_init_serializer(void)
                      jl_typename_type->name, jl_type_type->name, jl_methtable_type->name,
                      jl_method_type->name, jl_tvar_type->name, jl_vararg_type->name,
                      jl_ntuple_type->name, jl_abstractarray_type->name,
-                     jl_storedarray_type->name, jl_densearray_type->name,
+                     jl_densearray_type->name,
                      jl_lambda_info_type->name, jl_module_type->name, jl_box_type->name,
                      jl_function_type->name, jl_typector_type->name,
                      jl_intrinsic_type->name, jl_undef_type->name, jl_task_type->name,
@@ -1289,7 +1334,7 @@ void jl_init_serializer(void)
                           jl_f_arraylen, jl_f_arrayref,
                           jl_f_arrayset, jl_f_arraysize,
                           jl_f_instantiate_type, jl_f_kwcall,
-                          jl_f_convert_default, jl_f_convert_tuple,
+                          jl_f_convert_default,
                           jl_trampoline, jl_f_new_type_constructor,
                           jl_f_typevar, jl_f_union,
                           jl_f_methodexists, jl_f_applicable,
@@ -1305,3 +1350,7 @@ void jl_init_serializer(void)
         i += 1;
     }
 }
+
+#ifdef __cplusplus
+}
+#endif

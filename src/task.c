@@ -12,11 +12,16 @@
 #include <errno.h>
 #include "julia.h"
 #include "julia_internal.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #if defined(_OS_WINDOWS_)
 #include <winbase.h>
 #include <malloc.h>
 #include <dbghelp.h>
-static volatile int in_stackwalk = 0;
+volatile int jl_in_stackwalk = 0;
 #else
 #include <unistd.h>
 // This gives unwind only local unwinding options ==> faster code
@@ -424,6 +429,11 @@ static void start_task(jl_task_t *t)
     assert(0);
 }
 
+DLLEXPORT void jl_handle_stack_switch()
+{
+    jl_switch_stack(jl_current_task, jl_jmp_target);
+}
+
 #ifndef COPY_STACKS
 static void init_task(jl_task_t *t)
 {
@@ -446,24 +456,24 @@ static void init_task(jl_task_t *t)
 ptrint_t bt_data[MAX_BT_SIZE+1];
 size_t bt_size = 0;
 
-void getFunctionInfo(const char **name, int *line, const char **filename, size_t pointer);
+void jl_getFunctionInfo(const char **name, int *line, const char **filename, size_t pointer);
 
 static const char* name_unknown = "???";
-static int frame_info_from_ip(const char **func_name, int *line_num, const char **file_name, size_t ip, int doCframes)
+static int frame_info_from_ip(const char **func_name, int *line_num, const char **file_name, size_t ip)
 {
     int fromC = 0;
 
-    getFunctionInfo(func_name, line_num, file_name, ip);
-    if (*func_name == NULL && doCframes) {
+    jl_getFunctionInfo(func_name, line_num, file_name, ip);
+    if (*func_name == NULL) {
         fromC = 1;
 #if defined(_OS_WINDOWS_)
-        if (in_stackwalk) {
+        if (jl_in_stackwalk) {
             *func_name = name_unknown;
             *file_name = name_unknown;
             *line_num = ip;
         }
         else {
-            in_stackwalk = 1;
+            jl_in_stackwalk = 1;
             DWORD64 dwDisplacement64 = 0;
             DWORD64 dwAddress = ip;
 
@@ -499,7 +509,7 @@ static int frame_info_from_ip(const char **func_name, int *line_num, const char 
                 //DWORD error = GetLastError();
                 //printf("SymGetLineFromAddr64 returned error : %d\n", error);
             }
-            in_stackwalk = 0;
+            jl_in_stackwalk = 0;
         }
 #else
         Dl_info dlinfo;
@@ -532,23 +542,23 @@ DLLEXPORT size_t rec_backtrace(ptrint_t *data, size_t maxsize)
 {
     CONTEXT Context;
     memset(&Context, 0, sizeof(Context));
-    in_stackwalk = 1;
+    jl_in_stackwalk = 1;
     RtlCaptureContext(&Context);
-    in_stackwalk = 0;
+    jl_in_stackwalk = 0;
     return rec_backtrace_ctx(data, maxsize, &Context);
 }
 DLLEXPORT size_t rec_backtrace_ctx(ptrint_t *data, size_t maxsize, CONTEXT *Context)
 {
-    if (in_stackwalk) {
+    if (jl_in_stackwalk) {
         return 0;
     }
     STACKFRAME64 stk;
     memset(&stk, 0, sizeof(stk));
 
     if (needsSymRefreshModuleList && hSymRefreshModuleList != 0) {
-        in_stackwalk = 1;
+        jl_in_stackwalk = 1;
         hSymRefreshModuleList(GetCurrentProcess());
-        in_stackwalk = 0;
+        jl_in_stackwalk = 0;
         needsSymRefreshModuleList = 0;
     }
 #if defined(_CPU_X86_64_) 
@@ -571,10 +581,10 @@ DLLEXPORT size_t rec_backtrace_ctx(ptrint_t *data, size_t maxsize, CONTEXT *Cont
     size_t n = 0;
     intptr_t lastsp = stk.AddrStack.Offset;
     while (n < maxsize) {
-        in_stackwalk = 1;
+        jl_in_stackwalk = 1;
         BOOL result = StackWalk64(MachineType, GetCurrentProcess(), hMainThread,
             &stk, Context, NULL, SymFunctionTableAccess64, SymGetModuleBase64, NULL);
-        in_stackwalk = 0;
+        jl_in_stackwalk = 0;
         data[n++] = (intptr_t)stk.AddrPC.Offset;
         intptr_t sp = (intptr_t)stk.AddrStack.Offset;
         if (!result || sp == 0 || 
@@ -650,22 +660,20 @@ DLLEXPORT jl_value_t *jl_backtrace_from_here(void)
     return (jl_value_t*)bt;
 }
 
-DLLEXPORT jl_value_t *jl_lookup_code_address(void *ip, int doCframes)
+DLLEXPORT jl_value_t *jl_lookup_code_address(void *ip)
 {
     const char *func_name;
     int line_num;
     const char *file_name;
-#ifdef _OS_WINDOWS_
-    int fromC =
-#endif
-        frame_info_from_ip(&func_name, &line_num, &file_name, (size_t)ip, doCframes);
+    int fromC = frame_info_from_ip(&func_name, &line_num, &file_name, (size_t)ip);
     if (func_name != NULL) {
-        jl_value_t *r = (jl_value_t*)jl_alloc_tuple(3);
+        jl_value_t *r = (jl_value_t*)jl_alloc_tuple(4);
         JL_GC_PUSH1(&r);
         jl_tupleset(r, 0, jl_symbol(func_name));
         jl_tupleset(r, 1, jl_symbol(file_name));
         jl_tupleset(r, 2, jl_box_long(line_num));
-#ifdef _OS_WINDOWS_
+        jl_tupleset(r, 3, jl_box_bool(fromC));
+#if defined(_OS_WINDOWS_) && !defined(LLVM34)
         if (fromC && func_name != name_unknown) free((void*)func_name);
         if (fromC && file_name != name_unknown) free((void*)file_name);
 #endif
@@ -692,7 +700,7 @@ DLLEXPORT void gdblookup(ptrint_t ip)
     const char *func_name;
     int line_num;
     const char *file_name;
-    int fromC = frame_info_from_ip(&func_name, &line_num, &file_name, ip, 1);
+    int fromC = frame_info_from_ip(&func_name, &line_num, &file_name, ip);
     if (func_name != NULL) {
         if (fromC)
             ios_printf(ios_stderr, "%s at %s: offset %x\n", func_name, file_name, line_num);
@@ -896,7 +904,7 @@ void jl_init_tasks(void *stack, size_t ssize)
     jl_current_task = (jl_task_t*)allocobj(sizeof(jl_task_t));
     jl_current_task->type = (jl_value_t*)jl_task_type;
 #ifdef COPY_STACKS
-    jl_current_task->stackbase = (char *)stack + ssize;
+    jl_current_task->stackbase = NULL;
     jl_current_task->ssize = 0;  // size of saved piece
     jl_current_task->bufsz = 0;
 #else
@@ -925,3 +933,7 @@ void jl_init_tasks(void *stack, size_t ssize)
     jl_task_arg_in_transit = (jl_value_t*)jl_null;
     jl_unprotect_stack_func = jl_new_closure(jl_unprotect_stack, (jl_value_t*)jl_null, NULL);
 }
+
+#ifdef __cplusplus
+}
+#endif

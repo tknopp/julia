@@ -94,6 +94,11 @@ function write(s::IO, p::Ptr, n::Integer)
     n
 end
 
+function write(io::IO, s::Symbol)
+    pname = convert(Ptr{Uint8}, s)
+    write(io, pname, int(ccall(:strlen, Csize_t, (Ptr{Uint8},), pname)))
+end
+
 # all subtypes should implement this
 read(s::IO, x::Type{Uint8}) = error(typeof(s)," does not support byte I/O")
 
@@ -115,9 +120,9 @@ read{T}(s::IO, t::Type{T}, d1::Int, dims::Int...) =
 read{T}(s::IO, t::Type{T}, d1::Integer, dims::Integer...) =
     read(s, t, map(int,tuple(d1,dims...)))
 
-read{T}(s::IO, ::Type{T}, dims::Dims) = read(s, Array(T, dims))
+read{T}(s::IO, ::Type{T}, dims::Dims) = read!(s, Array(T, dims))
 
-function read{T}(s::IO, a::Array{T})
+function read!{T}(s::IO, a::Array{T})
     for i = 1:length(a)
         a[i] = read(s, T)
     end
@@ -226,17 +231,9 @@ function done(itr::EachLine, nada)
     true
 end
 next(itr::EachLine, nada) = (readline(itr.stream), nothing)
+eltype(itr::EachLine) = ByteString
 
-function readlines(s, fx::Function...)
-    a = {}
-    for l in eachline(s)
-        for f in fx
-          l = f(l)
-        end
-        push!(a, l)
-    end
-    return a
-end
+readlines(s=STDIN) = collect(eachline(s))
 
 
 ## IOStream
@@ -427,7 +424,7 @@ function read(s::IOStream, ::Type{Uint8})
     uint8(b)
 end
 
-function read{T}(s::IOStream, a::Array{T})
+function read!{T}(s::IOStream, a::Array{T})
     if isbits(T)
         nb = length(a)*sizeof(T)
         if ccall(:ios_readall, Uint,
@@ -435,7 +432,7 @@ function read{T}(s::IOStream, a::Array{T})
             throw(EOFError())
         end
     else
-        invoke(read, (IO, Array), s, a)
+        invoke(read!, (IO, Array), s, a)
     end
     a
 end
@@ -531,7 +528,7 @@ end
 ## Character streams ##
 const _chtmp = Array(Char, 1)
 function peekchar(s::IOStream)
-    if ccall(:ios_peekutf8, Int32, (Ptr{Void}, Ptr{Uint32}), s, _chtmp) < 0
+    if ccall(:ios_peekutf8, Int32, (Ptr{Void}, Ptr{Char}), s, _chtmp) < 0
         return char(-1)
     end
     return _chtmp[1]
@@ -557,4 +554,4 @@ end
 # BitArray I/O
 
 write(s::IO, B::BitArray) = write(s, B.chunks)
-read(s::IO, B::BitArray) = read(s, B.chunks)
+read!(s::IO, B::BitArray) = read!(s, B.chunks)

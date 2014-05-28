@@ -44,20 +44,21 @@
 #include <errno.h>
 
 #include "platform.h"
-
-#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-#include <malloc.h>
-char * basename(char *);
-char * dirname(char *);
-#else
-#include <libgen.h>
-#endif
-
 #include "libsupport.h"
 #include "flisp.h"
 #include "opcodes.h"
 
-#include "utf8proc.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
+#include <malloc.h>
+DLLEXPORT char * basename(char *);
+DLLEXPORT char * dirname(char *);
+#else
+#include <libgen.h>
+#endif
 
 static char *builtin_names[] =
     { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -98,7 +99,7 @@ static uint32_t curr_frame = 0;
 #define POP()   (Stack[--SP])
 #define POPN(n) (SP-=(n))
 
-#define N_GC_HANDLES 1024
+#define N_GC_HANDLES 8192
 static value_t *GCHandleStack[N_GC_HANDLES];
 static uint32_t N_GCHND = 0;
 
@@ -260,34 +261,6 @@ int fl_is_keyword_name(const char *str, size_t len)
     return len>1 && ((str[0] == ':' || str[len-1] == ':') && str[1] != '\0');
 }
 
-// return NFC-normalized UTF8-encoded version of s
-static const char *normalize(char *s)
-{
-    static size_t buflen = 0;
-    static void *buf = NULL; // persistent buffer (avoid repeated malloc/free)
-    // options equivalent to utf8proc_NFC:
-    const int options = UTF8PROC_NULLTERM|UTF8PROC_STABLE|UTF8PROC_COMPOSE;
-    ssize_t result;
-    size_t newlen;
-    result = utf8proc_decompose((uint8_t*) s, 0, NULL, 0, options);
-    if (result < 0) goto error;
-    newlen = result * sizeof(int32_t) + 1;
-    if (newlen > buflen) {
-        buflen = newlen * 2;
-        buf = realloc(buf, buflen);
-        if (!buf) lerror(MemoryError, "error allocating UTF8 buffer");
-    }
-    result = utf8proc_decompose((uint8_t*)s,0, (int32_t*)buf,result, options);
-    if (result < 0) goto error;
-    result = utf8proc_reencode((int32_t*)buf,result, options);
-    if (result < 0) goto error;
-    return (char*) buf;
-error:
-    lerrorf(ParseError, "error normalizing identifier %s: %s", s,
-            utf8proc_errmsg(result));
-}
-
-// note: assumes str is normalized
 static symbol_t *mk_symbol(const char *str)
 {
     symbol_t *sym;
@@ -312,7 +285,6 @@ static symbol_t *mk_symbol(const char *str)
     return sym;
 }
 
-// note: assumes str is normalized
 static symbol_t **symtab_lookup(symbol_t **ptree, const char *str)
 {
     int x;
@@ -331,12 +303,9 @@ static symbol_t **symtab_lookup(symbol_t **ptree, const char *str)
 
 value_t symbol(char *str)
 {
-    symbol_t **pnode;
-    const char *nstr = normalize(str);
-
-    pnode = symtab_lookup(&symtab, nstr);
+    symbol_t **pnode = symtab_lookup(&symtab, str);
     if (*pnode == NULL)
-        *pnode = mk_symbol(nstr);
+        *pnode = mk_symbol(str);
     return tagptr(*pnode, TAG_SYM);
 }
 
@@ -2565,3 +2534,7 @@ int fl_load_system_image(value_t sys_image_iostream)
     POPN(1);
     return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif

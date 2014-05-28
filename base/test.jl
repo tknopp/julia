@@ -40,12 +40,21 @@ function do_test(body,qex)
     end)
 end
 
-function do_test_throws(body,qex)
+function do_test_throws(body, qex, bt, extype)
     handler()(try
         body()
         Failure(qex)
-    catch
-        Success(qex)
+    catch err
+        if extype == nothing
+            Base.warn("@test_throws without an exception type is deprecated\n\t Use @test_throws $(typeof(err)) $(qex)", bt = bt)
+            Success(qex)
+        else
+            if isa(err, extype)
+                Success(qex)
+            else
+                rethrow()
+            end
+        end
     end)
 end
 
@@ -53,17 +62,49 @@ macro test(ex)
     :(do_test(()->($(esc(ex))),$(Expr(:quote,ex))))
 end
 
-macro test_throws(ex)
-    :(do_test_throws(()->($(esc(ex))),$(Expr(:quote,ex))))
-end
-macro test_fails(ex)
-    Base.warn_once("@test_fails is deprecated, use @test_throws instead.")
-    :(@test_throws $ex)
+macro test_throws(args...)
+    ex = nothing
+    extype = nothing
+    # Users should pass (ExceptionType, Expression) but we give a warning to users that only pass (Expression)
+    if length(args) == 1
+        ex = args[1]
+    elseif length(args) == 2
+        ex = args[2]
+        extype = args[1]
+    end
+    :(do_test_throws(()->($(esc(ex))),$(Expr(:quote,ex)),backtrace(),$(esc(extype))))
 end
 
+macro test_fails(ex)
+    Base.warn_once("@test_fails is deprecated, use @test_throws instead.")
+    :(@test_throws $ex Exception)
+end
+
+approx_full(x::AbstractArray) = x
+approx_full(x::Number) = x
+approx_full(x) = full(x)
+
 function test_approx_eq(va, vb, Eps, astr, bstr)
-    diff = maximum(abs(va - vb))
-    if diff > Eps
+    va = approx_full(va)
+    vb = approx_full(vb)
+    if length(va) != length(vb)
+        error("lengths of ", astr, " and ", bstr, " do not match: ",
+              "\n  ", astr, " (length $(length(va))) = ", va,
+              "\n  ", bstr, " (length $(length(vb))) = ", vb)
+    end
+    diff = real(zero(eltype(va)))
+    for i = 1:length(va)
+        xa = va[i]; xb = vb[i]
+        if isfinite(xa) && isfinite(xb)
+            diff = max(diff, abs(xa-xb))
+        elseif !isequal(xa,xb)
+            error("mismatch of non-finite elements: ",
+                  "\n  ", astr, " = ", va,
+                  "\n  ", bstr, " = ", vb)
+        end
+    end
+
+    if !isnan(Eps) && !(diff <= Eps)
         sdiff = string("|", astr, " - ", bstr, "| <= ", Eps)
         error("assertion failed: ", sdiff,
 	      "\n  ", astr, " = ", va,
@@ -72,8 +113,11 @@ function test_approx_eq(va, vb, Eps, astr, bstr)
     end
 end
 
+array_eps{T}(a::AbstractArray{Complex{T}}) = eps(float(maximum(x->(isfinite(x) ? abs(x) : nan(T)), a)))
+array_eps(a) = eps(float(maximum(x->(isfinite(x) ? abs(x) : nan(x)), a)))
+
 test_approx_eq(va, vb, astr, bstr) =
-    test_approx_eq(va, vb, 1E4*length(va)*max(eps(float(maximum(abs(va)))), eps(float(maximum(abs(vb))))), astr, bstr)
+    test_approx_eq(va, vb, 1E4*length(va)*max(array_eps(va), array_eps(vb)), astr, bstr)
 
 macro test_approx_eq_eps(a, b, c)
     :(test_approx_eq($(esc(a)), $(esc(b)), $(esc(c)), $(string(a)), $(string(b))))

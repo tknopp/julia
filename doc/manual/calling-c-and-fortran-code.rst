@@ -11,7 +11,7 @@ and efficient to call C and Fortran functions. Julia has a "no
 boilerplate" philosophy: functions can be called directly from Julia
 without any "glue" code, code generation, or compilation — even from the
 interactive prompt. This is accomplished just by making an appropriate call
-with ``call`` syntax, which looks like an ordinary function call.
+with ``ccall`` syntax, which looks like an ordinary function call.
 
 The code to be called must be available as a shared library. Most C and
 Fortran libraries ship compiled as shared libraries already, but if you
@@ -192,15 +192,19 @@ When a scalar value is passed with ``&`` as an argument of type
 Array conversions
 ~~~~~~~~~~~~~~~~~
 
-When an ``Array`` is passed to C as a ``Ptr`` argument, it is
-"converted" simply by taking the address of the first element. This is
-done in order to avoid copying arrays unnecessarily, and to tolerate the
-slight mismatches in pointer types that are often encountered in C APIs
-(for example, passing a ``Float64`` array to a function that operates on
-uninterpreted bytes).
+When an ``Array{T}`` is passed to C as a ``Ptr{T}`` or ``Ptr{Void}``
+argument, it is "converted" simply by taking the address of the first
+element. This is done in order to avoid copying arrays unnecessarily.
 
 Therefore, if an ``Array`` contains data in the wrong format, it will
 have to be explicitly converted using a call such as ``int32(a)``.
+
+To pass an array ``A`` as a pointer of a different type *without*
+converting the data (for example, to pass a ``Float64`` array to a
+function that operates on uninterpreted bytes), you can either declare
+the argument as ``Ptr{Void}`` or you can explicitly call
+``convert(Ptr{T}, pointer(A))``.
+
 
 Type correspondences
 ~~~~~~~~~~~~~~~~~~~~
@@ -211,8 +215,6 @@ Julia type with the same name, prefixed by C. This can help for writing portable
 
 **System-independent:**
 
-+------------------------+-------------------+--------------------------------+
-| ``bool`` (8 bits)      | ``Cbool``         | ``Bool``                       |
 +------------------------+-------------------+--------------------------------+
 | ``signed char``        |                   | ``Int8``                       |
 +------------------------+-------------------+--------------------------------+
@@ -262,11 +264,6 @@ Julia type with the same name, prefixed by C. This can help for writing portable
 +------------------------+-------------------+--------------------------------+
 | ``jl_value_t*`` (any Julia Type)           | ``Ptr{Any}``                   |
 +------------------------+-------------------+--------------------------------+
-
-*Note:* the ``bool`` type is only defined by C++, where it is 8 bits
-wide. In C, however, ``int`` is often used for boolean values. Since
-``int`` is 32-bits wide (on all supported systems), there is some
-potential for confusion here.
 
 Julia's ``Char`` type is 32 bits, which is not the same as the wide
 character type (``wchar_t`` or ``wint_t``) on all platforms.
@@ -344,6 +341,12 @@ parameter should be true if Julia should "take ownership" of the underlying
 buffer and call ``free(ptr)`` when the returned ``Array`` object is finalized.
 If the ``own`` parameter is omitted or false, the caller must ensure the
 buffer remains in existence until all access is complete.
+
+Arithmetic on the ``Ptr`` type in Julia (e.g. using ``+``) does not behave the
+same as C's pointer arithmetic. Adding an integer to a ``Ptr`` in Julia always
+moves the pointer by some number of *bytes*, not elements. This way, the
+address values obtained from pointer arithmetic do not depend on the
+element types of pointers.
 
 Passing Pointers for Modifying Inputs
 -------------------------------------
