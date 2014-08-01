@@ -52,6 +52,7 @@ static int is_wc_cat_id_start(uint32_t wc, utf8proc_propval_t cat)
             (wc >= 0x2140 && wc <= 0x2a1c &&
              ((wc >= 0x2140 && wc <= 0x2144) || // ⅀, ⅁, ⅂, ⅃, ⅄
               wc == 0x223f || wc == 0x22be || wc == 0x22bf || // ∿, ⊾, ⊿
+              wc == 0x22a4 || wc == 0x22a5 ||   // ⊤ ⊥
               (wc >= 0x22ee && wc <= 0x22f1) || // ⋮, ⋯, ⋰, ⋱
 
               (wc >= 0x2202 && wc <= 0x2233 &&
@@ -92,7 +93,7 @@ static int is_wc_cat_id_start(uint32_t wc, utf8proc_propval_t cat)
             (wc >= 0x309B && wc <= 0x309C)); // katakana-hiragana sound marks
 }
 
-static int jl_id_start_char(uint32_t wc)
+DLLEXPORT int jl_id_start_char(uint32_t wc)
 {
     if ((wc >= 'A' && wc <= 'Z') || (wc >= 'a' && wc <= 'z') || wc == '_')
         return 1;
@@ -102,7 +103,7 @@ static int jl_id_start_char(uint32_t wc)
     return is_wc_cat_id_start(wc, prop->category);
 }
 
-static int jl_id_char(uint32_t wc)
+DLLEXPORT int jl_id_char(uint32_t wc)
 {
     if ((wc >= 'A' && wc <= 'Z') || (wc >= 'a' && wc <= 'z') || wc == '_' ||
         (wc >= '0' && wc <= '9') || wc == '!')

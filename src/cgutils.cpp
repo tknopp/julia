@@ -340,12 +340,12 @@ static Value *literal_pointer_val(jl_value_t *p)
     if (!imaging_mode)
         return literal_static_pointer_val(p, jl_pvalue_llvmt);
     if (jl_is_datatype(p)) {
-        jl_datatype_t* addr = (jl_datatype_t*)p;
+        jl_datatype_t *addr = (jl_datatype_t*)p;
         // DataTypes are prefixed with a +
         return julia_gv("+", addr->name->name, addr->name->module, p);
     }
     if (jl_is_func(p)) {
-        jl_lambda_info_t* linfo = ((jl_function_t*)p)->linfo;
+        jl_lambda_info_t *linfo = ((jl_function_t*)p)->linfo;
         // Functions are prefixed with a -
         if (linfo != NULL)
             return julia_gv("-", linfo->name, linfo->module, p);
@@ -353,12 +353,12 @@ static Value *literal_pointer_val(jl_value_t *p)
         return julia_gv("jl_method#", p);
     }
     if (jl_is_lambda_info(p)) {
-        jl_lambda_info_t* linfo = (jl_lambda_info_t*)p;
+        jl_lambda_info_t *linfo = (jl_lambda_info_t*)p;
         // Type-inferred functions are prefixed with a -
         return julia_gv("-", linfo->name, linfo->module, p);
     }
     if (jl_is_symbol(p)) {
-        jl_sym_t* addr = (jl_sym_t*)p;
+        jl_sym_t *addr = (jl_sym_t*)p;
         // Symbols are prefixed with jl_sym#
         return julia_gv("jl_sym#", addr, NULL, p);
     }
@@ -770,16 +770,26 @@ static void emit_type_error(Value *x, jl_value_t *type, const std::string &msg,
                                          ArrayRef<Value*>(zeros));
     Value *msg_val = builder.CreateGEP(stringConst(msg),
                                        ArrayRef<Value*>(zeros));
-    builder.CreateCall4(prepare_call(jltypeerror_func),
+    builder.CreateCall5(prepare_call(jltypeerror_func),
                         fname_val, msg_val,
-                        literal_pointer_val(type), boxed(x,ctx));
+                        literal_pointer_val(type), boxed(x,ctx),
+                        ConstantInt::get(T_int32, ctx->lineno));
 }
 
 static void emit_typecheck(Value *x, jl_value_t *type, const std::string &msg,
                            jl_codectx_t *ctx)
 {
-    Value *istype =
-        builder.CreateICmpEQ(emit_typeof(x), literal_pointer_val(type));
+    Value *istype;
+    if ((jl_is_tuple(type) && type != (jl_value_t*)jl_tuple_type) ||
+        !jl_is_leaf_type(type)) {
+        istype = builder.
+            CreateICmpNE(builder.CreateCall3(prepare_call(jlsubtype_func), x, literal_pointer_val(type),
+                                             ConstantInt::get(T_int32,1)),
+                         ConstantInt::get(T_int32,0));
+    }
+    else {
+        istype = builder.CreateICmpEQ(emit_typeof(x), literal_pointer_val(type));
+    }
     BasicBlock *failBB = BasicBlock::Create(getGlobalContext(),"fail",ctx->f);
     BasicBlock *passBB = BasicBlock::Create(getGlobalContext(),"pass");
     builder.CreateCondBr(istype, passBB, failBB);
@@ -922,6 +932,8 @@ static jl_value_t *expr_type(jl_value_t *e, jl_codectx_t *ctx)
 {
     if (jl_is_expr(e))
         return ((jl_expr_t*)e)->etype;
+    if (e == (jl_value_t*)jl_null)
+        return e;
     if (jl_is_symbolnode(e))
         return jl_symbolnode_type(e);
     if (jl_is_quotenode(e)) {

@@ -1,6 +1,6 @@
 module REPLCompletions
 
-export completions, shell_completions
+export completions, shell_completions, latex_completions
 
 using Base.Meta
 
@@ -140,8 +140,9 @@ end
 
 include("latex_symbols.jl")
 
-const non_identifier_chars = [" \t\n\"\\'`\$><=:;|&{}()[],+-*/?%^~"...]
-const non_filename_chars = [" \t\n\"\\'`@\$><=;|&{("...]
+const non_identifier_chars = [" \t\n\r\"\\'`\$><=:;|&{}()[],+-*/?%^~"...]
+const non_filename_chars = [" \t\n\r\"\\'`@\$><=;|&{("...]
+const whitespace_chars = [" \t\n\r"...]
 
 # Aux function to detect whether we're right after a
 # using or import keyword
@@ -156,6 +157,24 @@ function afterusing(string::ByteString, startpos::Int)
     return ismatch(r"^\b(using|import)\s*(\w+\s*,\s*)*\w*$", str[fr:end])
 end
 
+function latex_completions(string, pos)
+    slashpos = rsearch(string, '\\', pos)
+    if rsearch(string, whitespace_chars, pos) < slashpos
+        # latex symbol substitution
+        s = string[slashpos:pos]
+        latex = get(latex_symbols, s, "")
+        if !isempty(latex) # complete an exact match
+            return (true, ([latex], slashpos:pos, true))
+        else
+            # return possible matches; these cannot be mixed with regular
+            # Julian completions as only latex symbols contain the leading \
+            latex_names = filter(k -> beginswith(k, s), keys(latex_symbols))
+            return (true, (sort!(collect(latex_names)), slashpos:pos, true))
+        end
+    end
+    return (false, (UTF8String[], 0:-1, false))
+end
+
 function completions(string, pos)
     inc_tag = Base.incomplete_tag(parse(string[1:pos], raise=false))
     if inc_tag in [:cmd, :string]
@@ -168,13 +187,8 @@ function completions(string, pos)
         return sort(paths), r, true
     end
 
-    slashpos = rsearch(string, '\\', pos)
-    if slashpos > 0
-        latex = get(latex_symbols, string[slashpos:pos], "")
-        if !isempty(latex)
-            return [latex], slashpos:pos, true
-        end
-    end
+    ok, ret = latex_completions(string,pos)
+    ok && return ret
 
     if inc_tag == :other && string[pos] == '('
         endpos = prevind(string, pos)
@@ -231,11 +245,16 @@ function shell_completions(string,pos)
     if isa(arg,String)
         # Treat this as a path (perhaps give a list of comands in the future as well?)
         dir,name = splitdir(arg)
-        if isempty(dir)
-            files = readdir()
-        else
-            isdir(dir) || return UTF8String[], 0:-1, false
-            files = readdir(dir)
+        local files
+        try
+            if isempty(dir)
+                files = readdir()
+            else
+                isdir(dir) || return UTF8String[], 0:-1, false
+                files = readdir(dir)
+            end
+        catch
+            return UTF8String[], 0:-1, false
         end
         # Filter out files and directories that do not begin with the partial name we were
         # completing and append "/" to directories to simplify further completion

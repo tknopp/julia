@@ -1,4 +1,5 @@
 JULIAHOME = $(abspath ..)
+include $(JULIAHOME)/deps/Versions.make
 include $(JULIAHOME)/Make.inc
 
 override CFLAGS += $(JCFLAGS)
@@ -12,12 +13,21 @@ endif
 
 DEBUGFLAGS += $(FLAGS)
 SHIPFLAGS += $(FLAGS)
-JLDFLAGS += $(LDFLAGS) $(NO_WHOLE_ARCHIVE) $(call exec,$(LLVM_CONFIG) --ldflags) $(OSLIBS) $(RPATH)
+ifeq ($(USE_LLVM_SHLIB),1)
+LLVMLINK = $(call exec,$(LLVM_CONFIG) --ldflags) -lLLVM-$(LLVM_VER)
+else
+LLVMLINK =
+endif
+JLDFLAGS += $(LDFLAGS) $(NO_WHOLE_ARCHIVE) $(OSLIBS) $(LLVMLINK) $(RPATH)
 
 ifeq ($(USE_SYSTEM_LIBM),0)
 ifneq ($(UNTRUSTED_SYSTEM_LIBM),0)
 JLDFLAGS += $(WHOLE_ARCHIVE) $(build_libdir)/libopenlibm.a $(NO_WHOLE_ARCHIVE)
 endif
+endif
+
+ifeq ($(OS),WINNT)
+JLDFLAGS += -municode
 endif
 
 release debug:

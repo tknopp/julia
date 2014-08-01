@@ -520,7 +520,7 @@ function resize!(B::BitVector, n::Integer)
     n == n0 && return B
     n >= 0 || throw(BoundsError())
     if n < n0
-        splice!(B, n+1:n0)
+        deleteat!(B, n+1:n0)
         return B
     end
     Bc = B.chunks
@@ -592,34 +592,30 @@ function shift!(B::BitVector)
 end
 
 function insert!(B::BitVector, i::Integer, item)
-    i < 1 && throw(BoundsError())
+    n = length(B)
+    1 <= i <= n+1 || throw(BoundsError())
     item = convert(Bool, item)
 
-    n = length(B)
-    if i > n
-        x = falses(i - n)
-        append!(B, x)
-    else
-        Bc = B.chunks
+    Bc = B.chunks
 
-        k, j = get_chunks_id(i)
+    k, j = get_chunks_id(i)
 
-        l = @_mod64 length(B)
-        if l == 0
-            ccall(:jl_array_grow_end, Void, (Any, Uint), Bc, 1)
-            Bc[end] = uint64(0)
-        end
-        B.len += 1
-
-        for t = length(Bc) : -1 : k + 1
-            Bc[t] = (Bc[t] << 1) | (Bc[t - 1] >>> 63)
-        end
-
-        msk_aft = (_msk64 << j)
-        msk_bef = ~msk_aft
-        Bc[k] = (msk_bef & Bc[k]) | ((msk_aft & Bc[k]) << 1)
+    l = @_mod64 length(B)
+    if l == 0
+        ccall(:jl_array_grow_end, Void, (Any, Uint), Bc, 1)
+        Bc[end] = uint64(0)
     end
+    B.len += 1
+
+    for t = length(Bc) : -1 : k + 1
+        Bc[t] = (Bc[t] << 1) | (Bc[t - 1] >>> 63)
+    end
+
+    msk_aft = (_msk64 << j)
+    msk_bef = ~msk_aft
+    Bc[k] = (msk_bef & Bc[k]) | ((msk_aft & Bc[k]) << 1)
     B[i] = item
+    B
 end
 
 function _deleteat!(B::BitVector, i::Integer)
@@ -1061,11 +1057,6 @@ function (==)(A::BitArray, B::BitArray)
     return A.chunks == B.chunks
 end
 
-function (!=)(A::BitArray, B::BitArray)
-    size(A) != size(B) && return true
-    return A.chunks != B.chunks
-end
-
 
 ## Data movement ##
 
@@ -1385,8 +1376,7 @@ end
 
 ## Reductions ##
 
-sum(A::BitArray, region) = reducedim(+, A, region, 0, Array(Int,reduced_dims(A,region)))
-
+sum(A::BitArray, region) = reducedim(AddFun(), A, region)
 sum(B::BitArray) = countnz(B)
 
 function all(B::BitArray)
@@ -1716,3 +1706,11 @@ function cat(catdim::Integer, X::Union(BitArray, Integer)...)
 end
 
 # hvcat -> use fallbacks in abstractarray.jl
+
+
+# BitArray I/O
+
+write(s::IO, B::BitArray) = write(s, B.chunks)
+read!(s::IO, B::BitArray) = read!(s, B.chunks)
+
+sizeof(B::BitArray) = sizeof(B.chunks)

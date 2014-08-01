@@ -52,7 +52,7 @@ Functions
 ---------
 
 I passed an argument ``x`` to a function, modified it inside that function, but on the outside, the variable ``x`` is still unchanged. Why?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Suppose you call a function like this::
 
@@ -86,6 +86,43 @@ But here is a thing you should pay attention to: suppose ``x`` is bound to an Ar
 
 Here we created a function ``change_array!()``, that assigns ``5`` to the first element of the Array. We passed ``x`` (which was previously bound to an Array) to the function. Notice that, after the function call, ``x`` is still bound to the same Array, but the content of that Array changed.
 
+
+Can I use ``using`` or ``import`` inside a function?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+No, you are not allowed to have a ``using`` or ``import`` statement inside
+a function.  If you want to import a module but only use its symbols
+inside a specific function or set of functions, you have two options:
+
+1.  Use ``import``::
+
+        import Foo
+        function bar(...)
+            ... refer to Foo symbols via Foo.baz ...
+        end
+
+
+    This loads the module Foo and defines a variable ``Foo`` that refers
+    to the module, but does not import any of the other symbols from the
+    module into the current namespace.  You refer to the ``Foo`` symbols by
+    their qualified names ``Foo.bar`` etc.
+
+
+2.  Wrap your function in a module::
+
+        module Bar
+        export bar
+        using Foo
+        function bar(...)
+            ... refer to Foo.baz as simply baz ....
+        end
+        end
+        using Bar
+
+    This imports all the symbols from Foo, but only inside the module Bar.
+
+
+
 Types, type declarations, and constructors
 ------------------------------------------
 
@@ -111,6 +148,42 @@ It returns either an ``Int`` or a ``Float64`` depending on the value of its
 argument. Since Julia can't predict the return type of this function at
 compile-time, any computation that uses it will have to guard against both
 types possibly occurring, making generation of fast machine code difficult.
+
+.. _man-domain-error:
+
+Why does Julia give a ``DomainError`` for certain seemingly-sensible operations?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Certain operations make mathematical sense but result in errors::
+
+    julia> sqrt(-2.0)
+    ERROR: DomainError
+     in sqrt at math.jl:128
+
+    julia> 2^-5
+    ERROR: DomainError
+     in power_by_squaring at intfuncs.jl:70
+     in ^ at intfuncs.jl:84
+
+This behavior is an inconvenient consequence of the requirement for
+type-stability.  In the case of ``sqrt``, most users want
+``sqrt(2.0)`` to give a real number, and would be unhappy if it
+produced the complex number ``1.4142135623730951 + 0.0im``.  One could
+write the ``sqrt`` function to switch to a complex-valued output only
+when passed a negative number (which is what ``sqrt`` does in some
+other languages), but then the result would not be `type-stable
+<#man-type-stable>`_ and the ``sqrt`` function would have poor
+performance.
+
+In these and other cases, you can get the result you want by choosing
+an *input type* that conveys your willingness to accept an *output type* in
+which the result can be represented::
+
+    julia> sqrt(-2.0+0im)
+    0.0 + 1.4142135623730951im
+
+    julia> 2.0^-5
+    0.03125
 
 
 Why does Julia use native machine integer arithmetic?
@@ -147,7 +220,7 @@ generation of efficient code. If you can't count on the results of integer
 operations being integers, it's impossible to generate fast, simple code the
 way C and Fortran compilers do.
 
-A variation on this approach, which avoids the appearance of type instabilty is to merge the ``Int`` and ``BigInt`` types into a single hybrid integer type, that internally changes representation when a result no longer fits into the size of a machine integer. While this superficially avoids type-instability at the level of Julia code, it just sweeps the problem under the rug by foisting all of the same difficulties onto the C code implementing this hybrid integer type. This approach *can* be made to work and can even be made quite fast in many cases, but has several drawbacks. One problem is that the in-memory representation of integers and arrays of integers no longer match the natural representation used by C, Fortran and other languages with native machine integers. Thus, to interoperate with those languages, we would ultimately need to introduce native integer types anyway. Any unbounded representation of integers cannot have a fixed number of bits, and thus cannot be stored inline in an array with fixed-size slots – large integer values will always require separate heap-allcoated storage. And of course, no matter how clever a hybrid integer implementation one uses, there are always performance traps – situations where performance degrades unexpectedly. Complex representation, lack of interoperability with C and Fortran, the inability to represent integer arrays without additional heap storage, and unpredictable performance characteristics make even the cleverest hybrid integer implementations a poor choice for high-performance numerical work.
+A variation on this approach, which avoids the appearance of type instabilty is to merge the ``Int`` and ``BigInt`` types into a single hybrid integer type, that internally changes representation when a result no longer fits into the size of a machine integer. While this superficially avoids type-instability at the level of Julia code, it just sweeps the problem under the rug by foisting all of the same difficulties onto the C code implementing this hybrid integer type. This approach *can* be made to work and can even be made quite fast in many cases, but has several drawbacks. One problem is that the in-memory representation of integers and arrays of integers no longer match the natural representation used by C, Fortran and other languages with native machine integers. Thus, to interoperate with those languages, we would ultimately need to introduce native integer types anyway. Any unbounded representation of integers cannot have a fixed number of bits, and thus cannot be stored inline in an array with fixed-size slots – large integer values will always require separate heap-allocated storage. And of course, no matter how clever a hybrid integer implementation one uses, there are always performance traps – situations where performance degrades unexpectedly. Complex representation, lack of interoperability with C and Fortran, the inability to represent integer arrays without additional heap storage, and unpredictable performance characteristics make even the cleverest hybrid integer implementations a poor choice for high-performance numerical work.
 
 An alternative to using hybrid integers or promoting to BigInts is to use
 saturating integer arithmetic, where adding to the largest integer value
@@ -385,7 +458,7 @@ the wrapper object.  For example:
     MyType{Float64} (constructor with 1 method)
 
     julia> typeof(t)
-    MyStillAmbiguousType (constructor with 1 method)
+    MyStillAmbiguousType (constructor with 2 methods)
 
 The type of field ``a`` can be readily determined from the type of
 ``m``, but not from the type of ``t``.  Indeed, in ``t`` it's possible
@@ -483,7 +556,7 @@ For example:
     julia> c = MySimpleContainer(1:3);
 
     julia> typeof(c)
-    MySimpleContainer{Range1{Int64}} (constructor with 1 method)
+    MySimpleContainer{UnitRange{Int64}} (constructor with 1 method)
 
     julia> c = MySimpleContainer([1:3]);
 

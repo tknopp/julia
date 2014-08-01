@@ -84,6 +84,12 @@ void jl_type_error_rt(const char *fname, const char *context,
     jl_throw(ex);
 }
 
+void jl_type_error_rt_line(const char *fname, const char *context,
+                           jl_value_t *ty, jl_value_t *got, int line)
+{
+    jl_type_error_rt(fname, context, ty, got);
+}
+
 void jl_type_error(const char *fname, jl_value_t *expected, jl_value_t *got)
 {
     jl_type_error_rt(fname, "", expected, got);
@@ -550,7 +556,6 @@ JL_CALLABLE(jl_f_set_field)
 JL_CALLABLE(jl_f_field_type)
 {
     JL_NARGS(fieldtype, 2, 2);
-    JL_TYPECHK(fieldtype, symbol, args[1]);
     jl_value_t *v = args[0];
     jl_value_t *vt = (jl_value_t*)jl_typeof(v);
     if (vt == (jl_value_t*)jl_module_type)
@@ -558,8 +563,17 @@ JL_CALLABLE(jl_f_field_type)
     if (!jl_is_datatype(vt))
         jl_type_error("fieldtype", (jl_value_t*)jl_datatype_type, v);
     jl_datatype_t *st = (jl_datatype_t*)vt;
-    jl_sym_t *fld = (jl_sym_t*)args[1];
-    return jl_tupleref(st->types, jl_field_index(st, fld, 1));
+    int field_index;
+    if (jl_is_long(args[1])) {
+        field_index = jl_unbox_long(args[1]) - 1;
+        if (field_index < 0 || field_index >= jl_tuple_len(st->names))
+            jl_throw(jl_bounds_exception);
+    }
+    else {
+        JL_TYPECHK(fieldtype, symbol, args[1]);
+        field_index = jl_field_index(st, (jl_sym_t*)args[1], 1);
+    }
+    return jl_tupleref(st->types, field_index);
 }
 
 // conversion -----------------------------------------------------------------
@@ -609,7 +623,7 @@ DLLEXPORT int jl_substrtod(char *str, size_t offset, int len, double *out)
     char *bstr = str+offset;
     char *pend = bstr+len;
     int err = 0;
-    if (!(*pend == '\0' || isspace(*pend) || *pend == ',')) {
+    if (!(*pend == '\0' || isspace((unsigned char)*pend) || *pend == ',')) {
         // confusing data outside substring. must copy.
         char *newstr = malloc(len+1);
         memcpy(newstr, bstr, len);
@@ -635,7 +649,7 @@ DLLEXPORT int jl_strtod(char *str, double *out)
         (errno==ERANGE && (*out==0 || *out==HUGE_VAL || *out==-HUGE_VAL)))
         return 1;
     while (*p != '\0') {
-        if (!isspace(*p))
+        if (!isspace((unsigned char)*p))
             return 1;
         p++;
     }
@@ -654,7 +668,7 @@ DLLEXPORT int jl_substrtof(char *str, int offset, int len, float *out)
     char *bstr = str+offset;
     char *pend = bstr+len;
     int err = 0;
-    if (!(*pend == '\0' || isspace(*pend) || *pend == ',')) {
+    if (!(*pend == '\0' || isspace((unsigned char)*pend) || *pend == ',')) {
         // confusing data outside substring. must copy.
         char *newstr = malloc(len+1);
         memcpy(newstr, bstr, len);
@@ -689,7 +703,7 @@ DLLEXPORT int jl_strtof(char *str, float *out)
         (errno==ERANGE && (*out==0 || *out==HUGE_VALF || *out==-HUGE_VALF)))
         return 1;
     while (*p != '\0') {
-        if (!isspace(*p))
+        if (!isspace((unsigned char)*p))
             return 1;
         p++;
     }
@@ -797,9 +811,9 @@ JL_CALLABLE(jl_f_new_type_constructor)
 JL_CALLABLE(jl_f_typevar)
 {
     if (nargs < 1 || nargs > 3) {
-        JL_NARGS(typevar, 1, 1);
+        JL_NARGS(TypeVar, 1, 1);
     }
-    JL_TYPECHK(typevar, symbol, args[0]);
+    JL_TYPECHK(TypeVar, symbol, args[0]);
     jl_value_t *lb = (jl_value_t*)jl_bottom_type;
     jl_value_t *ub = (jl_value_t*)jl_any_type;
     int b = 0;
@@ -808,9 +822,9 @@ JL_CALLABLE(jl_f_typevar)
         nargs--;
     }
     if (nargs > 1) {
-        JL_TYPECHK(typevar, type, args[1]);
+        JL_TYPECHK(TypeVar, type, args[1]);
         if (nargs > 2) {
-            JL_TYPECHK(typevar, type, args[2]);
+            JL_TYPECHK(TypeVar, type, args[2]);
             lb = args[1];
             ub = args[2];
         }
@@ -1188,7 +1202,9 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
         n += jl_static_show(out, ((jl_typector_t*)v)->body);
     }
     else if (jl_is_typevar(v)) {
-        n += JL_PRINTF(out, "%s", ((jl_tvar_t*)v)->name->name);
+        n += jl_static_show(out, ((jl_tvar_t*)v)->lb);
+        n += JL_PRINTF(out, "<:%s<:", ((jl_tvar_t*)v)->name->name);
+        n += jl_static_show(out, ((jl_tvar_t*)v)->ub);
     }
     else if (jl_is_module(v)) {
         jl_module_t *m = (jl_module_t*)v;
@@ -1218,9 +1234,10 @@ DLLEXPORT size_t jl_static_show(JL_STREAM *out, jl_value_t *v)
         n += JL_PRINTF(out, "goto %d", jl_gotonode_label(v));
     }
     else if (jl_is_quotenode(v)) {
-        n += JL_PRINTF(out, "quote ");
-        n += jl_static_show(out, jl_fieldref(v,0));
-        n += JL_PRINTF(out, " end");
+        jl_value_t *qv = jl_fieldref(v,0);
+        if (!jl_is_symbol(qv)) { n += JL_PRINTF(out, "quote "); }
+        n += jl_static_show(out, qv);
+        if (!jl_is_symbol(qv)) { n += JL_PRINTF(out, " end"); }
     }
     else if (jl_is_topnode(v)) {
         n += JL_PRINTF(out, "top(");
@@ -1331,7 +1348,7 @@ DLLEXPORT void jl_(void *jl_value)
     in_jl_--;
 }
 
-DLLEXPORT void jl_breakpoint(jl_value_t* v)
+DLLEXPORT void jl_breakpoint(jl_value_t *v)
 {
     // put a breakpoint in you debugger here
 }

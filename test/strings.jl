@@ -692,6 +692,26 @@ for i1 = 1:length(u8str2)
     end
 end
 
+str="tempus fugit"              #length(str)==12
+ss=SubString(str,1,length(str)) #match source string
+@test length(ss)==length(str)
+
+ss=SubString(str,1,0)    #empty SubString
+@test length(ss)==0
+
+ss=SubString(str,14,20)  #start indexed beyond source string length
+@test length(ss)==0
+
+ss=SubString(str,10,16)  #end indexed beyond source string length
+@test length(ss)==3
+
+str2=""
+ss=SubString(str2,1,4)  #empty source string
+@test length(ss)==0
+
+ss=SubString(str2,1,1)  #empty source string, identical start and end index
+@test length(ss)==0
+
 str = "aa\u2200\u2222bb"
 u = SubString(str, 3, 6)
 @test length(u)==2
@@ -786,6 +806,23 @@ s = "   p"
 @test """
        $s
       """ == " $s$(nl)"
+@test """\t""" == "\t"
+@test """
+      \t""" == ""
+@test """
+      foo
+      \tbar""" == "foo$(nl)\tbar"
+@test """
+      foo
+      \tbar
+      """ == "foo$(nl)\tbar$(nl)"
+@test """
+      foo
+      bar\t""" == "foo$(nl)bar\t"
+@test """
+      foo
+      \tbar
+       """ == "foo$(nl)       bar$(nl)"
 
 # bytes2hex and hex2bytes
 hex_str = "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
@@ -816,7 +853,7 @@ bin_val = hex2bytes("07bf")
 @test sizeof(RopeString("abc","def")) == 6
 
 # issue #3597
-@test string(UTF32String(['T', 'e', 's', 't'])[1:1], "X") == "TX"
+@test string(utf32(['T', 'e', 's', 't'])[1:1], "X") == "TX"
 
 # issue #3710
 @test prevind(SubString("{var}",2,4),4) == 3
@@ -973,4 +1010,90 @@ let f =IOBuffer(),
     @test takebuf_string(f) == "123"
     @test invoke(write, (IO, AbstractArray), f, x) == 3
     @test takebuf_string(f) == "123"
+end
+
+# issue #7248
+@test_throws BoundsError ind2chr("hello", -1)
+@test_throws BoundsError chr2ind("hello", -1)
+@test_throws BoundsError ind2chr("hellø", -1)
+@test_throws BoundsError chr2ind("hellø", -1)
+@test_throws BoundsError ind2chr("hello", 10)
+@test_throws BoundsError chr2ind("hello", 10)
+@test_throws BoundsError ind2chr("hellø", 10)
+@test_throws BoundsError chr2ind("hellø", 10)
+@test_throws BoundsError checkbounds("hello", 0)
+@test_throws BoundsError checkbounds("hello", 6)
+@test_throws BoundsError checkbounds("hello", 0:3)
+@test_throws BoundsError checkbounds("hello", 4:6)
+@test_throws BoundsError checkbounds("hello", [0:3])
+@test_throws BoundsError checkbounds("hello", [4:6])
+@test checkbounds("hello", 2)
+@test checkbounds("hello", 1:5)
+@test checkbounds("hello", [1:5])
+
+
+# isvalid(), chr2ind() and ind2chr() for SubString{DirectIndexString}
+let s="lorem ipsum",
+    sdict=[SubString(s,1,11)=>s, 
+        SubString(s,1,6)=>"lorem ",
+        SubString(s,1,0)=>"", 
+        SubString(s,2,4)=>"ore", 
+        SubString(s,2,16)=>"orem ipsum", 
+        SubString(s,12,14)=>""
+    ]
+    for (ss,s) in sdict
+        for i in -1:12
+            @test isvalid(ss,i)==isvalid(s,i)
+        end
+    end
+    for (ss,s) in sdict
+        for i in 1:length(ss)
+            @test ind2chr(ss,i)==ind2chr(s,i)
+        end
+    end
+    for (ss,s) in sdict
+        for i in 1:length(ss)
+            @test chr2ind(ss,i)==chr2ind(s,i)
+        end
+    end
+end #let
+
+#for isvalid(SubString{UTF8String})
+let s = utf8("Σx + βz - 2")
+  for i in -1:length(s)+2
+      ss=SubString(s,1,i)
+      @test isvalid(ss,i)==isvalid(s,i)
+  end
+end
+
+ss=SubString("hello",1,5)
+@test_throws BoundsError ind2chr(ss, -1)
+@test_throws BoundsError chr2ind(ss, -1)
+@test_throws BoundsError chr2ind(ss, 10)
+@test_throws BoundsError ind2chr(ss, 10)
+
+# length(SubString{UTF8String}) performance specialization
+let s = "|η(α)-ϕ(κ)| < ε"
+    @test length(SubString(s,1,0))==length(s[1:0])
+    @test length(SubString(s,4,4))==length(s[4:4])
+    @test length(SubString(s,1,7))==length(s[1:7])
+    @test length(SubString(s,4,11))==length(s[4:11])
+end
+
+# issue #7764
+let
+    srep = RepString("Σβ",2)
+    s="Σβ"
+    ss=SubString(s,1,endof(s))
+
+    @test ss^2 == "ΣβΣβ"
+    @test RepString(ss,2) == "ΣβΣβ"
+
+    @test endof(srep) == 7
+
+    @test next(srep, 3) == ('β',5)
+    @test next(srep, 7) == ('β',9)
+
+    @test srep[7] == 'β'
+    @test_throws BoundsError srep[8]
 end

@@ -16,6 +16,7 @@
 #endif
 #include "julia.h"
 #include "julia_internal.h"
+#include "uv.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,21 +51,35 @@ jl_module_t *jl_new_main_module(void)
 
     jl_main_module = jl_new_module(jl_symbol("Main"));
     jl_main_module->parent = jl_main_module;
+    jl_current_module = jl_main_module;
+
     jl_core_module->parent = jl_main_module;
     jl_set_const(jl_main_module, jl_symbol("Core"),
                  (jl_value_t*)jl_core_module);
     jl_set_global(jl_core_module, jl_symbol("Main"),
                   (jl_value_t*)jl_main_module);
-
-    jl_current_module = jl_main_module;
     jl_current_task->current_module = jl_main_module;
 
     return old_main;
 }
 
+jl_array_t *jl_module_init_order = NULL;
+
+// load time init procedure: in build mode, only record order
+void jl_module_load_time_initialize(jl_module_t *m)
+{
+    int build_mode = (jl_compileropts.build_path != NULL);
+    if (build_mode) {
+        if (jl_module_init_order == NULL)
+            jl_module_init_order = jl_alloc_cell_1d(0);
+        jl_cell_1d_push(jl_module_init_order, (jl_value_t*)m);
+    }
+    else {
+        jl_module_run_initializer(m);
+    }
+}
+
 extern void jl_get_system_hooks(void);
-extern void jl_get_uv_hooks(int);
-extern int base_module_conflict;
 jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
 {
     static arraylist_t module_stack;
@@ -92,13 +107,18 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
     jl_module_t *newm = jl_new_module(name);
     newm->parent = parent_module;
     b->value = (jl_value_t*)newm;
-    int newbase = 0;
     if (parent_module == jl_main_module && name == jl_symbol("Base")) {
-        base_module_conflict = (jl_base_module != NULL);
-        jl_old_base_module = jl_base_module;
         // pick up Base module during bootstrap
+        jl_old_base_module = jl_base_module;
         jl_base_module = newm;
-        newbase = base_module_conflict;
+        // reinitialize global variables
+        // to pick up new types from Base
+        jl_errorexception_type = NULL;
+        jl_typeerror_type = NULL;
+        jl_methoderror_type = NULL;
+        jl_loaderror_type = NULL;
+        jl_weakref_type = NULL;
+        jl_current_task->tls = jl_nothing;
     }
     // export all modules from Main
     if (parent_module == jl_main_module)
@@ -132,15 +152,6 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
     jl_current_module = last_module;
     jl_current_task->current_module = task_last_m;
 
-    if (newbase) {
-        // reinitialize global variables
-        // to pick up new types from Base
-        jl_errorexception_type = NULL;
-        jl_get_system_hooks();
-        jl_get_uv_hooks(1);
-        jl_current_task->tls = jl_nothing;
-    }
-
 #if 0
     // some optional post-processing steps
     size_t i;
@@ -165,7 +176,7 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
 
     if (jl_current_module == jl_main_module) {
         while (module_stack.len > 0) {
-            jl_module_run_initializer((jl_module_t *) arraylist_pop(&module_stack));
+            jl_module_load_time_initialize((jl_module_t *) arraylist_pop(&module_stack));
         }
     }
 
@@ -548,7 +559,10 @@ jl_value_t *jl_load(const char *fname)
 {
     if (jl_current_module == jl_base_module) {
         //This deliberatly uses ios, because stdio initialization has been moved to Julia
-        jl_printf(JL_STDOUT, "%s\n", fname);
+        jl_printf(JL_STDOUT, "%s\r\n", fname);
+#ifdef _OS_WINDOWS_        
+        uv_run(uv_default_loop(), 1);
+#endif
     }
     char *fpath = (char*)fname;
     uv_stat_t stbuf;

@@ -62,7 +62,7 @@ function parse(s::String)
                 end
                 list[i] *= list[j]
             end
-            splice!(list,i+1:j)
+            deleteat!(list,i+1:j)
         end
         i += 1
     end
@@ -794,7 +794,7 @@ function bigfloat_printf(out, d, flags::ASCIIString, width::Int, precision::Int,
         write(fmt, '0')
     elseif precision > 0
         write(fmt, '.')
-        print(fmt, precision+1)
+        print(fmt, precision)
     end
     write(fmt, 'R')
     write(fmt, c)

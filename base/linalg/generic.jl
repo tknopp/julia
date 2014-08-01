@@ -11,26 +11,26 @@ end
 
 scale{R<:Real}(s::Complex, X::AbstractArray{R}) = scale(X, s)
 
-function generic_scale!(X::AbstractArray, s::Number)
+generic_scale!(X::AbstractArray, s::Number) = generic_scale!(X, X, s)
+function generic_scale!(C::AbstractArray, X::AbstractArray, s::Number)
+    length(C) == length(X) || error("C must be the same length as X")
     for i = 1:length(X)
-        @inbounds X[i] *= s
+        @inbounds C[i] = X[i]*s
     end
-    X
+    C
 end
-scale!(X::AbstractArray, s::Number) = generic_scale!(X, s)
-scale!(s::Number, X::AbstractArray) = generic_scale!(X, s)
+scale!(C::AbstractArray, s::Number, X::AbstractArray) = generic_scale!(C, X, s)
+scale!(C::AbstractArray, X::AbstractArray, s::Number) = generic_scale!(C, X, s)
+scale!(X::AbstractArray, s::Number) = generic_scale!(X, X, s)
+scale!(s::Number, X::AbstractArray) = generic_scale!(X, X, s)
 
 cross(a::AbstractVector, b::AbstractVector) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
 
-triu(M::AbstractMatrix) = triu(M,0)
-tril(M::AbstractMatrix) = tril(M,0)
-#triu{T}(M::AbstractMatrix{T}, k::Integer)
-#tril{T}(M::AbstractMatrix{T}, k::Integer)
+triu(M::AbstractMatrix) = triu!(copy(M))
+tril(M::AbstractMatrix) = tril!(copy(M))
 triu!(M::AbstractMatrix) = triu!(M,0)
 tril!(M::AbstractMatrix) = tril!(M,0)
 
-#diff(a::AbstractVector)
-#diff(a::AbstractMatrix, dim::Integer)
 diff(a::AbstractMatrix) = diff(a, 1)
 diff(a::AbstractVector) = [ a[i+1] - a[i] for i=1:length(a)-1 ]
 
@@ -45,10 +45,8 @@ end
 
 gradient(F::AbstractVector) = gradient(F, [1:length(F)])
 gradient(F::AbstractVector, h::Real) = gradient(F, [h*(1:length(F))])
-#gradient(F::AbstractVector, h::AbstractVector)
 
 diag(A::AbstractVector) = error("use diagm instead of diag to construct a diagonal matrix")
-#diag(A::AbstractMatrix)
 
 #diagm{T}(v::AbstractVecOrMat{T})
 
@@ -251,7 +249,7 @@ function issym(A::AbstractMatrix)
     m, n = size(A)
     m==n || return false
     for i = 1:(n-1), j = (i+1):n
-        if A[i,j] != A[j,i]
+        if A[i,j] != transpose(A[j,i])
             return false
         end
     end
@@ -264,7 +262,7 @@ function ishermitian(A::AbstractMatrix)
     m, n = size(A)
     m==n || return false
     for i = 1:n, j = i:n
-        if A[i,j] != conj(A[j,i])
+        if A[i,j] != ctranspose(A[j,i])
             return false
         end
     end
@@ -415,3 +413,11 @@ function elementaryRightTrapezoid!(A::AbstractMatrix, row::Integer)
     end
     conj(ξ1/ν)
 end
+
+function det(A::AbstractMatrix)
+    (istriu(A) || istril(A)) && return det(Triangular(A, :U, false))
+    return det(lufact(A))
+end
+det(x::Number) = x
+
+logdet(A::AbstractMatrix) = logdet(lufact(A))
