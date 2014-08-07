@@ -92,9 +92,9 @@ public:
 
         FuncInfo tmp = {&F, Size, std::string(), std::string(), tbl, Details.LineStarts};
 #else
-        FuncInfo tmp = {&F, Size, std::string(), std::string(), Details.LineStarts};
+        FuncInfo tmp = {&F, Size, std::string(F.getName().data()), std::string(), Details.LineStarts};
 #endif
-        if (tmp.lines.size() != 0) info[(size_t)(Code)] = tmp;
+        info[(size_t)(Code)] = tmp;
     }
 
     std::map<size_t, FuncInfo, revcomp>& getMap()
@@ -162,11 +162,13 @@ const char *jl_demangle(const char *name)
 
 JuliaJITEventListener *jl_jit_events;
 
-extern "C" void jl_getFunctionInfo(const char **name, int *line, const char **filename, uintptr_t pointer, int skipC);
+extern "C" void jl_getFunctionInfo(const char **name, size_t *line, const char **filename, uintptr_t pointer, int *fromC, int skipC);
 
-void lookup_pointer(DIContext *context, const char **name, int *line, const char **filename, size_t pointer, int demangle)
+void lookup_pointer(DIContext *context, const char **name, size_t *line, const char **filename, size_t pointer, int demangle, int *fromC)
 {
-    if (context == NULL) return;
+    DILineInfo info;
+    if (demangle && *name != NULL)
+        *name = jl_demangle(*name);
     #ifdef LLVM35
     DILineInfoSpecifier infoSpec(DILineInfoSpecifier::FileLineInfoKind::AbsoluteFilePath,
                                  DILineInfoSpecifier::FunctionNameKind::ShortName);
@@ -175,22 +177,26 @@ void lookup_pointer(DIContext *context, const char **name, int *line, const char
                    DILineInfoSpecifier::AbsoluteFilePath |
                    DILineInfoSpecifier::FunctionName;
     #endif
-    DILineInfo info = context->getLineInfoForAddress(pointer, infoSpec);
-
+    if (context == NULL) goto done;
+    info = context->getLineInfoForAddress(pointer, infoSpec);
     #ifndef LLVM35 // LLVM <= 3.4
-    if (strcmp(info.getFunctionName(), "<invalid>") == 0) return;
+    if (strcmp(info.getFunctionName(), "<invalid>") == 0) goto done;
     if (demangle)
-	*name = jl_demangle(info.getFunctionName());
+        *name = jl_demangle(info.getFunctionName());
     else
-	*name = strdup(info.getFunctionName());
+        *name = strdup(info.getFunctionName());
     *line = info.getLine();
     *filename = strdup(info.getFileName());
     #else
-    if (strcmp(info.FunctionName.c_str(), "<invalid>") == 0) return;
+    if (strcmp(info.FunctionName.c_str(), "<invalid>") == 0) goto done;
     *name = strdup(info.FunctionName.c_str());
     *line = info.Line;
     *filename = strdup(info.FileName.c_str());
     #endif
+    done:
+    // If this is a jlcall wrapper, set fromC to match JIT behavior
+    if (*name != NULL && memcmp(*name,"jlcall_",7) == 0)
+        *fromC = true;
 }
 
 #ifdef _OS_DARWIN_
@@ -253,12 +259,12 @@ bool jl_is_sysimg(const char *path)
 }
 
 #if defined(_OS_WINDOWS_) && !defined(USE_MCJIT)
-void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename, size_t pointer, int skipC)
+void jl_getDylibFunctionInfo(const char **name, size_t *line, const char **filename, size_t pointer, int *fromC, int skipC)
 {
     return;
 }
 #else
-void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename, size_t pointer, int skipC)
+void jl_getDylibFunctionInfo(const char **name, size_t *line, const char **filename, size_t pointer, int *fromC, int skipC)
 {
 #ifdef _OS_WINDOWS_
     DWORD fbase = SymGetModuleBase64(GetCurrentProcess(),(DWORD)pointer);
@@ -268,8 +274,13 @@ void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename
     Dl_info dlinfo;
     const char *fname = 0;
     if ((dladdr((void*)pointer, &dlinfo) != 0) && dlinfo.dli_fname) {
-        if (skipC && !jl_is_sysimg(dlinfo.dli_fname))
+        *fromC = !jl_is_sysimg(dlinfo.dli_fname);
+        if (skipC && *fromC)
             return;
+        // In case we fail with the debug info lookup, we at least still
+        // have the function name, even if we don't have line numbers
+        *name = dlinfo.dli_sname;
+        *filename = dlinfo.dli_fname;
         uint64_t fbase = (uint64_t)dlinfo.dli_fbase;
 #endif
         obfiletype::iterator it = objfilemap.find(fbase);
@@ -283,7 +294,9 @@ void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename
         ModuleInfo.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
         SymGetModuleInfo64(GetCurrentProcess(), (DWORD64)pointer, &ModuleInfo);
         fname = ModuleInfo.LoadedImageName;
-        JL_PRINTF(JL_STDOUT,fname);
+        *fromC = !jl_is_sysimg(fname);
+        if (skipC && *fromC)
+            return;
 #endif
         if (it == objfilemap.end()) {
 #ifdef _OS_DARWIN_
@@ -305,7 +318,7 @@ void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename
             if (!origerrorobj) {
                 objfileentry_t entry = {obj,context,slide};
                 objfilemap[fbase] = entry;
-                return;
+                goto lookup;
             }
 #ifdef LLVM36
             llvm::object::MachOObjectFile *morigobj = (llvm::object::MachOObjectFile *)origerrorobj.get().release();
@@ -317,7 +330,7 @@ void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename
             if (!getObjUUID(morigobj,uuid)) {
                 objfileentry_t entry = {obj,context,slide};
                 objfilemap[fbase] = entry;
-                return;
+                goto lookup;
             }
 
             // On OS X debug symbols are not contained in the dynamic library and that's why
@@ -394,17 +407,23 @@ void jl_getDylibFunctionInfo(const char **name, int *line, const char **filename
             context = it->second.ctx;
             slide = it->second.slide;
         }
-        lookup_pointer(context, name, line, filename, pointer+slide, jl_is_sysimg(fname));
+#ifdef _OS_DARWIN_
+    lookup:
+#endif
+        lookup_pointer(context, name, line, filename, pointer+slide, jl_is_sysimg(fname), fromC);
+        return;
     }
+    *fromC = 1;
     return;
 }
 #endif
 
-void jl_getFunctionInfo(const char **name, int *line, const char **filename, size_t pointer, int skipC)
+void jl_getFunctionInfo(const char **name, size_t *line, const char **filename, size_t pointer, int *fromC, int skipC)
 {
     *name = NULL;
     *line = -1;
     *filename = "no file";
+    *fromC = 0;
 
 #if USE_MCJIT
 // With MCJIT we can get function information directly from the ObjectFile
@@ -412,16 +431,16 @@ void jl_getFunctionInfo(const char **name, int *line, const char **filename, siz
     std::map<size_t, ObjectInfo, revcomp>::iterator it = objmap.lower_bound(pointer);
 
     if (it == objmap.end())
-        return jl_getDylibFunctionInfo(name,line,filename,pointer,skipC);
+        return jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
     if ((pointer - it->first) > it->second.size)
-        return jl_getDylibFunctionInfo(name,line,filename,pointer,skipC);
+        return jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
 
 #ifdef LLVM36
     DIContext *context = DIContext::getDWARFContext(*it->second.object);
 #else
     DIContext *context = DIContext::getDWARFContext(it->second.object);
 #endif
-    lookup_pointer(context, name, line, filename, pointer, 1);
+    lookup_pointer(context, name, line, filename, pointer, 1, fromC);
 
 #else // !USE_MCJIT
 
@@ -429,16 +448,23 @@ void jl_getFunctionInfo(const char **name, int *line, const char **filename, siz
     std::map<size_t, FuncInfo, revcomp> &info = jl_jit_events->getMap();
     std::map<size_t, FuncInfo, revcomp>::iterator it = info.lower_bound(pointer);
     if (it != info.end() && (size_t)(*it).first + (*it).second.lengthAdr >= pointer) {
-        // commenting these lines out skips functions that don't
-        // have explicit debug info. this is useful for hiding
-        // the jlcall wrapper functions we generate.
-#if LLVM_VERSION_MAJOR == 3
-#if LLVM_VERSION_MINOR == 0
-        //*name = &(*(*it).second.func).getNameStr()[0];
-#elif LLVM_VERSION_MINOR >= 1
-        //*name = (((*(*it).second.func).getName()).data());
-#endif
-#endif
+        // We do this to hide the jlcall wrappers when getting julia backtraces,
+        // but it is still good to have them for regular lookup of C frames.
+        if (skipC && (*it).second.lines.empty()) {
+            // Technically not true, but we don't want them
+            // in julia backtraces, so close enough
+            *fromC = 1;
+            return;
+        }
+
+        *name = (*it).second.name.c_str();
+        *filename = (*it).second.filename.c_str();
+
+        if ((*it).second.lines.empty()) {
+            *fromC = 1;
+            return;
+        }
+
         std::vector<JITEvent_EmittedFunctionDetails::LineStart>::iterator vit =
             (*it).second.lines.begin();
         JITEvent_EmittedFunctionDetails::LineStart prev = *vit;
@@ -451,10 +477,6 @@ void jl_getFunctionInfo(const char **name, int *line, const char **filename, siz
             // available.
             *name = debugscope.getName().data();
         }
-        else {
-            *name = (*it).second.name.c_str();
-            *filename = (*it).second.filename.c_str();
-        }
 
         vit++;
 
@@ -466,12 +488,12 @@ void jl_getFunctionInfo(const char **name, int *line, const char **filename, siz
             prev = *vit;
             vit++;
         }
-        if (*line == -1) {
+        if (*line == (size_t) -1) {
             *line = prev.Loc.getLine();
         }
     }
     else {
-        jl_getDylibFunctionInfo(name,line,filename,pointer,skipC);
+        jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
     }
 #endif // USE_MCJIT
 }

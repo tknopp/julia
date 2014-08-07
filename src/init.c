@@ -17,6 +17,15 @@
 #include <unistd.h>
 #endif
 
+#if defined(__APPLE__)
+#define __need_ucontext64_t
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_10
+#include <sys/_types/_ucontext64.h>
+#else
+#include <machine/_structs.h>
+#endif
+#endif
+
 #include <errno.h>
 #include <signal.h>
 
@@ -155,11 +164,11 @@ void sigdie_handler(int sig, siginfo_t *info, void *context)
     }
     ios_printf(ios_stderr,"\nsignal (%d): %s\n", sig, strsignal(sig));
 #ifdef __APPLE__
-    gdbbacktrace();
+    bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, (bt_context_t)&((ucontext64_t*)context)->uc_mcontext64->__ss);
 #else
     bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, (ucontext_t*)context);
-    jlbacktrace();
 #endif
+    jlbacktrace();
     if (sig != SIGSEGV &&
         sig != SIGBUS &&
         sig != SIGILL &&
@@ -624,6 +633,13 @@ void darwin_stack_overflow_handler(unw_context_t *uc)
     jl_rethrow();
 }
 
+void darwin_accerr_handler(unw_context_t *uc)
+{
+    bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, uc);
+    jl_exception_in_transit = jl_memory_exception;
+    jl_rethrow();
+}
+
 #define HANDLE_MACH_ERROR(msg, retval) \
     if (retval!=KERN_SUCCESS) { mach_error(msg ":", (retval)); jl_exit(1); }
 
@@ -631,6 +647,12 @@ void darwin_stack_overflow_handler(unw_context_t *uc)
 extern kern_return_t profiler_segv_handler(mach_port_t,mach_port_t,mach_port_t,exception_type_t,exception_data_t,mach_msg_type_number_t);
 extern volatile mach_port_t mach_profiler_thread;
 #endif
+
+enum x86_trap_flags {
+    USER_MODE = 0x4,
+    WRITE_FAULT = 0x2,
+    PAGE_PRESENT = 0x1
+};
 
 //exc_server uses dlsym to find symbol
 DLLEXPORT
@@ -656,7 +678,8 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
     ret = thread_get_state(thread,x86_EXCEPTION_STATE64,(thread_state_t)&exc_state,&exc_count);
     HANDLE_MACH_ERROR("thread_get_state(1)",ret);
     uint64_t fault_addr = exc_state.__faultvaddr;
-    if (is_addr_on_stack((void*)fault_addr)) {
+    if (is_addr_on_stack((void*)fault_addr) ||
+        ((exc_state.__err & PAGE_PRESENT) == PAGE_PRESENT)) {
         ret = thread_get_state(thread,x86_THREAD_STATE64,(thread_state_t)&state,&count);
         HANDLE_MACH_ERROR("thread_get_state(2)",ret);
         old_state = state;
@@ -677,7 +700,10 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
         memset(uc,0,sizeof(unw_context_t));
         memcpy(uc,&old_state,sizeof(x86_thread_state64_t));
         state.__rdi = (uint64_t)uc;
-        state.__rip = (uint64_t)darwin_stack_overflow_handler;
+        if ((exc_state.__err & PAGE_PRESENT) == PAGE_PRESENT)
+            state.__rip = (uint64_t)darwin_accerr_handler;
+        else
+            state.__rip = (uint64_t)darwin_stack_overflow_handler;
 
         state.__rbp = state.__rsp;
         ret = thread_set_state(thread,x86_THREAD_STATE64,(thread_state_t)&state,count);
