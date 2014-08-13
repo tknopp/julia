@@ -195,7 +195,7 @@ void lookup_pointer(DIContext *context, const char **name, size_t *line, const c
     #endif
     done:
     // If this is a jlcall wrapper, set fromC to match JIT behavior
-    if (*name != NULL && memcmp(*name,"jlcall_",7) == 0)
+    if (*name == NULL || memcmp(*name,"jlcall_",7) == 0)
         *fromC = true;
 }
 
@@ -474,8 +474,12 @@ void jl_getFunctionInfo(const char **name, size_t *line, const char **filename, 
                 DISubprogram(prev.Loc.getScope((*it).second.func->getContext()));
             *filename = debugscope.getFilename().data();
             // the DISubprogram has the un-mangled name, so use that if
-            // available.
-            *name = debugscope.getName().data();
+            // available. However, if the scope need not be the current
+            // subprogram.
+            if (debugscope.getName().data() != NULL)
+                *name = debugscope.getName().data();
+            else
+                *name = jl_demangle(*name);
         }
 
         vit++;

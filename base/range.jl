@@ -30,9 +30,9 @@ immutable StepRange{T,S} <: OrdinalRange{T,S}
                 # start - step, which leads to a range that looks very large instead
                 # of empty.
                 if step > z
-                    last = start - one(step)
+                    last = start - one(stop-start)
                 else
-                    last = start + one(step)
+                    last = start + one(stop-start)
                 end
             else
                 diff = stop - start
@@ -361,7 +361,7 @@ function intersect{T1<:Integer, T2<:Integer}(r::StepRange{T1}, s::UnitRange{T2})
     end
 end
 
-function intersect{T1<:Integer, T2<:Integer}(r::StepRange{T1}, s::StepRange{T2})
+function intersect(r::StepRange, s::StepRange)
     if length(r) == 0 || length(s) == 0
         return range(first(r), step(r), 0)
     elseif step(s) < 0

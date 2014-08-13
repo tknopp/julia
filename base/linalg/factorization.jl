@@ -207,7 +207,6 @@ function getindex(A::QRCompactWY, d::Symbol)
     d == :Q && return QRCompactWYQ(A.factors,A.T)
     throw(KeyError(d))
 end
-getq(A::QRCompactWY) = QRCompactWYQ(A.factors,A.T)  # a type-stable variant
 function getindex{T}(A::QRPivoted{T}, d::Symbol)
     m, n = size(A)
     d == :R && return triu!(A.factors[1:min(m,n), 1:n])
@@ -224,6 +223,8 @@ function getindex{T}(A::QRPivoted{T}, d::Symbol)
     end
     throw(KeyError(d))
 end
+# Type-stable interface to get Q
+getq(A::QRCompactWY) = QRCompactWYQ(A.factors,A.T)
 getq(A::QRPivoted) = QRPackedQ(A.factors,A.τ)
 
 immutable QRPackedQ{T} <: AbstractMatrix{T}
@@ -391,18 +392,18 @@ function A_ldiv_B!{T<:BlasFloat}(A::Union(QRCompactWY{T},QRPivoted{T}), B::Strid
     ar = abs(A.factors[1])
     if ar == 0 return zeros(nr, nrhs), 0 end
     rnk = 1
-    xmin = ones(T, nr)
-    xmax = ones(T, nr)
+    xmin = ones(T, 1)
+    xmax = ones(T, 1)
     tmin = tmax = ar
     while rnk < nr
-        tmin, smin, cmin = LAPACK.laic1!(2, sub(xmin, 1:rnk), tmin, sub(A.factors, 1:rnk, rnk + 1), A.factors[rnk + 1, rnk + 1])
-        tmax, smax, cmax = LAPACK.laic1!(1, sub(xmax, 1:rnk), tmax, sub(A.factors, 1:rnk, rnk + 1), A.factors[rnk + 1, rnk + 1])
+        tmin, smin, cmin = LAPACK.laic1!(2, xmin, tmin, sub(A.factors, 1:rnk, rnk + 1), A.factors[rnk + 1, rnk + 1])
+        tmax, smax, cmax = LAPACK.laic1!(1, xmax, tmax, sub(A.factors, 1:rnk, rnk + 1), A.factors[rnk + 1, rnk + 1])
         tmax*rcond > tmin && break
         push!(xmin, cmin)
         push!(xmax, cmax)
         for i = 1:rnk
             xmin[i] *= smin
-            xmax[i] *= smax
+            xmax[i] = smax*xmin[i]
         end
         rnk += 1
         # if cond(r[1:rnk, 1:rnk])*rcond < 1 break end
