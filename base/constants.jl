@@ -13,13 +13,18 @@ convert(::Type{Float16}, x::MathConst) = float16(float32(x))
 convert{T<:Real}(::Type{Complex{T}}, x::MathConst) = convert(Complex{T}, convert(T,x))
 convert{T<:Integer}(::Type{Rational{T}}, x::MathConst) = convert(Rational{T}, float64(x))
 
+stagedfunction call{T<:Union(Float32,Float64),s}(t::Type{T},c::MathConst{s},r::RoundingMode)
+    f = T(big(c()),r())
+    :($f)
+end
+
 =={s}(::MathConst{s}, ::MathConst{s}) = true
 ==(::MathConst, ::MathConst) = false
 
-hash(x::MathConst, h::Uint) = hash(object_id(x), h)
+hash(x::MathConst, h::UInt) = hash(object_id(x), h)
 
 -(x::MathConst) = -float64(x)
-for op in {:+, :-, :*, :/, :^}
+for op in Symbol[:+, :-, :*, :/, :^]
     @eval $op(x::MathConst, y::MathConst) = $op(float64(x),float64(y))
 end
 
@@ -80,3 +85,10 @@ end
 
 log(::MathConst{:e}) = 1 # use 1 to correctly promote expressions like log(x)/log(e)
 log(::MathConst{:e}, x) = log(x)
+
+#Align along = for nice Array printing
+function alignment(x::MathConst)
+    m = match(r"^(.*?)(=.*)$", sprint(showcompact_lim, x))
+    m == nothing ? (length(sprint(showcompact_lim, x)), 0) :
+    (length(m.captures[1]), length(m.captures[2]))
+end

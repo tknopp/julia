@@ -243,7 +243,7 @@
 	((atom? l) (list l))
 	(else (cons (car l) (to-proper (cdr l))))))
 
-(define (map! f lst)
+#;(define (map! f lst)
   (prog1 lst
 	 (while (pair? lst)
 		(set-car! lst (f (car lst)))
@@ -284,7 +284,7 @@
 			      n))))
   (count- f l 0))
 
-(define (foldr f zero lst)
+#;(define (foldr f zero lst)
   (if (null? lst) zero
       (f (car lst) (foldr f zero (cdr lst)))))
 
@@ -337,7 +337,7 @@
            (not (symbol? x)))
       (and (constant? x)
 	   (symbol? x)
-           (eq x (top-level-value x)))))
+           (eq? x (top-level-value x)))))
 
 (define-macro (quasiquote x) (bq-process x))
 
@@ -428,7 +428,7 @@
 			    (cdr clause)))
 		    clauses)))))
 
-(define-macro (do vars test-spec . commands)
+#;(define-macro (do vars test-spec . commands)
   (let ((loop (gensym))
 	(test-expr (car test-spec))
 	(vars  (map car  vars))
@@ -503,8 +503,8 @@
   (let ((e (gensym)))
     `(trycatch ,expr
                (lambda (,e) (if (and (pair? ,e)
-                                     (eq (car  ,e) 'thrown-value)
-                                     (eq (cadr ,e) ,tag))
+                                     (eq? (car  ,e) 'thrown-value)
+                                     (eq? (cadr ,e) ,tag))
                                 (caddr ,e)
 				(raise ,e))))))
 
@@ -604,7 +604,7 @@
            (set! l (cons (aref v (- n i)) l))))
     l))
 
-(define (vector.map f v)
+#;(define (vector.map f v)
   (let* ((n (length v))
          (nv (vector.alloc n)))
     (for 0 (- n 1)
@@ -620,7 +620,7 @@
 (define (table.keys t)
   (table.foldl (lambda (k v z) (cons k z))
                () t))
-(define (table.values t)
+#;(define (table.values t)
   (table.foldl (lambda (k v z) (cons v z))
                () t))
 #;(define (table.clone t)
@@ -701,7 +701,7 @@
 (define (macrocall? e) (and (symbol? (car e))
 			    (symbol-syntax (car e))))
 
-(define (macroexpand-1 e)
+#;(define (macroexpand-1 e)
   (if (atom? e) e
       (let ((f (macrocall? e)))
 	(if f (apply f (cdr e))
@@ -710,7 +710,7 @@
 (define (expand e)
   ; symbol resolves to toplevel; i.e. has no shadowing definition
   (define (top? s env) (not (or (bound? s) (assq s env))))
-  
+
   (define (splice-begin body)
     (cond ((atom? body) body)
 	  ((equal? body '((begin)))
@@ -720,9 +720,9 @@
 	   (append (splice-begin (cdar body)) (splice-begin (cdr body))))
 	  (else
 	   (cons (car body) (splice-begin (cdr body))))))
-  
+
   (define *expanded* (list '*expanded*))
-  
+
   (define (expand-body body env)
     (if (atom? body) body
 	(let* ((body  (if (top? 'begin env)
@@ -754,19 +754,19 @@
 			   (set-car! body (cdar body)))
 		       (set! body (cdr body)))
 		ex-nondefs)))))
-  
+
   (define (expand-lambda-list l env)
     (if (atom? l) l
 	(cons (if (and (pair? (car l)) (pair? (cdr (car l))))
 		  (list (caar l) (expand-in (cadar l) env))
 		  (car l))
 	      (expand-lambda-list (cdr l) env))))
-  
+
   (define (l-vars l)
     (cond ((atom? l)       (list l))
 	  ((pair? (car l)) (cons (caar l) (l-vars (cdr l))))
 	  (else            (cons (car l)  (l-vars (cdr l))))))
-  
+
   (define (expand-lambda e env)
     (let ((formals (cadr e))
 	  (name    (lastcdr e))
@@ -776,7 +776,7 @@
 	`(lambda ,(expand-lambda-list formals env)
 	   ,.(expand-body body env)
 	   . ,name))))
-  
+
   (define (expand-define e env)
     (if (or (null? (cdr e)) (atom? (cadr e)))
 	(if (null? (cddr e))
@@ -789,7 +789,7 @@
 	  (let ((env   (nconc (map list vars) env)))
 	    `(define ,(cons name (expand-lambda-list formals env))
 	       ,.(expand-body body env))))))
-  
+
   (define (expand-let-syntax e env)
     (let ((binds (cadr e)))
       (cons 'begin
@@ -802,12 +802,12 @@
 				       env))
 			       binds)
 			  env)))))
-  
+
   ; given let-syntax definition environment (menv) and environment
   ; at the point of the macro use (lenv), return the environment to
   ; expand the macro use in. TODO
   (define (local-expansion-env menv lenv) menv)
-  
+
   (define (expand-in e env)
     (if (atom? e) e
 	(let* ((head (car e))

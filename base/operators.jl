@@ -54,7 +54,8 @@ lexless(x,y) = lexcmp(x,y)<0
 cmp(x::Integer, y::Integer) = ifelse(isless(x,y), -1, ifelse(isless(y,x), 1, 0))
 
 max(x,y) = ifelse(y < x, x, y)
-min(x,y) = ifelse(x < y, x, y)
+min(x,y) = ifelse(y < x, y, x)
+minmax(x,y) = y < x ? (y, x) : (x, y)
 
 scalarmax(x,y) = max(x,y)
 scalarmax(x::AbstractArray, y::AbstractArray) = error("ordering is not well-defined for arrays")
@@ -96,6 +97,8 @@ end
 .^(x::Number,y::Number) = x^y
 .+(x::Number,y::Number) = x+y
 .-(x::Number,y::Number) = x-y
+.<<(x::Number,y::Number) = x<<y
+.>>(x::Number,y::Number) = x>>y
 
 .==(x::Number,y::Number) = x == y
 .!=(x::Number,y::Number) = x != y
@@ -112,13 +115,15 @@ const .≠ = .!=
 >>(x,y::Integer)  = x >> convert(Int32,y)
 >>>(x,y::Integer) = x >>> convert(Int32,y)
 
-# fallback div and fld implementations
+# fallback div, fld, and cld implementations
 # NOTE: C89 fmod() and x87 FPREM implicitly provide truncating float division,
 # so it is used here as the basis of float div().
 div{T<:Real}(x::T, y::T) = convert(T,round((x-rem(x,y))/y))
 fld{T<:Real}(x::T, y::T) = convert(T,round((x-mod(x,y))/y))
+cld{T<:Real}(x::T, y::T) = convert(T,round((x-modCeil(x,y))/y))
 #rem{T<:Real}(x::T, y::T) = convert(T,x-y*trunc(x/y))
 #mod{T<:Real}(x::T, y::T) = convert(T,x-y*floor(x/y))
+modCeil{T<:Real}(x::T, y::T) = convert(T,x-y*ceil(x/y))
 
 # operator alias
 const % = rem
@@ -159,19 +164,14 @@ A_ldiv_Bt (a,b) = a\transpose(b)
 At_ldiv_Bt(a,b) = transpose(a)\transpose(b)
 
 
-oftype{T}(::Type{T},c) = convert(T,c)
-oftype{T}(x::T,c) = convert(T,c)
+oftype(x,c) = convert(typeof(x),c)
 
 widen{T<:Number}(x::T) = convert(widen(T), x)
 
-sizeof(T::Type) = error(string("size of type ",T," unknown"))
-sizeof(T::DataType) = if isleaftype(T) T.size else error("type does not have a native size") end
-sizeof(::Type{Symbol}) = error("type does not have a native size")
-sizeof{T<:Array}(::Type{T}) = error("type $(T) does not have a native size")
-sizeof(x) = sizeof(typeof(x))
+sizeof(x) = Core.sizeof(x)
 
 # copying immutable things
-copy(x::Union(Symbol,Number,String,Function,Tuple,LambdaStaticData,
+copy(x::Union(Symbol,Number,AbstractString,Function,Tuple,LambdaStaticData,
               TopNode,QuoteNode,DataType,UnionType)) = x
 
 # function pipelining
@@ -400,6 +400,29 @@ function ifelse(c::AbstractArray{Bool}, x, y::AbstractArray)
     reshape([ifelse(c[i], x, y[i]) for i = 1 : length(c)], shp)
 end
 
+# Pair
+
+immutable Pair{A,B}
+    first::A
+    second::B
+end
+
+const => = Pair
+
+start(p::Pair) = 1
+done(p::Pair, i) = i>2
+next(p::Pair, i) = (getfield(p,i), i+1)
+
+indexed_next(p::Pair, i::Int, state) = (getfield(p,i), i+1)
+
+hash(p::Pair, h::UInt) = hash(p.second, hash(p.first, h))
+
+==(p::Pair, q::Pair) = (p.first==q.first) & (p.second==q.second)
+isequal(p::Pair, q::Pair) = isequal(p.first,q.first) & isequal(p.second,q.second)
+
+isless(p::Pair, q::Pair) = ifelse(!isequal(p.first,q.first), isless(p.first,q.first),
+                                                             isless(p.second,q.second))
+
 # some operators not defined yet
 global //, .>>, .<<, >:, <|, |>, hcat, hvcat, ⋅, ×, ∈, ∉, ∋, ∌, ⊆, ⊈, ⊊, ∩, ∪, √, ∛
 
@@ -475,12 +498,13 @@ export
     getindex,
     setindex!,
     transpose,
-    ctranspose
+    ctranspose,
+    call
 
 import Base: !, !=, $, %, .%, &, *, +, -, .!=, .+, .-, .*, ./, .<, .<=, .==, .>,
     .>=, .\, .^, /, //, <, <:, <<, <=, ==, >, >=, >>, .>>, .<<, >>>,
     <|, |>, \, ^, |, ~, !==, >:, colon, hcat, vcat, hvcat, getindex, setindex!,
-    transpose, ctranspose,
+    transpose, ctranspose, call,
     ≥, ≤, ≠, .≥, .≤, .≠, ÷, ⋅, ×, ∈, ∉, ∋, ∌, ⊆, ⊈, ⊊, ∩, ∪, √, ∛
 
 end

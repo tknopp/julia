@@ -8,6 +8,9 @@ eval(m,x) = Core.eval(m,x)
 
 include = Core.include
 
+using Core: Intrinsics, arraylen, arrayref, arrayset, arraysize, _expr,
+            tuplelen, tupleref, kwcall, _apply, typeassert, apply_type
+
 include("exports.jl")
 
 if false
@@ -43,22 +46,31 @@ include("int.jl")
 include("operators.jl")
 include("pointer.jl")
 
+# rounding utilities
+include("rounding.jl")
+importall .Rounding
+
 include("float.jl")
 include("complex.jl")
 include("rational.jl")
 
 # core data structures (used by type inference)
 include("abstractarray.jl")
-include("reduce.jl")
-
 include("subarray.jl")
 include("array.jl")
+include("subarray2.jl")
 include("bitarray.jl")
 include("intset.jl")
 include("dict.jl")
 include("set.jl")
 include("hashing.jl")
 include("iterator.jl")
+
+# SIMD loops
+include("simdloop.jl")
+importall .SimdLoop
+
+include("reduce.jl")
 
 # compiler
 import Core.Undef  # used internally by compiler
@@ -130,16 +142,6 @@ include("multidimensional.jl")
 
 include("primes.jl")
 
-# concurrency and parallelism
-include("serialize.jl")
-include("multi.jl")
-
-# Polling (requires multi.jl)
-include("poll.jl")
-
-# code loading
-include("loading.jl")
-
 begin
     SOURCE_PATH = ""
     include = function(path)
@@ -164,9 +166,8 @@ include("sort.jl")
 importall .Sort
 include("combinatorics.jl")
 
-# rounding utilities
-include("rounding.jl")
-importall .Rounding
+# version
+include("version.jl")
 
 # BigInts and BigFloats
 include("gmp.jl")
@@ -176,7 +177,6 @@ importall .MPFR
 big(n::Integer) = convert(BigInt,n)
 big(x::FloatingPoint) = convert(BigFloat,x)
 big(q::Rational) = big(num(q))//big(den(q))
-big(z::Complex) = complex(big(real(z)),big(imag(z)))
 
 # more hashing definitions
 include("hashing2.jl")
@@ -186,13 +186,29 @@ include("dSFMT.jl")
 include("random.jl")
 importall .Random
 
+# (s)printf macros
+include("printf.jl")
+importall .Printf
+
+# nullable types
+include("nullable.jl")
+
+# concurrency and parallelism
+include("serialize.jl")
+include("multi.jl")
+
+# code loading
+include("loading.jl")
+
+# Polling (requires multi.jl)
+include("poll.jl")
+
 # distributed arrays and memory-mapped arrays
 include("darray.jl")
 include("mmap.jl")
 include("sharedarray.jl")
 
-# utilities - version, timing, help, edit, metaprogramming
-include("version.jl")
+# utilities - timing, help, edit, metaprogramming
 include("datafmt.jl")
 importall .DataFmt
 include("deepcopy.jl")
@@ -206,10 +222,6 @@ using .I18n
 using .Help
 push!(I18n.CALLBACKS, Help.clear_cache)
 
-# SIMD loops
-include("simdloop.jl")
-importall .SimdLoop
-
 # frontend
 include("Terminals.jl")
 include("LineEdit.jl")
@@ -217,9 +229,12 @@ include("REPLCompletions.jl")
 include("REPL.jl")
 include("client.jl")
 
-# (s)printf macros
-include("printf.jl")
-importall .Printf
+# Documentation
+
+include("markdown/Markdown.jl")
+include("docs.jl")
+using .Docs
+using .Markdown
 
 # misc useful functions & macros
 include("util.jl")
@@ -267,11 +282,20 @@ include("graphics.jl")
 include("profile.jl")
 importall .Profile
 
+# dates
+include("Dates.jl")
+import .Dates: Date, DateTime, now
+
+# Some basic documentation
+include("basedocs.jl")
+
 function __init__()
     # Base library init
     reinit_stdio()
     Multimedia.reinit_displays() # since Multimedia.displays uses STDOUT as fallback
     fdwatcher_init()
+    early_init()
+    init_load_path()
 end
 
 include("precompile.jl")

@@ -18,7 +18,7 @@ s = "ccall(:f,Int,(Ptr{Void},),&x)"
 
 macro test_repr(x)
     quote
-        # Note: We can't just compare x1 and x2 because interpolated 
+        # Note: We can't just compare x1 and x2 because interpolated
         # strings get converted to string Exprs by the first show().
         # This could produce a few false positives, but until string
         # interpolation works we don't really have a choice.
@@ -72,7 +72,7 @@ end
 
 # control structures (shamelessly stolen from base/bitarray.jl)
 @test_repr """type BitArray{N} <: AbstractArray{Bool, N}
-    chunks::Vector{Uint64}
+    chunks::Vector{UInt64}
     len::Int
     dims::NTuple{N,Int}
     function BitArray(dims::Int...)
@@ -87,7 +87,7 @@ end
             n *= d
         end
         nc = num_bit_chunks(n)
-        chunks = Array(Uint64, nc)
+        chunks = Array(UInt64, nc)
         if nc > 0
             chunks[end] = uint64(0)
         end
@@ -99,7 +99,7 @@ end
     end
 end"""
 
-@test_repr """function copy_chunks(dest::Vector{Uint64}, pos_d::Integer, src::Vector{Uint64}, pos_s::Integer, numbits::Integer)
+@test_repr """function copy_chunks(dest::Vector{UInt64}, pos_d::Integer, src::Vector{UInt64}, pos_s::Integer, numbits::Integer)
     if numbits == 0
         return
     end
@@ -164,3 +164,35 @@ end"""
 # unicode operator printing
 @test sprint(show, :(1 ⊕ (2 ⊗ 3))) == ":(1 ⊕ 2 ⊗ 3)"
 @test sprint(show, :((1 ⊕ 2) ⊗ 3)) == ":((1 ⊕ 2) ⊗ 3)"
+
+# issue #8155
+@test_repr "foo(x,y; z=bar)"
+@test_repr "foo(x,y,z=bar)"
+
+@test_repr "Int[i for i=1:10]"
+@test_repr "Int[(i, j) for (i, j) in zip(1:10,1:0)]"
+
+@test_repr "[1 2 3; 4 5 6; 7 8 9]'"
+
+@test_repr "baremodule X
+importall ..A.b
+import ...B.c
+import D
+import B.C.D.E.F.g
+end"
+@test_repr "baremodule Y
+export A, B, C
+export D, E, F
+end"
+
+# issue #8994
+@test_repr "get! => 2"
+@test_repr "< : 2"
+@test_repr "< :: T"
+@test_repr "S{< <: T}"
+@test_repr "+ + +"
+
+# issue #9474
+for s in ("(1::Int64 == 1::Int64)::Bool", "(1:2:3) + 4", "x = 1:2:3")
+    @test sprint(show, parse(s)) == ":("*s*")"
+end

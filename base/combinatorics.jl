@@ -4,7 +4,7 @@ const _fact_table64 =
           121645100408832000,2432902008176640000]
 
 const _fact_table128 =
-    Uint128[0x00000000000000000000000000000001, 0x00000000000000000000000000000002,
+    UInt128[0x00000000000000000000000000000001, 0x00000000000000000000000000000002,
             0x00000000000000000000000000000006, 0x00000000000000000000000000000018,
             0x00000000000000000000000000000078, 0x000000000000000000000000000002d0,
             0x000000000000000000000000000013b0, 0x00000000000000000000000000009d80,
@@ -31,17 +31,17 @@ function factorial_lookup(n::Integer, table, lim)
 end
 
 factorial(n::Int128) = factorial_lookup(n, _fact_table128, 33)
-factorial(n::Uint128) = factorial_lookup(n, _fact_table128, 34)
-factorial(n::Union(Int64,Uint64)) = factorial_lookup(n, _fact_table64, 20)
+factorial(n::UInt128) = factorial_lookup(n, _fact_table128, 34)
+factorial(n::Union(Int64,UInt64)) = factorial_lookup(n, _fact_table64, 20)
 
 if Int === Int32
-factorial(n::Union(Int8,Uint8,Int16,Uint16)) = factorial(int32(n))
-factorial(n::Union(Int32,Uint32)) = factorial_lookup(n, _fact_table64, 12)
+factorial(n::Union(Int8,UInt8,Int16,UInt16)) = factorial(int32(n))
+factorial(n::Union(Int32,UInt32)) = factorial_lookup(n, _fact_table64, 12)
 else
-factorial(n::Union(Int8,Uint8,Int16,Uint16,Int32,Uint32)) = factorial(int64(n))
+factorial(n::Union(Int8,UInt8,Int16,UInt16,Int32,UInt32)) = factorial(int64(n))
 end
 
-function gamma(n::Union(Int8,Uint8,Int16,Uint16,Int32,Uint32,Int64,Uint64))
+function gamma(n::Union(Int8,UInt8,Int16,UInt16,Int32,UInt32,Int64,UInt64))
     n < 0 && throw(DomainError())
     n == 0 && return Inf
     n <= 2 && return 1.0
@@ -115,7 +115,7 @@ shuffle(a::AbstractVector) = shuffle!(copy(a))
 function randperm(n::Integer)
     a = Array(typeof(n), n)
     a[1] = 1
-    for i = 2:n
+    @inbounds for i = 2:n
         j = rand(1:i)
         a[i] = a[j]
         a[j] = i
@@ -126,7 +126,7 @@ end
 function randcycle(n::Integer)
     a = Array(typeof(n), n)
     a[1] = 1
-    for i = 2:n
+    @inbounds for i = 2:n
         j = rand(1:i-1)
         a[i] = a[j]
         a[j] = i
@@ -136,6 +136,7 @@ end
 
 function nthperm!(a::AbstractVector, k::Integer)
     k -= 1 # make k 1-indexed
+    k < 0 && error("permutation must be a positive number")
     n = length(a)
     n == 0 && return a
     f = factorial(oftype(k, n-1))
@@ -291,12 +292,12 @@ permutations(a) = Permutations(a)
 
 start(p::Permutations) = [1:length(p.a)]
 function next(p::Permutations, s)
+    perm = p.a[s]
     if length(p.a) == 0
         # special case to generate 1 result for len==0
-        return (p.a,[1])
+        return (perm,[1])
     end
     s = copy(s)
-    perm = p.a[s]
     k = length(s)-1
     while k > 0 && s[k] > s[k+1];  k -= 1;  end
     if k == 0
@@ -330,7 +331,7 @@ function nextpartition(n, as)
     if isempty(as);  return Int[n];  end
 
     xs = similar(as,0)
-    sizehint(xs,length(as)+1)
+    sizehint!(xs,length(as)+1)
 
     for i = 1:length(as)-1
         if as[i+1] == 1
@@ -354,7 +355,7 @@ function nextpartition(n, as)
     xs
 end
 
-let _npartitions = (Int=>Int)[]
+let _npartitions = Dict{Int,Int}()
     global npartitions
     function npartitions(n::Int)
         if n < 0
@@ -424,7 +425,7 @@ function nextfixedpartition(n, m, bs)
     return as
 end
 
-let _nipartitions = ((Int,Int)=>Int)[]
+let _nipartitions = Dict{(Int,Int),Int}()
     global npartitions
     function npartitions(n::Int,m::Int)
         if n < m || m == 0
@@ -463,7 +464,7 @@ function nextsetpartition(s::AbstractVector, a, b, n, m)
         filter!(x->!isempty(x), temp)
     end
 
-    if isempty(s);  return ({s}, ([1], Int[], n, 1));  end
+    if isempty(s);  return ([s], ([1], Int[], n, 1));  end
 
     part = makeparts(s,a,m)
 
@@ -489,7 +490,7 @@ function nextsetpartition(s::AbstractVector, a, b, n, m)
 
 end
 
-let _nsetpartitions = (Int=>Int)[]
+let _nsetpartitions = Dict{Int,Int}()
     global nsetpartitions
     function nsetpartitions(n::Int)
         if n < 0

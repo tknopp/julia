@@ -94,7 +94,7 @@ end
 # get array of start indexes for dividing sz into nc chunks
 function defaultdist(sz::Int, nc::Int)
     if sz >= nc
-        iround(linspace(1, sz+1, nc+1))
+        round(Int,linspace(1, sz+1, nc+1))
     else
         [[1:(sz+1)], zeros(Int, nc-sz)]
     end
@@ -212,9 +212,9 @@ function reshape{T,S<:Array}(A::DArray{T,1,S}, d::Dims)
         for i=1:div(length(B),nr)
             i2 = ind2sub(sztail, i)
             globalidx = [ I[j][i2[j-1]] for j=2:nd ]
-            
+
             a = sub2ind(d, d1offs, globalidx...)
-            
+
             B[:,i] = A[a:(a+nr-1)]
         end
         B
@@ -243,7 +243,7 @@ function getindex_tuple{T}(d::DArray{T}, I::(Int...))
 end
 
 getindex(d::DArray) = d[1]
-getindex(d::DArray, I::Union(Int,UnitRange{Int})...) = sub(d,I)
+getindex(d::DArray, I::Union(Int,UnitRange{Int})...) = sub(d,I...)
 
 copy(d::SubOrDArray) = d
 
@@ -272,7 +272,7 @@ function setindex!(a::Array, s::SubDArray, I::UnitRange{Int}...)
     offs = [isa(J[i],Int) ? J[i]-1 : first(J[i])-1 for i=1:n]
     @sync begin
         for i = 1:length(d.chunks)
-            K_c = {d.indexes[i]...}
+            K_c = Any[d.indexes[i]...]
             K = [ intersect(J[j],K_c[j]) for j=1:n ]
             if !any(isempty, K)
                 idxs = [ I[j][K[j]-offs[j]] for j=1:n ]
@@ -302,10 +302,10 @@ map(f::Callable, d::DArray) = DArray(I->map(f, localpart(d)), d)
 
 reduce(f::Function, d::DArray) =
     mapreduce(fetch, f,
-              { @spawnat p reduce(f, localpart(d)) for p in procs(d) })
+              Any[ @spawnat p reduce(f, localpart(d)) for p in procs(d) ])
 
-              
-function map!(f::Callable, d::DArray) 
+
+function map!(f::Callable, d::DArray)
     @sync begin
         for p in procs(d)
             @spawnat p map!(f, localpart(d))

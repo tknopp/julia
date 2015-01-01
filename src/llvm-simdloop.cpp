@@ -5,11 +5,12 @@
 //     global function annotateSimdLoop: mark a loop as a SIMD loop.
 //     createLowerSimdLoopPass: construct LLVM for lowering a marked loop later.
 
-#include "llvm/Analysis/LoopPass.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/Metadata.h"
-#include "llvm/Support/Debug.h"
+#include "llvm-version.h"
+#include <llvm/Analysis/LoopPass.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
+#include <llvm/Support/Debug.h>
 #include <cstdio>
 
 namespace llvm {
@@ -20,12 +21,17 @@ static MDNode* simd_loop_md = NULL;
 
 /// Mark loop as a SIMD loop.  Return false if loop cannot be marked.
 /// incr should be the basic block that increments the loop counter.
-bool annotateSimdLoop(BasicBlock* incr) {
+bool annotateSimdLoop(BasicBlock* incr)
+{
     DEBUG(dbgs() << "LSL: annotating simd_loop\n");
     // Lazy initialization
     if (!simd_loop_mdkind) {
         simd_loop_mdkind = getGlobalContext().getMDKindID("simd_loop");
+#ifdef LLVM36
+        simd_loop_md = MDNode::get(getGlobalContext(), ArrayRef<Metadata*>());
+#else
         simd_loop_md = MDNode::get(getGlobalContext(), ArrayRef<Value*>());
+#endif
     }
     // Ideally, the decoration would go on the block itself, but LLVM 3.3 does not
     // support putting metadata on blocks.  So instead, put the decoration on the last
@@ -38,7 +44,8 @@ bool annotateSimdLoop(BasicBlock* incr) {
                 DEBUG(dbgs() << "LSL: setting simd_loop metadata\n");
                 i.setMetadata(simd_loop_mdkind, simd_loop_md);
                 return true;
-            } else {
+            }
+            else {
                 return false;
             }
         }
@@ -65,7 +72,8 @@ private:
     void enableUnsafeAlgebraIfReduction(PHINode* Phi, Loop* L) const;
 };
 
-bool LowerSIMDLoop::hasSIMDLoopMetadata(Loop *L) const {
+bool LowerSIMDLoop::hasSIMDLoopMetadata(Loop *L) const
+{
     // Note: If a loop has 0 or multiple latch blocks, it's probably not a simd_loop anyway.
     if (BasicBlock* latch = L->getLoopLatch())
         for (BasicBlock::iterator II = latch->begin(), EE = latch->end(); II!=EE; ++II)
@@ -74,7 +82,8 @@ bool LowerSIMDLoop::hasSIMDLoopMetadata(Loop *L) const {
     return false;
 }
 
-void LowerSIMDLoop::enableUnsafeAlgebraIfReduction(PHINode* Phi, Loop* L) const {
+void LowerSIMDLoop::enableUnsafeAlgebraIfReduction(PHINode* Phi, Loop* L) const
+{
     typedef SmallVector<Instruction*, 8> chainVector;
     chainVector chain;
     Instruction *J;
@@ -111,7 +120,8 @@ void LowerSIMDLoop::enableUnsafeAlgebraIfReduction(PHINode* Phi, Loop* L) const 
                 DEBUG(dbgs() << "LSL: chain broke at " << *J << " because of wrong opcode\n");
                 return;
             }
-        } else {
+        }
+        else {
             // First arithmetic op in the chain.
             opcode = J->getOpcode();
             if (opcode!=Instruction::FAdd && opcode!=Instruction::FMul) {
@@ -127,7 +137,8 @@ void LowerSIMDLoop::enableUnsafeAlgebraIfReduction(PHINode* Phi, Loop* L) const 
     }
 }
 
-bool LowerSIMDLoop::runOnLoop(Loop *L, LPPassManager &LPM) {
+bool LowerSIMDLoop::runOnLoop(Loop *L, LPPassManager &LPM)
+{
     if (!simd_loop_mdkind)
         return false;           // Fast rejection test.
 
@@ -137,9 +148,13 @@ bool LowerSIMDLoop::runOnLoop(Loop *L, LPPassManager &LPM) {
     DEBUG(dbgs() << "LSL: simd_loop found\n");
 #if defined(LLVM_VERSION_MAJOR) && LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR >= 4
     MDNode* n = L->getLoopID();
-    if( !n ) {
+    if (!n) {
         // Loop does not have a LoopID yet, so give it one.
+#ifdef LLVM36
+        n = MDNode::get(getGlobalContext(), ArrayRef<Metadata*>(NULL));
+#else
         n = MDNode::get(getGlobalContext(), ArrayRef<Value*>(NULL));
+#endif
         n->replaceOperandWith(0,n);
         L->setLoopID(n);
     }
@@ -147,7 +162,11 @@ bool LowerSIMDLoop::runOnLoop(Loop *L, LPPassManager &LPM) {
     MDNode* n = MDNode::get(getGlobalContext(), ArrayRef<Value*>());
     L->getLoopLatch()->getTerminator()->setMetadata("llvm.loop.parallel", n);
 #endif
+#ifdef LLVM36
+    MDNode* m = MDNode::get(getGlobalContext(), ArrayRef<Metadata*>(n));
+#else
     MDNode* m = MDNode::get(getGlobalContext(), ArrayRef<Value*>(n));
+#endif
 
     // Mark memory references so that Loop::isAnnotatedParallel will return true for this loop.
     for(Loop::block_iterator BBI = L->block_begin(), E=L->block_end(); BBI!=E; ++BBI)

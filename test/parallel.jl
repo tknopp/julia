@@ -1,8 +1,8 @@
 # NOTE: worker processes cannot add more workers, only the client process can.
 require("testdefs.jl")
 
-if nprocs() < 2
-    remotecall_fetch(1, () -> addprocs(1))
+if nprocs() < 3
+    remotecall_fetch(1, () -> addprocs(2))
 end
 
 id_me = myid()
@@ -28,8 +28,6 @@ d2 = map(x->1, d)
 map!(x->1, d)
 @test reduce(+, d) == 100
 
-
-@unix_only begin
 
 dims = (20,20,20)
 
@@ -92,7 +90,8 @@ d = Base.shmem_rand(dims)
 s = copy(sdata(d))
 ds = deepcopy(d)
 @test ds == d
-remotecall_fetch(findfirst(id->(id != myid()), procs(ds)), setindex!, ds, 1.0, 1:10)
+pids_ds = procs(ds)
+remotecall_fetch(pids_ds[findfirst(id->(id != myid()), pids_ds)], setindex!, ds, 1.0, 1:10)
 @test ds != d
 @test s == d
 
@@ -123,9 +122,6 @@ map!(x->1, d)
 @test 3.0 == remotecall_fetch(id_other, D->D[1], Base.shmem_fill(3.0, 1; pids=[id_me, id_other]))
 
 
-end # @unix_only(SharedArray tests)
-
-
 # Test @parallel load balancing - all processors should get either M or M+1
 # iterations out of the loop range for some M.
 if nprocs() < 4
@@ -153,7 +149,7 @@ end
 et=toq()
 
 # assuming that 0.5 seconds is a good enough buffer on a typical modern CPU
-try 
+try
     @test (et >= 1.0) && (et <= 1.5)
     @test !isready(rr3)
 catch
@@ -177,8 +173,8 @@ if haskey(ENV, "PTEST_FULL")
     # needs at least 4 processors (which are being created above for the @parallel tests)
     s = "a"*"bcdefghijklmnopqrstuvwxyz"^100;
     ups = "A"*"BCDEFGHIJKLMNOPQRSTUVWXYZ"^100;
-    @test ups == bytestring(Uint8[uint8(c) for c in pmap(x->uppercase(x), s)])
-    @test ups == bytestring(Uint8[uint8(c) for c in pmap(x->uppercase(char(x)), s.data)])
+    @test ups == bytestring(UInt8[uint8(c) for c in pmap(x->uppercase(x), s)])
+    @test ups == bytestring(UInt8[uint8(c) for c in pmap(x->uppercase(char(x)), s.data)])
 
     # retry, on error exit
     res = pmap(x->(x=='a') ? error("test error. don't panic.") : uppercase(x), s; err_retry=true, err_stop=true);
@@ -193,7 +189,7 @@ if haskey(ENV, "PTEST_FULL")
     # retry, on error continue
     res = pmap(x->iseven(myid()) ? error("test error. don't panic.") : uppercase(x), s; err_retry=true, err_stop=false);
     @test length(res) == length(ups)
-    @test ups == bytestring(Uint8[uint8(c) for c in res])
+    @test ups == bytestring(UInt8[uint8(c) for c in res])
 
     # no retry, on error continue
     res = pmap(x->(x=='a') ? error("test error. don't panic.") : uppercase(x), s; err_retry=false, err_stop=false);
@@ -204,11 +200,11 @@ if haskey(ENV, "PTEST_FULL")
 end
 
 # issue #7727
-let A = {}, B = {}
+let A = [], B = []
     t = @task produce(11)
     @sync begin
         @async for x in t; push!(A,x); end
         @async for x in t; push!(B,x); end
     end
-    @test (A == {11}) != (B == {11})
+    @test (A == [11]) != (B == [11])
 end

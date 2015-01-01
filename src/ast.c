@@ -114,13 +114,15 @@ static builtinspec_t julia_flisp_ast_ext[] = {
     { NULL, NULL }
 };
 
-DLLEXPORT void jl_init_frontend(void)
+extern int jl_parse_depwarn(int warn);
+
+void jl_init_frontend(void)
 {
-    fl_init(2*512*1024);
+    fl_init(4*1024*1024);
     value_t img = cvalue(iostreamtype, sizeof(ios_t));
     ios_t *pi = value2c(ios_t*, img);
     ios_static_buffer(pi, (char*)flisp_system_image, sizeof(flisp_system_image));
-    
+
     if (fl_load_system_image(img)) {
         JL_PRINTF(JL_STDERR, "fatal error loading system image\n");
         jl_exit(1);
@@ -136,6 +138,9 @@ DLLEXPORT void jl_init_frontend(void)
     false_sym = symbol("false");
     fl_error_sym = symbol("error");
     fl_null_sym = symbol("null");
+
+    // Enable / disable syntax deprecation warnings
+    jl_parse_depwarn((int)jl_compileropts.depwarn);
 }
 
 DLLEXPORT void jl_lisp_prompt(void)
@@ -295,7 +300,7 @@ static jl_value_t *scm_to_julia_(value_t e, int eo)
                 value_t largs = car_(e);
                 jl_cellset(ex->args, 0, full_list(largs,eo));
                 e = cdr_(e);
-                
+
                 value_t ee = car_(e);
                 jl_array_t *vinf = jl_alloc_cell_1d(3);
                 jl_cellset(vinf, 0, full_list(car_(ee),eo));
@@ -306,7 +311,7 @@ static jl_value_t *scm_to_julia_(value_t e, int eo)
                 assert(!iscons(cdr_(ee)));
                 jl_cellset(ex->args, 1, vinf);
                 e = cdr_(e);
-                
+
                 for(i=2; i < n; i++) {
                     assert(iscons(e));
                     jl_cellset(ex->args, i, scm_to_julia_(car_(e), eo));
@@ -367,7 +372,7 @@ static jl_value_t *scm_to_julia_(value_t e, int eo)
         return *(jl_value_t**)cv_data((cvalue_t*)ptr(e));
     }
     jl_error("malformed tree");
-    
+
     return (jl_value_t*)jl_null;
 }
 
@@ -466,7 +471,7 @@ DLLEXPORT jl_value_t *jl_parse_input_line(const char *str)
     value_t e = fl_applyn(1, symbol_value(symbol("jl-parse-string")), s);
     if (e == FL_EOF)
         return jl_nothing;
-    
+
     return scm_to_julia(e,0);
 }
 
@@ -505,6 +510,12 @@ int jl_start_parsing_file(const char *fname)
 void jl_stop_parsing(void)
 {
     fl_applyn(0, symbol_value(symbol("jl-parser-close-stream")));
+}
+
+DLLEXPORT int jl_parse_depwarn(int warn)
+{
+    value_t prev = fl_applyn(1, symbol_value(symbol("jl-parser-depwarn")), warn? FL_T : FL_F);
+    return prev == FL_T ? 1 : 0;
 }
 
 extern int jl_lineno;
@@ -758,7 +769,10 @@ static jl_value_t *copy_ast(jl_value_t *expr, jl_tuple_t *sp, int do_sp)
 
 DLLEXPORT jl_value_t *jl_copy_ast(jl_value_t *expr)
 {
-    if (jl_is_expr(expr)) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    else if (jl_is_expr(expr)) {
         jl_expr_t *e = (jl_expr_t*)expr;
         size_t i, l = jl_array_len(e->args);
         jl_expr_t *ne = NULL;

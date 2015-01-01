@@ -3,7 +3,7 @@ module Cache
 import ..Git, ..Dir
 using ..Types
 
-path(pkg::String) = abspath(".cache", pkg)
+path(pkg::AbstractString) = abspath(".cache", pkg)
 
 function mkcachedir()
     cache = joinpath(realpath("."), ".cache")
@@ -11,8 +11,8 @@ function mkcachedir()
         return
     end
 
-    @windows_only mkdir(cache)
-    @unix_only begin
+    @windowsxp_only mkdir(cache)
+    @non_windowsxp_only begin
         if Dir.isversioned(pwd())
             rootcache = joinpath(realpath(".."), ".cache")
             if !isdir(rootcache)
@@ -26,7 +26,7 @@ function mkcachedir()
 end
 
 
-function prefetch{S<:String}(pkg::String, url::String, sha1s::Vector{S})
+function prefetch{S<:AbstractString}(pkg::AbstractString, url::AbstractString, sha1s::Vector{S})
     isdir(".cache") || mkcachedir()
     cache = path(pkg)
     if !isdir(cache)
@@ -40,11 +40,11 @@ function prefetch{S<:String}(pkg::String, url::String, sha1s::Vector{S})
     Git.set_remote_url(url, dir=cache)
     if !all(sha1->Git.iscommit(sha1, dir=cache), sha1s)
         info("Updating cache of $pkg...")
-	    Git.success(`remote update`, dir=cache) ||
-            error("couldn't update $cache using `git remote update`")
-	end
+        Git.success(`remote update`, dir=cache) ||
+        error("couldn't update $cache using `git remote update`")
+    end
     filter(sha1->!Git.iscommit(sha1, dir=cache), sha1s)
 end
-prefetch(pkg::String, url::String, sha1::String...) = prefetch(pkg, url, String[sha1...])
+prefetch(pkg::AbstractString, url::AbstractString, sha1::AbstractString...) = prefetch(pkg, url, AbstractString[sha1...])
 
 end # module

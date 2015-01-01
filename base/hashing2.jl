@@ -1,20 +1,20 @@
 ## efficient value-based hashing of integers ##
 
-function hash_integer(n::Integer, h::Uint)
-    h = hash_uint(uint(n & typemax(Uint)) $ h) $ h
-    n = ifelse(n < 0, oftype(n,-n), n)
-    n >>>= sizeof(Uint) << 3
+function hash_integer(n::Integer, h::UInt)
+    h = hash_uint((n % UInt) $ h) $ h
+    n = abs(n)
+    n >>>= sizeof(UInt) << 3
     while n != 0
-        h = hash_uint(uint(n & typemax(Uint)) $ h) $ h
-        n >>>= sizeof(Uint) << 3
+        h = hash_uint((n % UInt) $ h) $ h
+        n >>>= sizeof(UInt) << 3
     end
     return h
 end
 
-function hash_integer(n::BigInt, h::Uint)
+function hash_integer(n::BigInt, h::UInt)
     s = n.size
     s == 0 && return hash_integer(0, h)
-    p = convert(Ptr{Uint}, n.d)
+    p = convert(Ptr{UInt}, n.d)
     b = unsafe_load(p)
     h = hash_uint(ifelse(s < 0, -b, b) $ h) $ h
     for k = 2:abs(s)
@@ -25,7 +25,7 @@ end
 
 ## generic hashing for rational values ##
 
-function hash(x::Real, h::Uint)
+function hash(x::Real, h::UInt)
     # decompose x as num*2^pow/den
     num, pow, den = decompose(x)
 
@@ -50,7 +50,7 @@ function hash(x::Real, h::Uint)
         pow -= z
     end
 
-    # handle values representable as Int64, Uint64, Float64
+    # handle values representable as Int64, UInt64, Float64
     if den == 1
         left = ndigits0z(num,2) + pow
         right = trailing_zeros(num) + pow
@@ -59,7 +59,7 @@ function hash(x::Real, h::Uint)
                 left <= 63                     && return hash(int64(num) << int(pow), h)
                 signbit(num) == signbit(den)   && return hash(uint64(num) << int(pow), h)
             end # typemin(Int64) handled by Float64 case
-            left <= 1024 && left - right <= 53 && return hash(float64(num) * 2.0^pow, h)
+            left <= 1024 && left - right <= 53 && return hash(ldexp(float64(num),pow), h)
         end
     end
 
@@ -101,7 +101,7 @@ function decompose(x::Float32)
     s = int32(n & 0x007fffff)
     e = int32(n & 0x7f800000 >> 23)
     s |= int32(e != 0) << 23
-    d = ifelse(signbit(n) == 1, -1, 1)
+    d = ifelse(signbit(n), -1, 1)
     int(s), int(e - 150 + (e == 0)), d
 end
 
@@ -112,7 +112,7 @@ function decompose(x::Float64)
     s = int64(n & 0x000fffffffffffff)
     e = int64(n & 0x7ff0000000000000 >> 52)
     s |= int64(e != 0) << 52
-    d = ifelse(signbit(n) == 1, -1, 1)
+    d = ifelse(signbit(n), -1, 1)
     int(s), int(e - 1075 + (e == 0)), d
 end
 
@@ -129,7 +129,7 @@ end
 
 ## streamlined hashing for smallish rational types ##
 
-function hash{T<:Integer64}(x::Rational{T}, h::Uint)
+function hash{T<:Integer64}(x::Rational{T}, h::UInt)
     num, den = Base.num(x), Base.den(x)
     den == 1 && return hash(num, h)
     den == 0 && return hash(ifelse(num > 0, Inf, -Inf), h)
@@ -141,7 +141,7 @@ function hash{T<:Integer64}(x::Rational{T}, h::Uint)
         den >>= pow
         pow = -pow
         if den == 1 && abs(num) < 9007199254740992
-            return hash(float64(num) * 2.0^pow)
+            return hash(ldexp(float64(num),pow))
         end
     end
     h = hash_integer(den, h)
@@ -152,12 +152,12 @@ end
 
 ## hashing Float16s ##
 
-hash(x::Float16, h::Uint) = hash(float64(x), h)
+hash(x::Float16, h::UInt) = hash(float64(x), h)
 
 ## hashing collections ##
-
-function hash(a::AbstractArray, h::Uint)
-    h += uint(0x7f53e68ceb575e76)
+const hashaa_seed = UInt === UInt64 ? 0x7f53e68ceb575e76 : 0xeb575e76
+function hash(a::AbstractArray, h::UInt)
+    h += hashaa_seed
     h += hash(size(a))
     for x in a
         h = hash(x, h)
@@ -165,26 +165,29 @@ function hash(a::AbstractArray, h::Uint)
     return h
 end
 
-function hash(a::Associative, h::Uint)
-    h += uint(0x6d35bb51952d5539)
+const hasha_seed = UInt === UInt64 ? 0x6d35bb51952d5539 : 0x952d5539
+function hash(a::Associative, h::UInt)
+    h += hasha_seed
     for (k,v) in a
         h $= hash(k, hash(v))
     end
     return h
 end
 
-function hash(s::Set, h::Uint)
-    h += uint(0x852ada37cfe8e0ce)
+const hashs_seed = UInt === UInt64 ? 0x852ada37cfe8e0ce : 0xcfe8e0ce
+function hash(s::Set, h::UInt)
+    h += hashs_seed
     for x in s
         h $= hash(x)
     end
     return h
 end
 
-function hash(s::IntSet, h::Uint)
-    h += uint(0x88989f1fc7dea67d)
+const hashis_seed = UInt === UInt64 ? 0x88989f1fc7dea67d : 0xc7dea67d
+function hash(s::IntSet, h::UInt)
+    h += hashis_seed
     h += hash(s.fill1s)
-    filln = s.fill1s ? uint32(-1) : uint32(0)
+    filln = s.fill1s ? ~zero(eltype(s.bits)) : zero(eltype(s.bits))
     for x in s.bits
         if x != filln
             h = hash(x, h)
@@ -194,8 +197,9 @@ function hash(s::IntSet, h::Uint)
 end
 
 # hashing ranges by component at worst leads to collisions for very similar ranges
-function hash(r::Range, h::Uint)
-    h += uint(0x80707b6821b70087)
+const hashr_seed = UInt === UInt64 ? 0x80707b6821b70087 : 0x21b70087
+function hash(r::Range, h::UInt)
+    h += hashr_seed
     h = hash(first(r), h)
     h = hash(step(r), h)
     h = hash(last(r), h)

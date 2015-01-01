@@ -5,25 +5,52 @@
 @test exponent(12.8) == 3
 
 # degree-based trig functions
-for T = (Float32,Float64)
+for T = (Float32,Float64,Rational{Int})
+    fT = typeof(float(one(T)))
     for x = -400:40:400
-        @test_approx_eq_eps sind(convert(T,x))::T convert(T,sin(pi/180*x)) eps(deg2rad(convert(T,x)))
-        @test_approx_eq_eps cosd(convert(T,x))::T convert(T,cos(pi/180*x)) eps(deg2rad(convert(T,x)))
-    end
-    for x = 0.0:180:720
-        @test sind(convert(T,x)) === zero(T)
-        @test sind(-convert(T,x)) === -zero(T)
+        @test_approx_eq_eps sind(convert(T,x))::fT convert(fT,sin(pi/180*x)) eps(deg2rad(convert(fT,x)))
+        @test_approx_eq_eps cosd(convert(T,x))::fT convert(fT,cos(pi/180*x)) eps(deg2rad(convert(fT,x)))
     end
 
+    @test sind(convert(T,0.0))::fT === zero(fT)
+    @test sind(convert(T,180.0))::fT === zero(fT)
+    @test sind(convert(T,360.0))::fT === zero(fT)
+    T != Rational{Int} && @test sind(convert(T,-0.0))::fT === -zero(fT)
+    @test sind(convert(T,-180.0))::fT === -zero(fT)
+    @test sind(convert(T,-360.0))::fT === -zero(fT)
+
+    @test cosd(convert(T,90))::fT === zero(fT)
+    @test cosd(convert(T,270))::fT === zero(fT)
+    @test cosd(convert(T,-90))::fT === zero(fT)
+    @test cosd(convert(T,-270))::fT === zero(fT)
+
+
     for x = -3:0.3:3
-        @test_approx_eq_eps sinpi(convert(T,x))::T convert(T,sin(pi*x)) eps(pi*convert(T,x))
-        @test_approx_eq_eps cospi(convert(T,x))::T convert(T,cos(pi*x)) eps(pi*convert(T,x))
+        @test_approx_eq_eps sinpi(convert(T,x))::fT convert(fT,sin(pi*x)) eps(pi*convert(fT,x))
+        @test_approx_eq_eps cospi(convert(T,x))::fT convert(fT,cos(pi*x)) eps(pi*convert(fT,x))
     end
-    for x = 0.0:1.0:4.0
-        @test sinpi(convert(T,x)) === zero(T)
-        @test sinpi(-convert(T,x)) === -zero(T)
-    end
+
+    @test sinpi(convert(T,0.0))::fT === zero(fT)
+    @test sinpi(convert(T,1.0))::fT === zero(fT)
+    @test sinpi(convert(T,2.0))::fT === zero(fT)
+    T != Rational{Int} && @test sinpi(convert(T,-0.0))::fT === -zero(fT)
+    @test sinpi(convert(T,-1.0))::fT === -zero(fT)
+    @test sinpi(convert(T,-2.0))::fT === -zero(fT)
+
+    @test cospi(convert(T,0.5))::fT === zero(fT)
+    @test cospi(convert(T,1.5))::fT === zero(fT)
+    @test cospi(convert(T,-0.5))::fT === zero(fT)
+    @test cospi(convert(T,-1.5))::fT === zero(fT)
+
+    # check exact values
+    @test sind(convert(T,30)) == 0.5
+    @test cosd(convert(T,60)) == 0.5
+    @test sind(convert(T,150)) == 0.5
+    @test sinpi(one(T)/convert(T,6)) == 0.5
+    T != Float32 && @test cospi(one(T)/convert(T,3)) == 0.5
+    T == Rational{Int} && @test sinpi(5//6) == 0.5
 end
+
 
 # check type stability
 for T = (Float32,Float64,BigFloat)
@@ -171,7 +198,11 @@ end
 @test_approx_eq lbeta(-1/2, 3) log(16/3)
 
 # gamma, lgamma (complex argument)
-@test gamma(1:25) == gamma(Float64[1:25])
+if Base.Math.libm == "libopenlibm"
+    @test gamma(Float64[1:25]) == gamma(1:25)
+else
+    @test_approx_eq gamma(Float64[1:25]) gamma(1:25)
+end
 @test_approx_eq gamma(1/2) sqrt(π)
 @test_approx_eq gamma(-1/2) -2sqrt(π)
 @test_approx_eq lgamma(-1/2) log(abs(gamma(-1/2)))
@@ -243,8 +274,8 @@ end
 @test_approx_eq quadgk(cos, 0,0.7,1, norm=abs)[1] sin(1)
 
 # Ensure subnormal flags functions don't segfault
-@test any(ccall("jl_zero_subnormals", Uint8, (Uint8,), 1) .== [0x00 0x01])
-@test any(ccall("jl_zero_subnormals", Uint8, (Uint8,), 0) .== [0x00 0x01])
+@test any(ccall("jl_zero_subnormals", UInt8, (UInt8,), 1) .== [0x00 0x01])
+@test any(ccall("jl_zero_subnormals", UInt8, (UInt8,), 0) .== [0x00 0x01])
 
 # isqrt (issue #4884)
 @test isqrt(9223372030926249000) == 3037000498
@@ -252,11 +283,11 @@ end
 @test isqrt(int128(typemax(Int64))^2-1) == 9223372036854775806
 @test isqrt(0) == 0
 for i = 1:1000
-    n = rand(Uint128)
+    n = rand(UInt128)
     s = isqrt(n)
     @test s*s <= n
     @test (s+1)*(s+1) > n
-    n = rand(Uint64)
+    n = rand(UInt64)
     s = isqrt(n)
     @test s*s <= n
     @test (s+1)*(s+1) > n
@@ -305,6 +336,13 @@ end
 @test 1e-13 > errc(zeta(2 + 1im, -1.1), -1525.8095173321060982383023516086563741006869909580583246557 + 1719.4753293650912305811325486980742946107143330321249869576im)
 
 @test @evalpoly(2,3,4,5,6) == 3+2*(4+2*(5+2*6)) == @evalpoly(2+0im,3,4,5,6)
+@test let evalcounts=0
+          @evalpoly(begin
+                        evalcounts += 1
+                        4
+                    end, 1,2,3,4,5)
+          evalcounts
+      end == 1
 
 @test 1e-14 > err(eta(1+1e-9), 0.693147180719814213126976796937244130533478392539154928250926)
 @test 1e-14 > err(eta(1+5e-3), 0.693945708117842473436705502427198307157819636785324430166786)

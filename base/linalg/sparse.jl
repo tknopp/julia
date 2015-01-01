@@ -11,8 +11,8 @@ end
 (*){TvA,TiA}(A::SparseMatrixCSC{TvA,TiA}, X::BitArray{1}) = invoke(*, (SparseMatrixCSC, AbstractVector), A, X)
 # In matrix-vector multiplication, the correct orientation of the vector is assumed.
 function A_mul_B!(α::Number, A::SparseMatrixCSC, x::AbstractVector, β::Number, y::AbstractVector)
-    A.n == length(x) || throw(DimensionMismatch(""))
-    A.m == length(y) || throw(DimensionMismatch(""))
+    A.n == length(x) || throw(DimensionMismatch())
+    A.m == length(y) || throw(DimensionMismatch())
     if β != 1
         β != 0 ? scale!(y,β) : fill!(y,zero(eltype(y)))
     end
@@ -34,8 +34,8 @@ function *{TA,S,Tx}(A::SparseMatrixCSC{TA,S}, x::AbstractVector{Tx})
 end
 
 function Ac_mul_B!(α::Number, A::SparseMatrixCSC, x::AbstractVector, β::Number, y::AbstractVector)
-    A.n == length(y) || throw(DimensionMismatch(""))
-    A.m == length(x) || throw(DimensionMismatch(""))
+    A.n == length(y) || throw(DimensionMismatch())
+    A.m == length(x) || throw(DimensionMismatch())
     nzv = A.nzval
     rv = A.rowval
     zro = zero(eltype(y))
@@ -59,8 +59,8 @@ function Ac_mul_B!(α::Number, A::SparseMatrixCSC, x::AbstractVector, β::Number
 end
 Ac_mul_B!(y::AbstractVector, A::SparseMatrixCSC, x::AbstractVector) = Ac_mul_B!(one(eltype(x)), A, x, zero(eltype(y)), y)
 function At_mul_B!(α::Number, A::SparseMatrixCSC, x::AbstractVector, β::Number, y::AbstractVector)
-    A.n == length(y) || throw(DimensionMismatch(""))
-    A.m == length(x) || throw(DimensionMismatch(""))
+    A.n == length(y) || throw(DimensionMismatch())
+    A.m == length(x) || throw(DimensionMismatch())
     nzv = A.nzval
     rv = A.rowval
     zro = zero(eltype(y))
@@ -96,7 +96,7 @@ end
 # In vector-matrix multiplication, the correct orientation of the vector is assumed.
 # XXX: this is wrong (i.e. not what Arrays would do)!!
 function *{T1,T2}(X::AbstractVector{T1}, A::SparseMatrixCSC{T2})
-    A.m==length(X) || throw(DimensionMismatch(""))
+    A.m==length(X) || throw(DimensionMismatch())
     Y = zeros(promote_type(T1,T2), A.n)
     nzv = A.nzval
     rv = A.rowval
@@ -109,7 +109,7 @@ end
 *{TvA,TiA}(A::SparseMatrixCSC{TvA,TiA}, X::BitArray{2}) = invoke(*, (SparseMatrixCSC, AbstractMatrix), A, X)
 function (*){TvA,TiA,TX}(A::SparseMatrixCSC{TvA,TiA}, X::AbstractMatrix{TX})
     mX, nX = size(X)
-    A.n==mX || throw(DimensionMismatch(""))
+    A.n==mX || throw(DimensionMismatch())
     Y = zeros(promote_type(TvA,TX), A.m, nX)
     nzv = A.nzval
     rv = A.rowval
@@ -129,7 +129,7 @@ end
 *{TvA,TiA}(X::Triangular, A::SparseMatrixCSC{TvA,TiA}) = full(X)*A
 function *{TX,TvA,TiA}(X::AbstractMatrix{TX}, A::SparseMatrixCSC{TvA,TiA})
     mX, nX = size(X)
-    nX == A.m || throw(DimensionMismatch(""))
+    nX == A.m || throw(DimensionMismatch())
     Y = zeros(promote_type(TX,TvA), mX, A.n)
     for multivec_row=1:mX, col=1:A.n, k=A.colptr[col]:(A.colptr[col+1]-1)
         Y[multivec_row, col] += X[multivec_row, A.rowval[k]] * A.nzval[k]
@@ -139,10 +139,14 @@ end
 
 # Sparse matrix multiplication as described in [Gustavson, 1978]:
 # http://www.cse.iitb.ac.in/graphics/~anand/website/include/papers/matrix/fast_matrix_mul.pdf
-function *{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti})
+
+*{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti}) = spmatmul(A,B)
+
+function spmatmul{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti};
+                         sortindices::Symbol = :sortcols)
     mA, nA = size(A)
     mB, nB = size(B)
-    nA==mB || throw(DimensionMismatch(""))
+    nA==mB || throw(DimensionMismatch())
 
     colptrA = A.colptr; rowvalA = A.rowval; nzvalA = A.nzval
     colptrB = B.colptr; rowvalB = B.rowval; nzvalB = B.nzval
@@ -191,20 +195,20 @@ function *{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixCSC{Tv,Ti})
 
     # The Gustavson algorithm does not guarantee the product to have sorted row indices.
     Cunsorted = SparseMatrixCSC(mA, nB, colptrC, rowvalC, nzvalC)
-    Ct = Cunsorted.'
-    Ctt = Base.SparseMatrix.transpose!(Ct, SparseMatrixCSC(mA, nB, colptrC, rowvalC, nzvalC))
+    C = Base.SparseMatrix.sortSparseMatrixCSC!(Cunsorted, sortindices=sortindices)
+    return C
 end
 
 ## solvers
 function A_ldiv_B!(A::SparseMatrixCSC, b::AbstractVecOrMat)
     if iseltype(b, Complex); A = complex(A); end
 
-    if istril(A) 
-        # TODO: Fix diagonal case. Diagonal(A.nzval) needs to handle 
+    if istril(A)
+        # TODO: Fix diagonal case. Diagonal(A.nzval) needs to handle
         # the case where there are zeros on the diagonal and error out.
         # It also does not work in the complex case. VBS.
         #if istriu(A); return A_ldiv_B!(Diagonal(A.nzval), b); end
-        return fwdTriSolve!(A, b) 
+        return fwdTriSolve!(A, b)
     end
     if istriu(A); return bwdTriSolve!(A, b); end
     return A_ldiv_B!(lufact(A),b)
@@ -223,11 +227,11 @@ function fwdTriSolve!(A::SparseMatrixCSC, B::AbstractVecOrMat)
     if nrowB != ncol
         throw(DimensionMismatch("A is $(ncol)X$(ncol) and B has length $(n)"))
     end
-   
+
     aa = A.nzval
     ja = A.rowval
     ia = A.colptr
-   
+
     joff = 0
     for k = 1:ncolB
         for j = 1:(nrowB-1)
@@ -261,7 +265,7 @@ function bwdTriSolve!(A::SparseMatrixCSC, B::AbstractVecOrMat)
     aa = A.nzval
     ja = A.rowval
     ia = A.colptr
-    
+
     joff = 0
     for k = 1:ncolB
         for j = nrowB:-1:2
@@ -592,7 +596,7 @@ inv(A::SparseMatrixCSC) = error("The inverse of a sparse matrix can often be den
 # multiply by diagonal matrix as vector
 function scale!{Tv,Ti}(C::SparseMatrixCSC{Tv,Ti}, A::SparseMatrixCSC, b::Vector)
     m, n = size(A)
-    (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch(""))
+    (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch())
     numnz = nnz(A)
     C.colptr = convert(Array{Ti}, A.colptr)
     C.rowval = convert(Array{Ti}, A.rowval)
@@ -605,7 +609,7 @@ end
 
 function scale!{Tv,Ti}(C::SparseMatrixCSC{Tv,Ti}, b::Vector, A::SparseMatrixCSC)
     m, n = size(A)
-    (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch(""))
+    (n==length(b) && size(A)==size(C)) || throw(DimensionMismatch())
     numnz = nnz(A)
     C.colptr = convert(Array{Ti}, A.colptr)
     C.rowval = convert(Array{Ti}, A.rowval)
@@ -621,3 +625,7 @@ scale{Tv,Ti,T}(A::SparseMatrixCSC{Tv,Ti}, b::Vector{T}) =
 
 scale{T,Tv,Ti}(b::Vector{T}, A::SparseMatrixCSC{Tv,Ti}) =
     scale!(SparseMatrixCSC(size(A,1),size(A,2),Ti[],Ti[],promote_type(Tv,T)[]), b, A)
+
+chol(A::SparseMatrixCSC) = error("Use cholfact() instead of chol() for sparse matrices.")
+lu(A::SparseMatrixCSC) = error("Use lufact() instead of lu() for sparse matrices.")
+eig(A::SparseMatrixCSC) = error("Use eigs() instead of eig() for sparse matrices.")

@@ -17,10 +17,14 @@ function scale!{T<:BlasFloat}(X::Array{T}, s::T)
 end
 
 scale!{T<:BlasFloat}(X::Array{T}, s::Number) = scale!(X, convert(T, s))
-scale!{T<:BlasComplex}(X::Array{T}, s::Real) = BLAS.scal!(length(X), oftype(real(zero(T)),s), X, 1)
+function scale!{T<:BlasComplex}(X::Array{T}, s::Real)
+    R = typeof(real(zero(T)))
+    BLAS.scal!(2*length(X), convert(R,s), convert(Ptr{R},pointer(X)), 1)
+    X
+end
 
 #Test whether a matrix is positive-definite
-isposdef!{T<:BlasFloat}(A::StridedMatrix{T}, UL::Symbol) = LAPACK.potrf!(string(UL)[1], A)[2] == 0
+isposdef!{T<:BlasFloat}(A::StridedMatrix{T}, UL::Symbol) = LAPACK.potrf!(char_uplo(UL), A)[2] == 0
 isposdef!(A::StridedMatrix) = ishermitian(A) && isposdef!(A, :U)
 
 isposdef{T}(A::AbstractMatrix{T}, UL::Symbol) = (S = typeof(sqrt(one(T))); isposdef!(S == T ? copy(A) : convert(AbstractMatrix{S}, A), UL))
@@ -54,19 +58,19 @@ function norm{T<:BlasFloat, TI<:Integer}(x::StridedVector{T}, rx::Union(UnitRang
     BLAS.nrm2(length(rx), pointer(x)+(first(rx)-1)*sizeof(T), step(rx))
 end
 
-vecnorm1{T<:BlasReal}(x::Union(Array{T},StridedVector{T})) = 
+vecnorm1{T<:BlasReal}(x::Union(Array{T},StridedVector{T})) =
     length(x) < ASUM_CUTOFF ? generic_vecnorm1(x) : BLAS.asum(x)
 
-vecnorm2{T<:BlasFloat}(x::Union(Array{T},StridedVector{T})) = 
+vecnorm2{T<:BlasFloat}(x::Union(Array{T},StridedVector{T})) =
     length(x) < NRM2_CUTOFF ? generic_vecnorm2(x) : BLAS.nrm2(x)
 
-function triu!{T}(M::Matrix{T}, k::Integer)
+function triu!(M::AbstractMatrix, k::Integer)
     m, n = size(M)
     idx = 1
     for j = 0:n-1
         ii = min(max(0, j+1-k), m)
         for i = (idx+ii):(idx+m-1)
-            M[i] = zero(T)
+            M[i] = zero(M[i])
         end
         idx += m
     end
@@ -75,13 +79,13 @@ end
 
 triu(M::Matrix, k::Integer) = triu!(copy(M), k)
 
-function tril!{T}(M::Matrix{T}, k::Integer)
+function tril!(M::AbstractMatrix, k::Integer)
     m, n = size(M)
     idx = 1
     for j = 0:n-1
         ii = min(max(0, j-k), m)
         for i = idx:(idx+ii-1)
-            M[i] = zero(T)
+            M[i] = zero(M[i])
         end
         idx += m
     end
@@ -121,7 +125,7 @@ function diagm{T}(v::AbstractVector{T}, k::Integer=0)
     A = zeros(T,n,n)
     A[diagind(A,k)] = v
     A
-end  
+end
 
 diagm(x::Number) = (X = Array(typeof(x),1,1); X[1,1] = x; X)
 
@@ -147,8 +151,8 @@ function kron{T,S}(a::Matrix{T}, b::Matrix{S})
     R
 end
 
-kron(a::Number, b::Union(Number, Vector, Matrix)) = a * b 
-kron(a::Union(Vector, Matrix), b::Number) = a * b 
+kron(a::Number, b::Union(Number, Vector, Matrix)) = a * b
+kron(a::Union(Vector, Matrix), b::Number) = a * b
 kron(a::Vector, b::Vector)=vec(kron(reshape(a,length(a),1),reshape(b,length(b),1)))
 kron(a::Matrix, b::Vector)=kron(a,reshape(b,length(b),1))
 kron(a::Vector, b::Matrix)=kron(reshape(a,length(a),1),b)
@@ -156,8 +160,8 @@ kron(a::Vector, b::Matrix)=kron(reshape(a,length(a),1),b)
 ^(A::Matrix, p::Integer) = p < 0 ? inv(A^-p) : Base.power_by_squaring(A,p)
 
 function ^(A::Matrix, p::Number)
-    isinteger(p) && return A^integer(real(p)) 
-    
+    isinteger(p) && return A^integer(real(p))
+
     chksquare(A)
     v, X = eig(A)
     any(v.<0) && (v = complex(v))
@@ -245,8 +249,8 @@ function expm!{T<:BlasFloat}(A::StridedMatrix{T})
     else
         s  = log2(nA/5.4)               # power of 2 later reversed by squaring
         if s > 0
-            si = iceil(s)
-            A /= oftype(T,2^si)
+            si = ceil(Int,s)
+            A /= convert(T,2^si)
         end
         CC = T[64764752532480000.,32382376266240000.,7771770303897600.,
                 1187353796428800.,  129060195264000.,  10559470521600.,
@@ -263,13 +267,13 @@ function expm!{T<:BlasFloat}(A::StridedMatrix{T})
 
         X = V + U
         LAPACK.gesv!(V-U, X)
-    
+
         if s > 0            # squaring to reverse dividing by power of 2
             for t=1:si X *= X end
         end
     end
 
-	# Undo the balancing
+    # Undo the balancing
     for j = ilo:ihi
         scj = scale[j]
         for i = 1:n
@@ -322,9 +326,9 @@ function inv{S}(A::StridedMatrix{S})
     Ac = convert(AbstractMatrix{T}, A)
     if istriu(Ac)
         Ai = inv(Triangular(A, :U, false))
-    elseif istril(Ac) 
+    elseif istril(Ac)
         Ai = inv(Triangular(A, :L, false))
-    else 
+    else
         Ai = inv(lufact(Ac))
     end
     return convert(typeof(Ac), Ai)
@@ -380,7 +384,7 @@ function factorize{T}(A::Matrix{T})
             end
             if utri1
                 if (herm & (T <: Complex)) | sym
-                    try 
+                    try
                         return ldltfact!(SymTridiagonal(diag(A), diag(A, -1)))
                     end
                 end
@@ -401,7 +405,7 @@ function factorize{T}(A::Matrix{T})
         end
         return lufact(A)
     end
-    qrfact(A,pivot=T<:BlasFloat)
+    qrfact(A,pivot=typeof(zero(T)/sqrt(zero(T) + zero(T)))<:BlasFloat) # Generic pivoted QR not implemented yet
 end
 
 (\)(a::Vector, B::StridedVecOrMat) = (\)(reshape(a, length(a), 1), B)
@@ -409,7 +413,7 @@ function (\)(A::StridedMatrix, B::StridedVecOrMat)
     m, n = size(A)
     if m == n
         if istril(A)
-            return istriu(A) ? \(Diagonal(A),B) : \(Triangular(A, :L),B) 
+            return istriu(A) ? \(Diagonal(A),B) : \(Triangular(A, :L),B)
         end
         istriu(A) && return \(Triangular(A, :U),B)
         return \(lufact(A),B)
@@ -418,18 +422,37 @@ function (\)(A::StridedMatrix, B::StridedVecOrMat)
 end
 
 ## Moore-Penrose inverse
-function pinv{T}(A::StridedMatrix{T})
+function pinv{T}(A::StridedMatrix{T}, tol::Real)
+## for __dense__ ill-conditioned matrices, please use
+## the threshold tol = sqrt(eps(real(float(one(T)))))
+    m, n        = size(A)
+    (m == 0 || n == 0) && return Array(T, n, m)
+    if istril(A)
+       if( istriu(A) )
+          maxabsA = maximum(abs(diag(A)))
+          B = zeros(T,n,m);
+          for i = 1:min(m,n)
+             if( abs(A[i,i]) > tol*maxabsA && isfinite(one(T)/A[i,i]) )
+                 B[i,i] = one(T)/A[i,i]
+             end
+          end
+          return B;
+       end
+    end
     SVD         = svdfact(A, thin=true)
     S           = eltype(SVD[:S])
-    m, n        = size(A)
-    (m == 0 || n == 0) && return Array(S, n, m)
     Sinv        = zeros(S, length(SVD[:S]))
-    index       = SVD[:S] .> eps(real(float(one(T))))*max(m,n)*maximum(SVD[:S])
+    index       = SVD[:S] .> tol*maximum(SVD[:S])
     Sinv[index] = one(S) ./ SVD[:S][index]
+    Sinv[find(!isfinite(Sinv))] = zero(S)
     return SVD[:Vt]'scale(Sinv, SVD[:U]')
 end
+function pinv{T}(A::StridedMatrix{T})
+    tol = eps(real(float(one(T))))*maximum(size(A))
+    return pinv(A, tol)
+end
 pinv(a::StridedVector) = pinv(reshape(a, length(a), 1))
-pinv(x::Number) = one(x)/x
+pinv(x::Number) = isfinite(one(x)/x) ? one(x)/x : zero(x)
 
 ## Basis for null space
 function null{T}(A::StridedMatrix{T})
@@ -441,11 +464,11 @@ function null{T}(A::StridedMatrix{T})
 end
 null(a::StridedVector) = null(reshape(a, length(a), 1))
 
-function cond(A::StridedMatrix, p::Real=2) 
+function cond(A::StridedMatrix, p::Real=2)
     if p == 2
         v = svdvals(A)
         maxv = maximum(v)
-        return maxv == 0.0 ? inf(typeof(real(A[1,1]))) : maxv / minimum(v)
+        return maxv == 0.0 ? oftype(real(A[1,1]),Inf) : maxv / minimum(v)
     elseif p == 1 || p == Inf
         chksquare(A)
         return cond(lufact(A), p)
@@ -476,4 +499,4 @@ function lyap{T<:BlasFloat}(A::StridedMatrix{T},C::StridedMatrix{T})
 end
 lyap{T<:Integer}(A::StridedMatrix{T},C::StridedMatrix{T}) = lyap(float(A), float(C))
 lyap{T<:Number}(a::T, c::T) = -c/(2a)
-                                    
+

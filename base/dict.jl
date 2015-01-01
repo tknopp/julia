@@ -18,14 +18,14 @@ end
 
 function show{K,V}(io::IO, t::Associative{K,V})
     if isempty(t)
-        print(io, typeof(t),"()")
+        print(io, typeof(t), "()")
     else
-        if K === Any && V === Any
-            delims = ['{','}']
+        if isleaftype(K) && isleaftype(V)
+            print(io, typeof(t).name)
         else
-            delims = ['[',']']
+            print(io, typeof(t))
         end
-        print(io, delims[1])
+        print(io, '(')
         first = true
         for (k, v) in t
             first || print(io, ',')
@@ -34,7 +34,7 @@ function show{K,V}(io::IO, t::Associative{K,V})
             print(io, "=>")
             show(io, v)
         end
-        print(io, delims[2])
+        print(io, ')')
     end
 end
 
@@ -54,7 +54,7 @@ function _truncate_at_width_or_chars(str, width, chars="", truncmark="…")
 
     lastidx != 0 && str[lastidx] in chars && (lastidx = prevind(str, lastidx))
     truncidx == 0 && (truncidx = lastidx)
-    if lastidx < sizeof(str)
+    if lastidx < endof(str)
         return bytestring(SubString(str, 1, truncidx) * truncmark)
     else
         return bytestring(str)
@@ -76,7 +76,7 @@ function showdict{K,V}(io::IO, t::Associative{K,V}; limit::Bool = false,
         rows -= 2 # Subtract the summary and final ⋮ continuation lines
 
         # determine max key width to align the output, caching the strings
-        ks = Array(String, min(rows, length(t)))
+        ks = Array(AbstractString, min(rows, length(t)))
         keylen = 0
         for (i, k) in enumerate(keys(t))
             i > rows && break
@@ -181,7 +181,15 @@ function merge!(d::Associative, others::Associative...)
     end
     return d
 end
-merge(d::Associative, others::Associative...) = merge!(copy(d), others...)
+function merge(d::Associative, others::Associative...)
+    K, V = eltype(d)
+    for other in others
+        (Ko, Vo) = eltype(other)
+        K = promote_type(K, Ko)
+        V = promote_type(V, Vo)
+    end
+    merge!(Dict{K,V}(), d, others...)
+end
 
 function filter!(f::Function, d::Associative)
     for (k,v) in d
@@ -248,16 +256,20 @@ type ObjectIdDict <: Associative{Any,Any}
 
     function ObjectIdDict(itr)
         d = ObjectIdDict()
-        for (k,v) in itr
-            d[k] = v
-        end
+        for (k,v) in itr; d[k] = v; end
+        d
+    end
+
+    function ObjectIdDict(pairs::Pair...)
+        d = ObjectIdDict()
+        for (k,v) in pairs; d[k] = v; end
         d
     end
 
     function ObjectIdDict(o::ObjectIdDict)
         N = length(o.ht)
         ht = cell(N)
-        ccall(:memcpy, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Uint),
+        ccall(:memcpy, Ptr{Void}, (Ptr{Void}, Ptr{Void}, UInt),
               ht, o.ht, N*sizeof(Ptr))
         new(ht)
     end
@@ -288,7 +300,7 @@ end
 
 empty!(t::ObjectIdDict) = (t.ht = cell(length(t.ht)); t)
 
-_oidd_nextind(a, i) = int(ccall(:jl_eqtable_nextind, Csize_t, (Any, Csize_t), a, i))
+_oidd_nextind(a, i) = reinterpret(Int,ccall(:jl_eqtable_nextind, Csize_t, (Any, Csize_t), a, i))
 
 start(t::ObjectIdDict) = _oidd_nextind(t.ht, 0)
 done(t::ObjectIdDict, i) = (i == -1)
@@ -307,7 +319,7 @@ copy(o::ObjectIdDict) = ObjectIdDict(o)
 # dict
 
 type Dict{K,V} <: Associative{K,V}
-    slots::Array{Uint8,1}
+    slots::Array{UInt8,1}
     keys::Array{K,1}
     vals::Array{V,1}
     ndel::Int
@@ -316,16 +328,7 @@ type Dict{K,V} <: Associative{K,V}
 
     function Dict()
         n = 16
-        new(zeros(Uint8,n), Array(K,n), Array(V,n), 0, 0, identity)
-    end
-    function Dict(ks, vs)
-        # TODO: eventually replace with a call to Dict(zip(ks,vs))
-        n = min(length(ks), length(vs))
-        h = Dict{K,V}()
-        for i=1:n
-            h[ks[i]] = vs[i]
-        end
-        return h
+        new(zeros(UInt8,n), Array(K,n), Array(V,n), 0, 0, identity)
     end
     function Dict(kv)
         h = Dict{K,V}()
@@ -334,14 +337,48 @@ type Dict{K,V} <: Associative{K,V}
         end
         return h
     end
+    Dict(p::Pair) = setindex!(Dict{K,V}(), p.second, p.first)
+    function Dict(ps::Pair...)
+        h = Dict{K,V}()
+        sizehint!(h, length(ps))
+        for p in ps
+            h[p.first] = p.second
+        end
+        return h
+    end
 end
 Dict() = Dict{Any,Any}()
+Dict(kv::()) = Dict()
 
-Dict{K,V}(ks::AbstractArray{K}, vs::AbstractArray{V}) = Dict{K,V}(ks,vs)
-Dict(ks, vs) = Dict{Any,Any}(ks, vs)
+const AnyDict = Dict{Any,Any}
+
+# TODO: this can probably be simplified using `eltype` as a THT (Tim Holy trait)
+Dict{K,V}(kv::((K,V)...,))               = Dict{K,V}(kv)
+Dict{K  }(kv::((K,Any)...,))             = Dict{K,Any}(kv)
+Dict{V  }(kv::((Any,V)...,))             = Dict{Any,V}(kv)
+Dict{K,V}(kv::(Pair{K,V}...,))           = Dict{K,V}(kv)
+Dict{K}  (kv::(Pair{K}...,))             = Dict{K,Any}(kv)
+Dict{V}  (kv::(Pair{TypeVar(:K),V}...,)) = Dict{Any,V}(kv)
+Dict     (kv::(Pair...,))                = Dict{Any,Any}(kv)
+
+Dict{K,V}(kv::AbstractArray{(K,V)})     = Dict{K,V}(kv)
+Dict{K,V}(kv::AbstractArray{Pair{K,V}}) = Dict{K,V}(kv)
+Dict{K,V}(kv::Associative{K,V})         = Dict{K,V}(kv)
+
+Dict{K,V}(ps::Pair{K,V}...)            = Dict{K,V}(ps)
+Dict{K}  (ps::Pair{K}...,)             = Dict{K,Any}(ps)
+Dict{V}  (ps::Pair{TypeVar(:K),V}...,) = Dict{Any,V}(ps)
+Dict     (ps::Pair...)                 = Dict{Any,Any}(ps)
+
+Dict(kv) = dict_with_eltype(kv, eltype(kv))
+dict_with_eltype{K,V}(kv, ::Type{(K,V)}) = Dict{K,V}(kv)
+dict_with_eltype{K,V}(kv, ::Type{Pair{K,V}}) = Dict{K,V}(kv)
+dict_with_eltype(kv, t) = Dict{Any,Any}(kv)
+
+similar{K,V}(d::Dict{K,V}) = Dict{K,V}()
 
 # conversion between Dict types
-function convert{K,V}(::Type{Dict{K,V}},d::Dict)
+function convert{K,V}(::Type{Dict{K,V}},d::Associative)
     h = Dict{K,V}()
     for (k,v) in d
         ck = convert(K,k)
@@ -355,16 +392,6 @@ function convert{K,V}(::Type{Dict{K,V}},d::Dict)
 end
 convert{K,V}(::Type{Dict{K,V}},d::Dict{K,V}) = d
 
-# syntax entry points
-Dict{K,V}(ks::(K...), vs::(V...)) = Dict{K  ,V  }(ks, vs)
-Dict{K  }(ks::(K...), vs::Tuple ) = Dict{K  ,Any}(ks, vs)
-Dict{V  }(ks::Tuple , vs::(V...)) = Dict{Any,V  }(ks, vs)
-
-Dict{K,V}(kv::AbstractArray{(K,V)}) = Dict{K,V}(kv)
-Dict{K,V}(kv::Associative{K,V}) = Dict{K,V}(kv)
-
-similar{K,V}(d::Dict{K,V}) = (K=>V)[]
-
 function serialize(s, t::Dict)
     serialize_type(s, typeof(t))
     write(s, int32(length(t)))
@@ -376,7 +403,7 @@ end
 
 function deserialize{K,V}(s, T::Type{Dict{K,V}})
     n = read(s, Int32)
-    t = T(); sizehint(t, n)
+    t = T(); sizehint!(t, n)
     for i = 1:n
         k = deserialize(s)
         v = deserialize(s)
@@ -385,13 +412,13 @@ function deserialize{K,V}(s, T::Type{Dict{K,V}})
     return t
 end
 
-hashindex(key, sz) = (int(hash(key)) & (sz-1)) + 1
+hashindex(key, sz) = ((hash(key)%Int) & (sz-1)) + 1
 
 isslotempty(h::Dict, i::Int) = h.slots[i] == 0x0
 isslotfilled(h::Dict, i::Int) = h.slots[i] == 0x1
 isslotmissing(h::Dict, i::Int) = h.slots[i] == 0x2
 
-function rehash{K,V}(h::Dict{K,V}, newsz)
+function rehash!{K,V}(h::Dict{K,V}, newsz = length(h.keys))
     olds = h.slots
     oldk = h.keys
     oldv = h.vals
@@ -406,7 +433,7 @@ function rehash{K,V}(h::Dict{K,V}, newsz)
         return h
     end
 
-    slots = zeros(Uint8,newsz)
+    slots = zeros(UInt8,newsz)
     keys = Array(K, newsz)
     vals = Array(V, newsz)
     count0 = h.count
@@ -427,7 +454,7 @@ function rehash{K,V}(h::Dict{K,V}, newsz)
 
             if h.count != count0
                 # if items are removed by finalizers, retry
-                return rehash(h, newsz)
+                return rehash!(h, newsz)
             end
         end
     end
@@ -441,24 +468,26 @@ function rehash{K,V}(h::Dict{K,V}, newsz)
     return h
 end
 
-function sizehint(d::Dict, newsz)
+function sizehint!(d::Dict, newsz)
     oldsz = length(d.slots)
     if newsz <= oldsz
         # todo: shrink
-        # be careful: rehash() assumes everything fits. it was only designed
+        # be careful: rehash!() assumes everything fits. it was only designed
         # for growing.
         return d
     end
     # grow at least 25%
     newsz = max(newsz, (oldsz*5)>>2)
-    rehash(d, newsz)
+    rehash!(d, newsz)
 end
 
 function empty!{K,V}(h::Dict{K,V})
     fill!(h.slots, 0x0)
     sz = length(h.slots)
-    h.keys = Array(K, sz)
-    h.vals = Array(V, sz)
+    empty!(h.keys)
+    empty!(h.vals)
+    resize!(h.keys, sz)
+    resize!(h.vals, sz)
     h.ndel = 0
     h.count = 0
     return h
@@ -522,7 +551,7 @@ function ht_keyindex2{K,V}(h::Dict{K,V}, key)
 
     avail < 0 && return avail
 
-    rehash(h, h.count > 64000 ? sz*2 : sz*4)
+    rehash!(h, h.count > 64000 ? sz*2 : sz*4)
 
     return ht_keyindex2(h, key)
 end
@@ -537,7 +566,7 @@ function _setindex!(h::Dict, v, key, index)
     # Rehash now if necessary
     if h.ndel >= ((3*sz)>>2) || h.count*3 > sz*2
         # > 3/4 deleted or > 2/3 full
-        rehash(h, h.count > 64000 ? h.count*2 : h.count*4)
+        rehash!(h, h.count > 64000 ? h.count*2 : h.count*4)
     end
 end
 
@@ -651,8 +680,8 @@ end
 
 function _delete!(h::Dict, index)
     h.slots[index] = 0x2
-    ccall(:jl_arrayunset, Void, (Any, Uint), h.keys, index-1)
-    ccall(:jl_arrayunset, Void, (Any, Uint), h.vals, index-1)
+    ccall(:jl_arrayunset, Void, (Any, UInt), h.keys, index-1)
+    ccall(:jl_arrayunset, Void, (Any, UInt), h.vals, index-1)
     h.ndel += 1
     h.count -= 1
     h
@@ -721,7 +750,7 @@ end
 type WeakKeyDict{K,V} <: Associative{K,V}
     ht::Dict{Any,V}
 
-    WeakKeyDict() = new((Any=>V)[])
+    WeakKeyDict() = new(Dict{Any,V}())
 end
 WeakKeyDict() = WeakKeyDict{Any,Any}()
 

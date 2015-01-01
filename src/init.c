@@ -6,8 +6,9 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <setjmp.h>
+#include <stdio.h>
 #include <assert.h>
+#include <fcntl.h>
 
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/types.h>
@@ -42,6 +43,12 @@
 extern "C" {
 #endif
 
+#ifdef _MSC_VER
+DLLEXPORT char * dirname(char *);
+#else
+#include <libgen.h>
+#endif
+
 #ifdef _OS_WINDOWS_
 #define WIN32_LEAN_AND_MEAN
 // Copied from MINGW_FLOAT_H which may not be found due to a collision with the builtin gcc float.h
@@ -66,6 +73,7 @@ void __cdecl fpreset (void);
 #define _FPE_EXPLICITGEN    0x8c    /* raise( SIGFPE ); */
 #include <windows.h>
 #include <dbghelp.h>
+#include <io.h>
 extern int needsSymRefreshModuleList;
 extern BOOL (WINAPI *hSymRefreshModuleList)(HANDLE);
 #endif
@@ -78,13 +86,22 @@ DLLEXPORT void jlbacktrace();
 DLLEXPORT void gdbbacktrace();
 DLLEXPORT void gdblookup(ptrint_t ip);
 
-char *julia_home = NULL;
-jl_compileropts_t jl_compileropts = { NULL, // build_path
+static const char system_image_path[256] = JL_SYSTEM_IMAGE_PATH;
+
+jl_compileropts_t jl_compileropts = { NULL, // julia_home
+                                      NULL, // julia_bin
+                                      NULL, // build_path
+                                      system_image_path, // image_file
+                                      NULL, // cpu_target ("native", "core2", etc...)
                                       0,    // code_coverage
                                       0,    // malloc_log
                                       JL_COMPILEROPT_CHECK_BOUNDS_DEFAULT,
                                       JL_COMPILEROPT_DUMPBITCODE_OFF,
-                                      0     // int32_literals
+                                      0,    // int_literals
+                                      JL_COMPILEROPT_COMPILE_DEFAULT,
+                                      0,    // opt_level
+                                      1,    // depwarn
+                                      1     // can_inline
 };
 
 int jl_boot_file_loaded = 0;
@@ -208,6 +225,7 @@ volatile sig_atomic_t jl_signal_pending = 0;
 volatile sig_atomic_t jl_defer_signal = 0;
 
 #ifdef _OS_WINDOWS_
+BOOL (*pSetThreadStackGuarantee)(PULONG);
 void restore_signals(void)
 {
     SetConsoleCtrlHandler(NULL, 0); //turn on ctrl-c handler
@@ -216,18 +234,23 @@ void restore_signals(void)
 void jl_throw_in_ctx(jl_value_t *excpt, CONTEXT *ctxThread, int bt)
 {
     assert(excpt != NULL);
+#if defined(_CPU_X86_64_)
+    DWORD64 Rsp = (ctxThread->Rsp&(DWORD64)-16) - 8;
+#elif defined(_CPU_X86_)
+    DWORD32 Esp = (ctxThread->Esp&(DWORD32)-16) - 4;
+#else
+#error WIN16 not supported :P
+#endif
     bt_size = bt ? rec_backtrace_ctx(bt_data, MAX_BT_SIZE, ctxThread) : 0;
     jl_exception_in_transit = excpt;
 #if defined(_CPU_X86_64_)
+    *(DWORD64*)Rsp = 0;
+    ctxThread->Rsp = Rsp;
     ctxThread->Rip = (DWORD64)&jl_rethrow;
-    ctxThread->Rsp &= (DWORD64)-16;
-    ctxThread->Rsp -= 8; //fix up the stack pointer -- this seems to be correct by observation
 #elif defined(_CPU_X86_)
+    *(DWORD32*)Esp = 0;
+    ctxThread->Esp = Esp;
     ctxThread->Eip = (DWORD)&jl_rethrow;
-    ctxThread->Esp &= (DWORD)-16;
-    ctxThread->Esp -= 4; //fix up the stack pointer
-#else
-#error WIN16 not supported :P
 #endif
 }
 
@@ -287,8 +310,7 @@ static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo,
                 jl_throw_in_ctx(jl_diverror_exception, ExceptionInfo->ContextRecord,in_ctx);
                 return EXCEPTION_CONTINUE_EXECUTION;
             case EXCEPTION_STACK_OVERFLOW:
-                bt_size = 0;
-                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord,0);
+                jl_throw_in_ctx(jl_stackovf_exception, ExceptionInfo->ContextRecord,in_ctx&&pSetThreadStackGuarantee);
                 return EXCEPTION_CONTINUE_EXECUTION;
         }
         ios_puts("\nPlease submit a bug report with steps to reproduce this fault, and any error messages that follow (in their entirety). Thanks.\nException: ", ios_stderr);
@@ -340,6 +362,11 @@ static LONG WINAPI _exception_handler(struct _EXCEPTION_POINTERS *ExceptionInfo,
         gdblookup((ptrint_t)ExceptionInfo->ExceptionRecord->ExceptionAddress);
         bt_size = rec_backtrace_ctx(bt_data, MAX_BT_SIZE, ExceptionInfo->ContextRecord);
         jlbacktrace();
+        static int recursion = 0;
+        if (recursion++)
+            exit(1);
+        else
+            jl_exit(1);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -355,7 +382,7 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
     EXCEPTION_POINTERS ExceptionInfo;
     ExceptionInfo.ExceptionRecord = ExceptionRecord;
     ExceptionInfo.ContextRecord = ContextRecord;
-    
+
     EXCEPTION_DISPOSITION rval;
     switch (_exception_handler(&ExceptionInfo,1)) {
         case EXCEPTION_CONTINUE_EXECUTION:
@@ -369,10 +396,8 @@ EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD ExceptionRecord, 
     }
 
     return rval;
-} 
-void* CALLBACK jl_getUnwindInfo(HANDLE hProcess, ULONG64 AddrBase, ULONG64 UserContext);
+}
 #endif
-
 #else // #ifdef _OS_WINDOWS_
 
 void restore_signals(void)
@@ -421,7 +446,7 @@ static void jl_uv_exitcleanup_walk(uv_handle_t *handle, void *arg)
 void jl_write_coverage_data(void);
 void jl_write_malloc_log(void);
 
-DLLEXPORT void uv_atexit_hook()
+DLLEXPORT void jl_atexit_hook()
 {
 #if defined(JL_GC_MARKSWEEP) && defined(GC_FINAL_STATS)
     jl_print_gc_stats(JL_STDERR);
@@ -530,7 +555,7 @@ void *init_stdio_handle(uv_file fd,int readable)
     void *handle;
     uv_handle_type type = uv_guess_handle(fd);
     jl_uv_file_t *file;
-#ifndef _OS_WINDOWS_    
+#ifndef _OS_WINDOWS_
     // Duplicate the file descriptor so we can later dup it over if we want to redirect
     // STDIO without having to worry about closing the associated libuv object.
     // On windows however, libuv objects remember streams by their HANDLE, so this is
@@ -548,7 +573,15 @@ void *init_stdio_handle(uv_file fd,int readable)
             ((uv_tty_t*)handle)->data=0;
             uv_tty_set_mode((uv_tty_t*)handle,0); //cooked stdio
             break;
-        case UV_FILE: 
+        case UV_UNKNOWN_HANDLE:
+            // dup the descriptor with a new one pointing at the bit bucket ...
+#if defined(_OS_WINDOWS_)
+            _dup2(_open("NUL", O_RDWR | O_BINARY, _S_IREAD | _S_IWRITE), fd);
+#else
+            dup2(open("/dev/null", O_RDWR, S_IRUSR | S_IWUSR /* 0600 */ | S_IRGRP | S_IROTH /* 0644 */), fd);
+#endif
+            // ...and continue on as in the UV_FILE case
+        case UV_FILE:
             file = (jl_uv_file_t*)malloc(sizeof(jl_uv_file_t));
             file->loop = jl_io_loop;
             file->type = UV_FILE;
@@ -601,7 +634,9 @@ char jl_using_intel_jitevents; // Non-zero if running under Intel VTune Amplifie
 #endif
 
 #if defined(JL_USE_INTEL_JITEVENTS) && defined(__linux__)
-unsigned sig_stack_size = SIGSTKSZ; 
+unsigned sig_stack_size = SIGSTKSZ;
+#elif defined(_OS_WINDOWS_)
+#define sig_stack_size 131072 // 128k
 #else
 #define sig_stack_size SIGSTKSZ
 #endif
@@ -724,14 +759,140 @@ kern_return_t catch_exception_raise(mach_port_t            exception_port,
 
 #endif
 
-void julia_init(char *imageFile)
+static int isabspath(const char *in)
 {
+#ifdef _OS_WINDOWS_
+    char c0 = in[0];
+    if (c0 == '/' || c0 == '\\') {
+        return 1; // absolute path relative to %CD% (current drive), or UNC
+    }
+    else {
+        int s = strlen(in);
+        if (s > 2) {
+            char c1 = in[1];
+            char c2 = in[2];
+            if (c1 == ':' && (c2 == '/' || c2 == '\\')) return 1; // absolute path
+        }
+    }
+#else
+    if (jl_compileropts.image_file[0] == '/') return 1; // absolute path
+#endif
+    return 0; // relative path
+}
+
+static char *abspath(const char *in)
+{ // compute an absolute path location, so that chdir doesn't change the file reference
+#ifndef _OS_WINDOWS_
+    char *out = realpath(in, NULL);
+    if (!out) {
+        if (in[0] == PATHSEPSTRING[0]) {
+            out = strdup(in);
+        }
+        else {
+            size_t path_size = PATH_MAX;
+            size_t len = strlen(in);
+            char *path = (char*)malloc(PATH_MAX);
+            if (uv_cwd(path, &path_size)) {
+                ios_printf(ios_stderr, "fatal error: unexpected error while retrieving current working directory\n");
+                exit(1);
+            }
+            if (path_size + len + 1 >= PATH_MAX) {
+                ios_printf(ios_stderr, "fatal error: current working directory path too long\n");
+                exit(1);
+            }
+            path[path_size-1] = PATHSEPSTRING[0];
+            memcpy(path+path_size, in, len+1);
+            out = strdup(path);
+        }
+    }
+#else
+    DWORD n = GetFullPathName(in, 0, NULL, NULL);
+    if (n <= 0) {
+        ios_printf(ios_stderr, "fatal error: jl_compileropts.image_file path too long or GetFullPathName failed\n");
+        exit(1);
+    }
+    char *out = (char*)malloc(n);
+    DWORD m = GetFullPathName(in, n, out, NULL);
+    if (n != m + 1) {
+        ios_printf(ios_stderr, "fatal error: jl_compileropts.image_file path too long or GetFullPathName failed\n");
+        exit(1);
+    }
+#endif
+    return out;
+}
+
+static void jl_resolve_sysimg_location(JL_IMAGE_SEARCH rel)
+{ // this function resolves the paths in jl_compileropts to absolute file locations as needed
+  // and it replaces the pointers to `julia_home`, `julia_bin`, `image_file`, and `build_path`
+  // it may fail, print an error, and exit(1) if any of these paths are longer than PATH_MAX
+  //
+  // note: if you care about lost memory, you should call the appropriate `free()` function
+  // on the original pointer for each `char*` you've inserted into `jl_compileropts`, after
+  // calling `julia_init()`
+    char *free_path = (char*)malloc(PATH_MAX);
+    size_t path_size = PATH_MAX;
+    if (uv_exepath(free_path, &path_size)) {
+        ios_printf(ios_stderr, "fatal error: unexpected error while retrieving exepath\n");
+        exit(1);
+    }
+    if (path_size >= PATH_MAX) {
+        ios_printf(ios_stderr, "fatal error: jl_compileropts.julia_bin path too long\n");
+        exit(1);
+    }
+    jl_compileropts.julia_bin = strdup(free_path);
+    if (!jl_compileropts.julia_home) {
+        jl_compileropts.julia_home = getenv("JULIA_HOME");
+        if (!jl_compileropts.julia_home) {
+            jl_compileropts.julia_home = dirname(free_path);
+        }
+    }
+    if (jl_compileropts.julia_home)
+        jl_compileropts.julia_home = abspath(jl_compileropts.julia_home);
+    free(free_path);
+    free_path = NULL;
+    if (jl_compileropts.image_file) {
+        if (rel == JL_IMAGE_JULIA_HOME && !isabspath(jl_compileropts.image_file)) {
+            // build time path, relative to JULIA_HOME
+            free_path = (char*)malloc(PATH_MAX);
+            int n = snprintf(free_path, PATH_MAX, "%s" PATHSEPSTRING "%s",
+                     jl_compileropts.julia_home, jl_compileropts.image_file);
+            if (n >= PATH_MAX || n < 0) {
+                ios_printf(ios_stderr, "fatal error: jl_compileropts.image_file path too long\n");
+                exit(1);
+            }
+            jl_compileropts.image_file = free_path;
+        }
+        if (jl_compileropts.image_file)
+            jl_compileropts.image_file = abspath(jl_compileropts.image_file);
+        if (free_path) {
+            free(free_path);
+            free_path = NULL;
+        }
+    }
+    if (jl_compileropts.build_path)
+        jl_compileropts.build_path = abspath(jl_compileropts.build_path);
+}
+
+void _julia_init(JL_IMAGE_SEARCH rel)
+{
+    libsupport_init();
     jl_io_loop = uv_default_loop(); // this loop will internal events (spawning process etc.),
                                     // best to call this first, since it also initializes libuv
+    restore_signals();
+    jl_resolve_sysimg_location(rel);
+
+    // If we are able to load the sysimg and get a cpu_target, use that unless user has overridden
+    if (jl_compileropts.cpu_target == NULL) {
+        const char * sysimg_cpu_target = jl_get_system_image_cpu_target(jl_compileropts.image_file);
+
+        // If we can't load anything from the sysimg, default to native
+        jl_compileropts.cpu_target = sysimg_cpu_target ? sysimg_cpu_target : "native";
+    }
+
     jl_page_size = jl_getpagesize();
-    jl_arr_xtralloc_limit = uv_get_total_memory() / 100;  // Extra allocation limited to 1% of total RAM 
+    jl_arr_xtralloc_limit = uv_get_total_memory() / 100;  // Extra allocation limited to 1% of total RAM
     jl_find_stack_bottom();
-    jl_dl_handle = jl_load_dynamic_library(NULL, JL_RTLD_DEFAULT);
+    jl_dl_handle = (uv_lib_t *) jl_load_dynamic_library(NULL, JL_RTLD_DEFAULT);
 #ifdef RTLD_DEFAULT
     jl_RTLD_DEFAULT_handle->handle = RTLD_DEFAULT;
 #else
@@ -740,26 +901,30 @@ void julia_init(char *imageFile)
 #ifdef _OS_WINDOWS_
     uv_dlopen("ntdll.dll", jl_ntdll_handle); // bypass julia's pathchecking for system dlls
     uv_dlopen("kernel32.dll", jl_kernel32_handle);
+#if _MSC_VER == 1800
+    uv_dlopen("msvcr120.dll", jl_crtdll_handle);
+#else
     uv_dlopen("msvcrt.dll", jl_crtdll_handle);
+#endif
     uv_dlopen("ws2_32.dll", jl_winsock_handle);
     _jl_exe_handle.handle = GetModuleHandleA(NULL);
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                          GetCurrentProcess(), (PHANDLE)&hMainThread, 0,
                          TRUE, DUPLICATE_SAME_ACCESS)) {
-        JL_PRINTF(JL_STDERR, "WARNING: failed to access handle to main thread\n");
+        ios_printf(ios_stderr, "WARNING: failed to access handle to main thread\n");
     }
     SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
     if (!SymInitialize(GetCurrentProcess(), NULL, 1)) {
-        JL_PRINTF(JL_STDERR, "WARNING: failed to initalize stack walk info\n");
+        ios_printf(ios_stderr, "WARNING: failed to initialize stack walk info\n");
     }
-#if defined(_CPU_X86_64_)
-    if (!SymRegisterFunctionEntryCallback64(GetCurrentProcess(), jl_getUnwindInfo, 0)) JL_PRINTF(JL_STDERR, "WARNING: failed to install backtrace info callback\n");
-#endif
     needsSymRefreshModuleList = 0;
     uv_lib_t jl_dbghelp;
     uv_dlopen("dbghelp.dll",&jl_dbghelp);
     if (uv_dlsym(&jl_dbghelp, "SymRefreshModuleList", (void**)&hSymRefreshModuleList))
         hSymRefreshModuleList = 0;
+    ULONG StackSizeInBytes = sig_stack_size;
+    if (uv_dlsym(jl_kernel32_handle, "SetThreadStackGuarantee", (void**)&pSetThreadStackGuarantee) || !pSetThreadStackGuarantee(&StackSizeInBytes))
+        pSetThreadStackGuarantee = NULL;
 #endif
     init_stdio();
 
@@ -769,8 +934,8 @@ void julia_init(char *imageFile)
         jl_using_intel_jitevents = 1;
 #if defined(__linux__)
         // Intel VTune Amplifier needs at least 64k for alternate stack.
-        if (SIGSTKSZ < 1<<16) 
-            sig_stack_size = 1<<16; 
+        if (SIGSTKSZ < 1<<16)
+            sig_stack_size = 1<<16;
 #endif
     }
 #endif
@@ -799,30 +964,26 @@ void julia_init(char *imageFile)
 
     jl_init_serializer();
 
-    if (!imageFile) {
+    if (!jl_compileropts.image_file) {
         jl_core_module = jl_new_module(jl_symbol("Core"));
+        jl_init_intrinsic_functions();
+        jl_init_primitives();
+
         jl_new_main_module();
         jl_internal_main_module = jl_main_module;
 
         jl_current_module = jl_core_module;
         jl_root_task->current_module = jl_current_module;
 
-        jl_init_intrinsic_functions();
-        jl_init_primitives();
         jl_load("boot.jl");
         jl_get_builtin_hooks();
         jl_boot_file_loaded = 1;
         jl_init_box_caches();
-        // Core.JULIA_HOME is a "magic" constant, we set it at runtime here
-        // since its value gets excluded from the system image
-        jl_set_const(jl_core_module, jl_symbol("JULIA_HOME"),
-                     jl_cstr_to_string(julia_home));
-        jl_module_export(jl_core_module, jl_symbol("JULIA_HOME"));
     }
 
-    if (imageFile) {
+    if (jl_compileropts.image_file) {
         JL_TRY {
-            jl_restore_system_image(imageFile);
+            jl_restore_system_image(jl_compileropts.image_file);
         }
         JL_CATCH {
             JL_PRINTF(JL_STDERR, "error during init:\n");
@@ -856,7 +1017,6 @@ void julia_init(char *imageFile)
     jl_current_module = jl_main_module;
     jl_root_task->current_module = jl_current_module;
 
-
 #ifndef _OS_WINDOWS_
     signal_stack = malloc(sig_stack_size);
     struct sigaction actf;
@@ -865,11 +1025,11 @@ void julia_init(char *imageFile)
     actf.sa_handler = fpe_handler;
     actf.sa_flags = 0;
     if (sigaction(SIGFPE, &actf, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (signal(SIGPIPE,SIG_IGN) == SIG_ERR) {
-        JL_PRINTF(JL_STDERR, "Couldn't set SIGPIPE\n");
+        JL_PRINTF(JL_STDERR, "fatal error: Couldn't set SIGPIPE\n");
         jl_exit(1);
     }
 #if defined (_OS_DARWIN_)
@@ -885,13 +1045,13 @@ void julia_init(char *imageFile)
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) {
         JL_PRINTF(JL_STDERR, "pthread_attr_init failed");
-        jl_exit(1);  
+        jl_exit(1);
     }
     pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
     if (pthread_create(&thread,&attr,mach_segv_listener,NULL) != 0) {
         JL_PRINTF(JL_STDERR, "pthread_create failed");
-        jl_exit(1);  
-    }     
+        jl_exit(1);
+    }
     pthread_attr_destroy(&attr);
 
     ret = thread_set_exception_ports(mach_thread_self(),EXC_MASK_BAD_ACCESS,segv_port,EXCEPTION_DEFAULT,MACHINE_THREAD_STATE);
@@ -902,7 +1062,7 @@ void julia_init(char *imageFile)
     ss.ss_size = sig_stack_size;
     ss.ss_sp = signal_stack;
     if (sigaltstack(&ss, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaltstack: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaltstack: %s\n", strerror(errno));
         jl_exit(1);
     }
 
@@ -912,7 +1072,7 @@ void julia_init(char *imageFile)
     act.sa_sigaction = segv_handler;
     act.sa_flags = SA_ONSTACK | SA_SIGINFO;
     if (sigaction(SIGSEGV, &act, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
 #endif // defined(_OS_DARWIN_)
@@ -922,49 +1082,50 @@ void julia_init(char *imageFile)
     act_die.sa_sigaction = sigdie_handler;
     act_die.sa_flags = SA_SIGINFO;
     if (sigaction(SIGINFO, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGBUS, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGILL, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGTERM, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGABRT, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGQUIT, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGSYS, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
     if (sigaction(SIGPIPE, &act_die, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
 #else // defined(_OS_WINDOWS_)
     if (signal(SIGFPE, (void (__cdecl *)(int))fpe_handler) == SIG_ERR) {
-        JL_PRINTF(JL_STDERR, "Couldn't set SIGFPE\n");
+        JL_PRINTF(JL_STDERR, "fatal error: Couldn't set SIGFPE\n");
         jl_exit(1);
     }
+    SetUnhandledExceptionFilter(exception_handler);
 #endif
 
 #ifdef JL_GC_MARKSWEEP
     jl_gc_enable();
 #endif
 
-    if (imageFile)
+    if (jl_compileropts.image_file)
         jl_init_restored_modules();
 
     jl_install_sigint_handler();
@@ -981,44 +1142,34 @@ DLLEXPORT void jl_install_sigint_handler()
     act.sa_sigaction = sigint_handler;
     act.sa_flags = SA_SIGINFO;
     if (sigaction(SIGINT, &act, NULL) < 0) {
-        JL_PRINTF(JL_STDERR, "sigaction: %s\n", strerror(errno));
+        JL_PRINTF(JL_STDERR, "fatal error: sigaction: %s\n", strerror(errno));
         jl_exit(1);
     }
 #endif
-    //printf("sigint installed\n");
 }
 
 extern int asprintf(char **str, const char *fmt, ...);
 extern void *__stack_chk_guard;
 
-DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *av[]))
+void jl_compile_all(void);
+
+DLLEXPORT void julia_save()
 {
-#if defined(_OS_WINDOWS_)
-    SetUnhandledExceptionFilter(exception_handler);
-#endif
-    unsigned char *p = (unsigned char *)&__stack_chk_guard;
-    char a = p[sizeof(__stack_chk_guard)-1];
-    char b = p[sizeof(__stack_chk_guard)-2];
-    char c = p[0];
-    /* If you have the ability to generate random numbers in your kernel then use them */
-    p[sizeof(__stack_chk_guard)-1] = 255;
-    p[sizeof(__stack_chk_guard)-2] = '\n';
-    p[0] = 0;
-    JL_SET_STACK_BASE;
-    int ret = pmain(argc, argv);
-    char *build_path = jl_compileropts.build_path;
+    const char *build_path = jl_compileropts.build_path;
     if (build_path) {
+        if (jl_compileropts.compile_enabled == JL_COMPILEROPT_COMPILE_ALL)
+            jl_compile_all();
         char *build_ji;
         if (asprintf(&build_ji, "%s.ji",build_path) > 0) {
             jl_save_system_image(build_ji);
             free(build_ji);
-            if (jl_compileropts.dumpbitcode == JL_COMPILEROPT_DUMPBITCODE_ON)
-            {
+            if (jl_compileropts.dumpbitcode == JL_COMPILEROPT_DUMPBITCODE_ON) {
                 char *build_bc;
                 if (asprintf(&build_bc, "%s.bc",build_path) > 0) {
                     jl_dump_bitcode(build_bc);
                     free(build_bc);
-                } else {
+                }
+                else {
                     ios_printf(ios_stderr,"\nWARNING: failed to create string for .bc build path\n");
                 }
             }
@@ -1035,10 +1186,6 @@ DLLEXPORT int julia_trampoline(int argc, char **argv, int (*pmain)(int ac,char *
             ios_printf(ios_stderr,"\nFATAL: failed to create string for .ji build path\n");
         }
     }
-    p[sizeof(__stack_chk_guard)-1] = a;
-    p[sizeof(__stack_chk_guard)-2] = b;
-    p[0] = c;
-    return ret;
 }
 
 jl_function_t *jl_typeinf_func=NULL;
@@ -1062,7 +1209,6 @@ static jl_value_t *basemod(char *name)
 // fetch references to things defined in boot.jl
 void jl_get_builtin_hooks(void)
 {
-    jl_nothing = core("nothing");
     jl_root_task->tls = jl_nothing;
     jl_root_task->consumers = jl_nothing;
     jl_root_task->donenotify = jl_nothing;
@@ -1071,11 +1217,11 @@ void jl_get_builtin_hooks(void)
 
     jl_char_type    = (jl_datatype_t*)core("Char");
     jl_int8_type    = (jl_datatype_t*)core("Int8");
-    jl_uint8_type   = (jl_datatype_t*)core("Uint8");
+    jl_uint8_type   = (jl_datatype_t*)core("UInt8");
     jl_int16_type   = (jl_datatype_t*)core("Int16");
-    jl_uint16_type  = (jl_datatype_t*)core("Uint16");
-    jl_uint32_type  = (jl_datatype_t*)core("Uint32");
-    jl_uint64_type  = (jl_datatype_t*)core("Uint64");
+    jl_uint16_type  = (jl_datatype_t*)core("UInt16");
+    jl_uint32_type  = (jl_datatype_t*)core("UInt32");
+    jl_uint64_type  = (jl_datatype_t*)core("UInt64");
 
     jl_float32_type = (jl_datatype_t*)core("Float32");
     jl_float64_type = (jl_datatype_t*)core("Float64");

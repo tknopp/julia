@@ -8,9 +8,9 @@ typealias DenseVector{T} DenseArray{T,1}
 typealias DenseMatrix{T} DenseArray{T,2}
 typealias DenseVecOrMat{T} Union(DenseVector{T}, DenseMatrix{T})
 
-typealias StridedArray{T,N,A<:DenseArray} Union(DenseArray{T,N}, SubArray{T,N,A})
-typealias StridedVector{T,A<:DenseArray}  Union(DenseArray{T,1}, SubArray{T,1,A})
-typealias StridedMatrix{T,A<:DenseArray}  Union(DenseArray{T,2}, SubArray{T,2,A})
+typealias StridedArray{T,N,A<:DenseArray,I<:(RangeIndex...)} Union(DenseArray{T,N}, SubArray{T,N,A,I})
+typealias StridedVector{T,A<:DenseArray,I<:(RangeIndex...)}  Union(DenseArray{T,1}, SubArray{T,1,A,I})
+typealias StridedMatrix{T,A<:DenseArray,I<:(RangeIndex...)}  Union(DenseArray{T,2}, SubArray{T,2,A,I})
 typealias StridedVecOrMat{T} Union(StridedVector{T}, StridedMatrix{T})
 
 ## Basic functions ##
@@ -30,28 +30,30 @@ isassigned(a::Array, i::Int...) = isdefined(a, i...)
 
 ## copy ##
 
-function unsafe_copy!{T}(dest::Ptr{T}, src::Ptr{T}, N)
-    ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Uint),
-          dest, src, N*sizeof(T))
+function unsafe_copy!{T}(dest::Ptr{T}, src::Ptr{T}, n)
+    ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, UInt),
+          dest, src, n*sizeof(T))
     return dest
 end
 
-function unsafe_copy!{T}(dest::Array{T}, dsto, src::Array{T}, so, N)
+function unsafe_copy!{T}(dest::Array{T}, doffs, src::Array{T}, soffs, n)
     if isbits(T)
-        unsafe_copy!(pointer(dest, dsto), pointer(src, so), N)
+        unsafe_copy!(pointer(dest, doffs), pointer(src, soffs), n)
     else
-        for i=0:N-1
-            @inbounds arrayset(dest, src[i+so], i+dsto)
+        for i=0:n-1
+            @inbounds arrayset(dest, src[i+soffs], i+doffs)
         end
     end
     return dest
 end
 
-function copy!{T}(dest::Array{T}, dsto::Integer, src::Array{T}, so::Integer, N::Integer)
-    if so+N-1 > length(src) || dsto+N-1 > length(dest) || dsto < 1 || so < 1
+function copy!{T}(dest::Array{T}, doffs::Integer, src::Array{T}, soffs::Integer, n::Integer)
+    n < 0 && throw(BoundsError())
+    n == 0 && return dest
+    if soffs+n-1 > length(src) || doffs+n-1 > length(dest) || doffs < 1 || soffs < 1
         throw(BoundsError())
     end
-    unsafe_copy!(dest, dsto, src, so, N)
+    unsafe_copy!(dest, doffs, src, soffs, n)
 end
 
 copy!{T}(dest::Array{T}, src::Array{T}) = copy!(dest, 1, src, 1, length(src))
@@ -123,14 +125,22 @@ function getindex(T::NonTupleType, vals...)
     return a
 end
 
+function getindex(::Type{Any}, vals::ANY...)
+    a = Array(Any,length(vals))
+    for i = 1:length(vals)
+        a[i] = vals[i]
+    end
+    return a
+end
+
 getindex(T::(Type...)) = Array(T,0)
 
-# T[a:b] and T[a:s:b] also contruct typed ranges
-function getindex{T<:Number}(::Type{T}, r::Range)
+# T[a:b] and T[a:s:b] also construct typed ranges
+function getindex{T<:Union(Char,Number)}(::Type{T}, r::Range)
     copy!(Array(T,length(r)), r)
 end
 
-function getindex{T<:Number}(::Type{T}, r1::Range, rs::Range...)
+function getindex{T<:Union(Char,Number)}(::Type{T}, r1::Range, rs::Range...)
     a = Array(T,length(r1)+sum(length,rs))
     o = 1
     copy!(a, o, r1)
@@ -142,17 +152,22 @@ function getindex{T<:Number}(::Type{T}, r1::Range, rs::Range...)
     return a
 end
 
-function fill!{T<:Union(Int8,Uint8)}(a::Array{T}, x::Integer)
-    ccall(:memset, Ptr{Void}, (Ptr{Void}, Int32, Csize_t), a, x, length(a))
+function fill!{T<:Union(Int8,UInt8)}(a::Array{T}, x::Integer)
+    ccall(:memset, Ptr{Void}, (Ptr{Void}, Cint, Csize_t), a, x, length(a))
     return a
 end
 function fill!{T<:Union(Integer,FloatingPoint)}(a::Array{T}, x)
-    # note: preserve -0.0 for floats
-    if isbits(T) && T<:Integer && convert(T,x) == 0
-        ccall(:memset, Ptr{Void}, (Ptr{Void}, Int32, Csize_t), a,0,length(a)*sizeof(T))
+    # note: checking bit pattern
+    xT = convert(T,x)
+    if isbits(T) && ((sizeof(T)==1 && reinterpret(UInt8, xT) == 0) ||
+                     (sizeof(T)==2 && reinterpret(UInt16, xT) == 0) ||
+                     (sizeof(T)==4 && reinterpret(UInt32, xT) == 0) ||
+                     (sizeof(T)==8 && reinterpret(UInt64, xT) == 0))
+        ccall(:memset, Ptr{Void}, (Ptr{Void}, Cint, Csize_t),
+              a, 0, length(a)*sizeof(T))
     else
         for i = 1:length(a)
-            @inbounds a[i] = x
+            @inbounds a[i] = xT
         end
     end
     return a
@@ -394,7 +409,7 @@ function _growat!(a::Vector, i::Integer, delta::Integer)
 end
 
 function _growat_beg!(a::Vector, i::Integer, delta::Integer)
-    ccall(:jl_array_grow_beg, Void, (Any, Uint), a, delta)
+    ccall(:jl_array_grow_beg, Void, (Any, UInt), a, delta)
     if i > 1
         ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Csize_t),
               pointer(a, 1), pointer(a, 1+delta), (i-1)*elsize(a))
@@ -403,7 +418,7 @@ function _growat_beg!(a::Vector, i::Integer, delta::Integer)
 end
 
 function _growat_end!(a::Vector, i::Integer, delta::Integer)
-    ccall(:jl_array_grow_end, Void, (Any, Uint), a, delta)
+    ccall(:jl_array_grow_end, Void, (Any, UInt), a, delta)
     n = length(a)
     if n >= i+delta
         ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Csize_t),
@@ -430,7 +445,7 @@ function _deleteat_beg!(a::Vector, i::Integer, delta::Integer)
         ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Csize_t),
               pointer(a, 1+delta), pointer(a, 1), (i-1)*elsize(a))
     end
-    ccall(:jl_array_del_beg, Void, (Any, Uint), a, delta)
+    ccall(:jl_array_del_beg, Void, (Any, UInt), a, delta)
     return a
 end
 
@@ -440,48 +455,36 @@ function _deleteat_end!(a::Vector, i::Integer, delta::Integer)
         ccall(:memmove, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Csize_t),
               pointer(a, i), pointer(a, i+delta), (n-i-delta+1)*elsize(a))
     end
-    ccall(:jl_array_del_end, Void, (Any, Uint), a, delta)
+    ccall(:jl_array_del_end, Void, (Any, UInt), a, delta)
     return a
 end
 
 ## Dequeue functionality ##
 
-const _grow_none_errmsg =
-    "[] cannot grow. Instead, initialize the array with \"T[]\", where T is the desired element type."
-
 function push!{T}(a::Array{T,1}, item)
-    if is(T,None)
-        error(_grow_none_errmsg)
-    end
     # convert first so we don't grow the array if the assignment won't work
     item = convert(T, item)
-    ccall(:jl_array_grow_end, Void, (Any, Uint), a, 1)
+    ccall(:jl_array_grow_end, Void, (Any, UInt), a, 1)
     a[end] = item
     return a
 end
 
 function push!(a::Array{Any,1}, item::ANY)
-    ccall(:jl_array_grow_end, Void, (Any, Uint), a, 1)
+    ccall(:jl_array_grow_end, Void, (Any, UInt), a, 1)
     arrayset(a, item, length(a))
     return a
 end
 
 function append!{T}(a::Array{T,1}, items::AbstractVector)
-    if is(T,None)
-        error(_grow_none_errmsg)
-    end
     n = length(items)
-    ccall(:jl_array_grow_end, Void, (Any, Uint), a, n)
+    ccall(:jl_array_grow_end, Void, (Any, UInt), a, n)
     copy!(a, length(a)-n+1, items, 1, n)
     return a
 end
 
 function prepend!{T}(a::Array{T,1}, items::AbstractVector)
-    if is(T,None)
-        error(_grow_none_errmsg)
-    end
     n = length(items)
-    ccall(:jl_array_grow_beg, Void, (Any, Uint), a, n)
+    ccall(:jl_array_grow_beg, Void, (Any, UInt), a, n)
     if a === items
         copy!(a, 1, items, n+1, n)
     else
@@ -493,18 +496,18 @@ end
 function resize!(a::Vector, nl::Integer)
     l = length(a)
     if nl > l
-        ccall(:jl_array_grow_end, Void, (Any, Uint), a, nl-l)
+        ccall(:jl_array_grow_end, Void, (Any, UInt), a, nl-l)
     else
         if nl < 0
             throw(BoundsError())
         end
-        ccall(:jl_array_del_end, Void, (Any, Uint), a, l-nl)
+        ccall(:jl_array_del_end, Void, (Any, UInt), a, l-nl)
     end
     return a
 end
 
-function sizehint(a::Vector, sz::Integer)
-    ccall(:jl_array_sizehint, Void, (Any, Uint), a, sz)
+function sizehint!(a::Vector, sz::Integer)
+    ccall(:jl_array_sizehint, Void, (Any, UInt), a, sz)
     a
 end
 
@@ -513,16 +516,13 @@ function pop!(a::Vector)
         error("array must be non-empty")
     end
     item = a[end]
-    ccall(:jl_array_del_end, Void, (Any, Uint), a, 1)
+    ccall(:jl_array_del_end, Void, (Any, UInt), a, 1)
     return item
 end
 
 function unshift!{T}(a::Array{T,1}, item)
-    if is(T,None)
-        error(_grow_none_errmsg)
-    end
     item = convert(T, item)
-    ccall(:jl_array_grow_beg, Void, (Any, Uint), a, 1)
+    ccall(:jl_array_grow_beg, Void, (Any, UInt), a, 1)
     a[1] = item
     return a
 end
@@ -532,7 +532,7 @@ function shift!(a::Vector)
         error("array must be non-empty")
     end
     item = a[1]
-    ccall(:jl_array_del_beg, Void, (Any, Uint), a, 1)
+    ccall(:jl_array_del_beg, Void, (Any, UInt), a, 1)
     return item
 end
 
@@ -571,7 +571,7 @@ function deleteat!(a::Vector, inds)
     q = p+1
     while !done(inds, s)
         (i,s) = next(inds, s)
-        if !(q <= i <= n) 
+        if !(q <= i <= n)
             i < q && error("indices must be unique and sorted")
             throw(BoundsError())
         end
@@ -585,13 +585,13 @@ function deleteat!(a::Vector, inds)
         @inbounds a[p] = a[q]
         p += 1; q += 1
     end
-    ccall(:jl_array_del_end, Void, (Any, Uint), a, n-p+1)
+    ccall(:jl_array_del_end, Void, (Any, UInt), a, n-p+1)
     return a
 end
 
 const _default_splice = []
 
-function splice!(a::Vector, i::Integer, ins::AbstractArray=_default_splice)
+function splice!(a::Vector, i::Integer, ins=_default_splice)
     v = a[i]
     m = length(ins)
     if m == 0
@@ -600,14 +600,16 @@ function splice!(a::Vector, i::Integer, ins::AbstractArray=_default_splice)
         a[i] = ins[1]
     else
         _growat!(a, i, m-1)
-        for k = 1:m
-            a[i+k-1] = ins[k]
+        k = 1
+        for x in ins
+            a[i+k-1] = x
+            k += 1
         end
     end
     return v
 end
 
-function splice!{T<:Integer}(a::Vector, r::UnitRange{T}, ins::AbstractArray=_default_splice)
+function splice!{T<:Integer}(a::Vector, r::UnitRange{T}, ins=_default_splice)
     v = a[r]
     m = length(ins)
     if m == 0
@@ -636,14 +638,16 @@ function splice!{T<:Integer}(a::Vector, r::UnitRange{T}, ins::AbstractArray=_def
         end
     end
 
-    for k = 1:m
-        a[f+k-1] = ins[k]
+    k = 1
+    for x in ins
+        a[f+k-1] = x
+        k += 1
     end
     return v
 end
 
 function empty!(a::Vector)
-    ccall(:jl_array_del_end, Void, (Any, Uint), a, length(a))
+    ccall(:jl_array_del_end, Void, (Any, UInt), a, length(a))
     return a
 end
 
@@ -743,7 +747,7 @@ for f in (:+, :-, :div, :mod, :&, :|, :$)
         end
     end
 end
-for f in (:.+, :.-, :.*, :./, :.\, :.%, :div, :mod, :rem, :&, :|, :$)
+for f in (:.+, :.-, :.*, :./, :.\, :.%, :.<<, :.>>, :div, :mod, :rem, :&, :|, :$)
     @eval begin
         function ($f){T}(A::Number, B::StridedArray{T})
             F = similar(B, promote_array_type(typeof(A),T))
@@ -764,7 +768,7 @@ end
 
 # familiar aliases for broadcasting operations of array ± scalar (#7226):
 (+)(A::AbstractArray{Bool},x::Bool) = A .+ x
-(+)(x::Bool,A::AbstractArray{Bool}) = x .+ A 
+(+)(x::Bool,A::AbstractArray{Bool}) = x .+ A
 (-)(A::AbstractArray{Bool},x::Bool) = A .- x
 (-)(x::Bool,A::AbstractArray{Bool}) = x .- A
 (+)(A::AbstractArray,x::Number) = A .+ x
@@ -798,7 +802,7 @@ for f in (:+, :-)
             for i=1:length(A)
                 @inbounds F[i] = ($f)(A[i], B[i])
             end
-            return F        
+            return F
         end
     end
 end
@@ -806,7 +810,7 @@ end
 ## promotion to complex ##
 
 function complex{S<:Real,T<:Real}(A::Array{S}, B::Array{T})
-    if size(A) != size(B); throw(DimensionMismatch("")); end
+    if size(A) != size(B); throw(DimensionMismatch()); end
     F = similar(A, typeof(complex(zero(S),zero(T))))
     for i=1:length(A)
         @inbounds F[i] = complex(A[i], B[i])
@@ -831,8 +835,8 @@ function complex{T<:Real}(A::Array{T}, B::Real)
 end
 
 # use memcmp for lexcmp on byte arrays
-function lexcmp(a::Array{Uint8,1}, b::Array{Uint8,1})
-    c = ccall(:memcmp, Int32, (Ptr{Uint8}, Ptr{Uint8}, Uint),
+function lexcmp(a::Array{UInt8,1}, b::Array{UInt8,1})
+    c = ccall(:memcmp, Int32, (Ptr{UInt8}, Ptr{UInt8}, UInt),
               a, b, min(length(a),length(b)))
     c < 0 ? -1 : c > 0 ? +1 : cmp(length(a),length(b))
 end
@@ -977,6 +981,7 @@ function reverse(A::AbstractVector, s=1, n=length(A))
     end
     B
 end
+reverseind(a::AbstractVector, i::Integer) = length(a) + 1 - i
 
 reverse(v::StridedVector) = (n=length(v); [ v[n-i+1] for i=1:n ])
 reverse(v::StridedVector, s, n=length(v)) = reverse!(copy(v), s, n)
@@ -1004,7 +1009,7 @@ function vcat{T}(arrays::Vector{T}...)
     end
     for a in arrays
         nba = length(a)*elsz
-        ccall(:memcpy, Ptr{Void}, (Ptr{Void}, Ptr{Void}, Uint),
+        ccall(:memcpy, Ptr{Void}, (Ptr{Void}, Ptr{Void}, UInt),
               ptr+offset, a, nba)
         offset += nba
     end
@@ -1054,7 +1059,7 @@ function findnext(testf::Function, A, start::Integer)
 end
 findfirst(testf::Function, A) = findnext(testf, A, 1)
 
-function find(testf::Function, A::StridedArray)
+function find(testf::Function, A::AbstractArray)
     # use a dynamic-length array to store the indexes, then copy to a non-padded
     # array for the return
     tmpI = Array(Int, 0)
@@ -1063,7 +1068,7 @@ function find(testf::Function, A::StridedArray)
             push!(tmpI, i)
         end
     end
-    I = similar(A, Int, length(tmpI))
+    I = Array(Int, length(tmpI))
     copy!(I, tmpI)
     I
 end
@@ -1082,7 +1087,7 @@ function find(A::StridedArray)
 end
 
 find(x::Number) = x == 0 ? Array(Int,0) : [1]
-find(testf::Function, x) = find(testf(x))
+find(testf::Function, x::Number) = !testf(x) ? Array(Int,0) : [1]
 
 findn(A::AbstractVector) = find(A)
 
@@ -1159,7 +1164,7 @@ indmin(a) = findmin(a)[2]
 # similar to Matlab's ismember
 # returns a vector containing the highest index in b for each value in a that is a member of b
 function indexin(a::AbstractArray, b::AbstractArray)
-    bdict = Dict(b, 1:length(b))
+    bdict = Dict(zip(b, 1:length(b)))
     [get(bdict, i, 0) for i in a]
 end
 
@@ -1242,7 +1247,7 @@ end
 const transposebaselength=64
 function transpose!(B::StridedMatrix,A::StridedMatrix)
     m, n = size(A)
-    size(B) == (n,m) || throw(DimensionMismatch("transpose"))
+    size(B,1) == n && size(B,2) == m || throw(DimensionMismatch("transpose"))
 
     if m*n<=4*transposebaselength
         @inbounds begin
@@ -1256,6 +1261,14 @@ function transpose!(B::StridedMatrix,A::StridedMatrix)
         transposeblock!(B,A,m,n,0,0)
     end
     return B
+end
+function transpose!(B::StridedVector, A::StridedMatrix)
+    length(B) == length(A) && size(A,1) == 1 || throw(DimensionMismatch("transpose"))
+    copy!(B, A)
+end
+function transpose!(B::StridedMatrix, A::StridedVector)
+    length(B) == length(A) && size(B,1) == 1 || throw(DimensionMismatch("transpose"))
+    copy!(B, A)
 end
 function transposeblock!(B::StridedMatrix,A::StridedMatrix,m::Int,n::Int,offseti::Int,offsetj::Int)
     if m*n<=transposebaselength
@@ -1279,7 +1292,7 @@ function transposeblock!(B::StridedMatrix,A::StridedMatrix,m::Int,n::Int,offseti
 end
 function ctranspose!(B::StridedMatrix,A::StridedMatrix)
     m, n = size(A)
-    size(B) == (n,m) || throw(DimensionMismatch("transpose"))
+    size(B,1) == n && size(B,2) == m || throw(DimensionMismatch("transpose"))
 
     if m*n<=4*transposebaselength
         @inbounds begin
@@ -1293,6 +1306,14 @@ function ctranspose!(B::StridedMatrix,A::StridedMatrix)
         ctransposeblock!(B,A,m,n,0,0)
     end
     return B
+end
+function ctranspose!(B::StridedVector, A::StridedMatrix)
+    length(B) == length(A) && size(A,1) == 1 || throw(DimensionMismatch("transpose"))
+    ccopy!(B, A)
+end
+function ctranspose!(B::StridedMatrix, A::StridedVector)
+    length(B) == length(A) && size(B,1) == 1 || throw(DimensionMismatch("transpose"))
+    ccopy!(B, A)
 end
 function ctransposeblock!(B::StridedMatrix,A::StridedMatrix,m::Int,n::Int,offseti::Int,offsetj::Int)
     if m*n<=transposebaselength
@@ -1313,6 +1334,11 @@ function ctransposeblock!(B::StridedMatrix,A::StridedMatrix,m::Int,n::Int,offset
         ctransposeblock!(B,A,m,n-newn,offseti,offsetj+newn)
     end
     return B
+end
+function ccopy!(B, A)
+    for i = 1:length(A)
+        B[i] = ctranspose(A[i])
+    end
 end
 
 function transpose(A::StridedMatrix)

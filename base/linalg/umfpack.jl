@@ -12,10 +12,10 @@ import ..LinAlg: A_ldiv_B!, Ac_ldiv_B!, At_ldiv_B!, Factorization, det, lufact, 
 
 include("umfpack_h.jl")
 type MatrixIllConditionedException <: Exception
-    message :: String
+    message :: AbstractString
 end
 
-function umferror(status::Int)
+function umferror(status::Integer)
      if status==UMFPACK_OK
          return
      elseif status==UMFPACK_WARNING_singular_matrix
@@ -68,8 +68,16 @@ function increment!{T<:Integer}(A::AbstractArray{T})
 end
 increment{T<:Integer}(A::AbstractArray{T}) = increment!(copy(A))
 
+# check the size of SuiteSparse_long
+if int(ccall((:jl_cholmod_sizeof_long,:libsuitesparse_wrapper),Csize_t,())) == 4
+    const UmfpackIndexTypes = (:Int32, )
+    typealias UMFITypes Union(Int32)
+else
+    const UmfpackIndexTypes = (:Int32, :Int64)
+    typealias UMFITypes Union(Int32, Int64)
+end
+
 typealias UMFVTypes Union(Float64,Complex128)
-typealias UMFITypes Union(Int32,Int64)
 
 ## UMFPACK
 
@@ -137,17 +145,22 @@ end
 
 ## Wrappers for UMFPACK functions
 
-for (sym_r,sym_c,num_r,num_c,sol_r,sol_c,det_r,det_z,lunz_r,lunz_z,get_num_r,get_num_z,itype) in
-    (("umfpack_di_symbolic","umfpack_zi_symbolic",
-      "umfpack_di_numeric","umfpack_zi_numeric",
-      "umfpack_di_solve","umfpack_zi_solve",
-      "umfpack_di_get_determinant","umfpack_zi_get_determinant",
-      "umfpack_di_get_lunz","umfpack_zi_get_lunz","umfpack_di_get_numeric","umfpack_zi_get_numeric",:Int32),
-     ("umfpack_dl_symbolic","umfpack_zl_symbolic",
-      "umfpack_dl_numeric","umfpack_zl_numeric",
-      "umfpack_dl_solve","umfpack_zl_solve",
-      "umfpack_dl_get_determinant","umfpack_zl_get_determinant",
-      "umfpack_dl_get_lunz","umfpack_zl_get_lunz","umfpack_dl_get_numeric","umfpack_zl_get_numeric",:Int64))
+# generate the name of the C function according to the value and integer types
+umf_nm(nm,Tv,Ti) = "umfpack_" * (Tv == :Float64 ? "d" : "z") * (Ti == :Int64 ? "l_" : "i_") * nm
+
+for itype in UmfpackIndexTypes
+    sym_r = umf_nm("symbolic", :Float64, itype)
+    sym_c = umf_nm("symbolic", :Complex128, itype)
+    num_r = umf_nm("numeric", :Float64, itype)
+    num_c = umf_nm("numeric", :Complex128, itype)
+    sol_r = umf_nm("solve", :Float64, itype)
+    sol_c = umf_nm("solve", :Complex128, itype)
+    det_r = umf_nm("get_determinant", :Float64, itype)
+    det_z = umf_nm("get_determinant", :Complex128, itype)
+    lunz_r = umf_nm("get_lunz", :Float64, itype)
+    lunz_z = umf_nm("get_lunz", :Complex128, itype)
+    get_num_r = umf_nm("get_numeric", :Float64, itype)
+    get_num_z = umf_nm("get_numeric", :Complex128, itype)
     @eval begin
         function umfpack_symbolic!(U::UmfpackLU{Float64,$itype})
             if U.symbolic != C_NULL return U end
@@ -176,7 +189,7 @@ for (sym_r,sym_c,num_r,num_c,sol_r,sol_c,det_r,det_z,lunz_r,lunz_z,get_num_r,get
             if U.symbolic == C_NULL umfpack_symbolic!(U) end
             tmp = Array(Ptr{Void}, 1)
             status = ccall(($num_r, :libumfpack), $itype,
-                           (Ptr{$itype}, Ptr{$itype}, Ptr{Float64}, Ptr{Void}, Ptr{Void}, 
+                           (Ptr{$itype}, Ptr{$itype}, Ptr{Float64}, Ptr{Void}, Ptr{Void},
                             Ptr{Float64}, Ptr{Float64}),
                            U.colptr, U.rowval, U.nzval, U.symbolic, tmp,
                            umf_ctrl, umf_info)
@@ -190,7 +203,7 @@ for (sym_r,sym_c,num_r,num_c,sol_r,sol_c,det_r,det_z,lunz_r,lunz_z,get_num_r,get
             if U.symbolic == C_NULL umfpack_symbolic!(U) end
             tmp = Array(Ptr{Void}, 1)
             status = ccall(($num_c, :libumfpack), $itype,
-                           (Ptr{$itype}, Ptr{$itype}, Ptr{Float64}, Ptr{Float64}, Ptr{Void}, Ptr{Void}, 
+                           (Ptr{$itype}, Ptr{$itype}, Ptr{Float64}, Ptr{Float64}, Ptr{Void}, Ptr{Void},
                             Ptr{Float64}, Ptr{Float64}),
                            U.colptr, U.rowval, real(U.nzval), imag(U.nzval), U.symbolic, tmp,
                            umf_ctrl, umf_info)
@@ -201,7 +214,7 @@ for (sym_r,sym_c,num_r,num_c,sol_r,sol_c,det_r,det_z,lunz_r,lunz_z,get_num_r,get
         end
         function solve(lu::UmfpackLU{Float64,$itype}, b::VecOrMat{Float64}, typ::Integer)
             umfpack_numeric!(lu)
-            size(b,1)==lu.m || throw(DimensionMismatch(""))
+            size(b,1)==lu.m || throw(DimensionMismatch())
             x = similar(b)
             joff = 1
             for k = 1:size(b,2)
@@ -215,7 +228,7 @@ for (sym_r,sym_c,num_r,num_c,sol_r,sol_c,det_r,det_z,lunz_r,lunz_z,get_num_r,get
         end
         function solve(lu::UmfpackLU{Complex128,$itype}, b::VecOrMat{Complex128}, typ::Integer)
             umfpack_numeric!(lu)
-            size(b,1)==lu.m || throw(DimensionMismatch(""))
+            size(b,1)==lu.m || throw(DimensionMismatch())
             x = similar(b)
             n = size(b,1)
             br = Array(Float64, n)
@@ -343,16 +356,13 @@ function A_ldiv_B!{Tb<:Complex}(lu::UmfpackLU{Float64}, b::Vector{Tb})
     i = solve(lu, [convert(Tlu,imag(be)) for be in b], UMFPACK_A)
     Tb[r[k]+im*i[k] for k = 1:length(r)]
 end
-A_ldiv_B!{Tlu<:UMFVTypes,Tb<:Number}(lu::UmfpackLU{Tlu}, b::AbstractVecOrMat{Tb}) = A_ldiv_B!(lu, convert(Array{Tlu}, b))
 
-Ac_ldiv_B!{T<:UMFVTypes}(lu::UmfpackLU{T}, b::Vector{T}) = solve(lu, b, UMFPACK_At)
+Ac_ldiv_B!{T<:UMFVTypes}(lu::UmfpackLU{T}, b::VecOrMat{T}) = solve(lu, b, UMFPACK_At)
 function Ac_ldiv_B!{Tb<:Complex}(lu::UmfpackLU{Float64}, b::Vector{Tb})
     r = solve(lu, [convert(Float64,real(be)) for be in b], UMFPACK_At)
     i = solve(lu, [convert(Float64,imag(be)) for be in b], UMFPACK_At)
     Tb[r[k]+im*i[k] for k = 1:length(r)]
 end
-Ac_ldiv_B!{Tlu<:UMFVTypes,Tb<:Number}(lu::UmfpackLU{Tlu}, b::StridedVecOrMat{Tb}) = Ac_ldiv_B!(lu, convert(Array{Tlu}, b))
-Ac_ldiv_B!{Tlu<:UMFVTypes,Tb<:Number}(lu::UmfpackLU{Tlu}, b::AbstractVecOrMat{Tb}) = Ac_ldiv_B!(lu, convert(Array{Tlu}, b))
 
 At_ldiv_B!{T<:UMFVTypes}(lu::UmfpackLU{T}, b::VecOrMat{T}) = solve(lu, b, UMFPACK_Aat)
 function At_ldiv_B!{Tb<:Complex}(lu::UmfpackLU{Float64}, b::Vector{Tb})
@@ -360,7 +370,6 @@ function At_ldiv_B!{Tb<:Complex}(lu::UmfpackLU{Float64}, b::Vector{Tb})
     i = solve(lu, [convert(Float64,imag(be)) for be in b], UMFPACK_Aat)
     Tb[r[k]+im*i[k] for k = 1:length(r)]
 end
-At_ldiv_B!{Tlu<:UMFVTypes,Tb<:Number}(lu::UmfpackLU{Tlu}, b::AbstractVecOrMat{Tb}) = At_ldiv_B!(lu, convert(Array{Tlu}, b))
 
 function getindex(lu::UmfpackLU, d::Symbol)
     L,U,p,q,Rs = umf_extract(lu)
@@ -372,35 +381,39 @@ function getindex(lu::UmfpackLU, d::Symbol)
         (d == :(:) ? (L,U,p,q,Rs) :
          throw(KeyError(d)))))))
 end
- 
-## The C functions called by these Julia functions do not depend on
-## the numeric and index types, even though the umfpack names indicate
-## they do.  The umfpack_free_* functions can be called on C_NULL without harm.
-function umfpack_free_symbolic(symb::Ptr{Void})
-    tmp = [symb]
-    ccall((:umfpack_dl_free_symbolic, :libumfpack), Void, (Ptr{Void},), tmp)
+
+for Tv in (:Float64, :Complex128), Ti in UmfpackIndexTypes
+    f = symbol(umf_nm("free_symbolic", Tv, Ti))
+    @eval begin
+        function ($f)(symb::Ptr{Void})
+            tmp = [symb]
+            ccall(($(string(f)), :libumfpack), Void, (Ptr{Void},), tmp)
+        end
+
+        function umfpack_free_symbolic(lu::UmfpackLU{$Tv,$Ti})
+            if lu.symbolic == C_NULL return lu end
+            umfpack_free_numeric(lu)
+            ($f)(lu.symbolic)
+            lu.symbolic = C_NULL
+            return lu
+        end
+    end
+
+    f = symbol(umf_nm("free_numeric", Tv, Ti))
+    @eval begin
+        function ($f)(num::Ptr{Void})
+            tmp = [num]
+            ccall(($(string(f)), :libumfpack), Void, (Ptr{Void},), tmp)
+        end
+        function umfpack_free_numeric(lu::UmfpackLU{$Tv,$Ti})
+            if lu.numeric == C_NULL return lu end
+            ($f)(lu.numeric)
+            lu.numeric = C_NULL
+            return lu
+        end
+    end
 end
 show_umf_info() = show_umf_info(2.)
-
-function umfpack_free_symbolic(lu::UmfpackLU)
-    if lu.symbolic == C_NULL return lu end
-    umfpack_free_numeric(lu)
-    umfpack_free_symbolic(lu.symbolic)
-    lu.symbolic = C_NULL
-    return lu
-end
-
-function umfpack_free_numeric(num::Ptr{Void})
-    tmp = [num]
-    ccall((:umfpack_dl_free_numeric, :libumfpack), Void, (Ptr{Void},), tmp)
-end
-
-function umfpack_free_numeric(lu::UmfpackLU)
-    if lu.numeric == C_NULL return lu end
-    umfpack_free_numeric(lu.numeric)
-    lu.numeric = C_NULL
-    return lu
-end
 
 function umfpack_report_symbolic(symb::Ptr{Void}, level::Real)
     old_prl::Float64 = umf_ctrl[UMFPACK_PRL]
@@ -433,4 +446,4 @@ end
 umfpack_report_numeric(lu::UmfpackLU) = umfpack_report_numeric(lu,4.)
 
 end # UMFPACK module
- 
+

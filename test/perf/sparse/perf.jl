@@ -10,36 +10,36 @@ med = 10^4
 large = 10^5
 huge = 10^6
 # # 1 entry per line
-# ss = {}
+# ss = []
 # push!(ss, sprand(small, small, 1e-3))
 # #push!(ss, sprand(med, med, 1e-4))
 # push!(ss, sprand(large, large, 1e-5))
 
 # 10 entries per line
-ts = {}
+ts = []
 push!(ts, sprand(small, small, 1e-2))
 #push!(ts, sprand(med, med, 1e-3))
 push!(ts, sprand(large, large, 1e-4))
 
 # 100 entries per line
-us = {}
+us = []
 push!(us, sprand(small, small, 1e-1))
 #push!(us, sprand(med, med, 1e-2))
 push!(us, sprand(large, large, 1e-3))
 #push!(us, sprand(huge, huge, 1e-4))
 
 # # 1000 entries per line
-# vs = {}
+# vs = []
 # push!(vs, sprand(small, small, 1.0))
 # #push!(vs, sprand(med, med, 1e-1))
 # push!(vs, sprand(large, large, 1e-2))
 # #push!(vs, sprand(huge, huge, 1e-3))
 
 ## using uint32 (works up to 10^9)
-uus = {}
+uus = []
 for u in us
     push!(uus, SparseMatrixCSC(u.m, u.n, uint32(u.colptr), uint32(u.rowval), u.nzval))
-end    
+end
 
 ## getindex
 rep = 20
@@ -53,12 +53,12 @@ function integer_indexing(A)
     for i in rand(rI, reps)
         for j in rand(rJ, rep)
             tmp += A[i,j]
-        end 
+        end
     end
     tmp
 end
 
-function row_indexing(A, rowinds) 
+function row_indexing(A, rowinds)
     # index rows with rowinds and columns with a random integer
     nI, nJ = size(A)
     rI = 1:nI
@@ -70,7 +70,7 @@ function row_indexing(A, rowinds)
     tmp
 end
 
-function col_indexing(A, colinds) 
+function col_indexing(A, colinds)
     # index rows with a random integer and columns with colinds
     nI, nJ = size(A)
     rI = 1:nI
@@ -135,8 +135,8 @@ sizes = [(1, "small", "Small sparse matrix"), (2, "medium", "Medium sparse matri
 mattyp = [(ts, "10 entries/column"), (us, "100 entries/column"), (uus, "100 entries/column uint32")]
 
 # - functions
-funs = [(integer_indexing, 1, "indexing"), (one_arg_indexing, 1, "1d indexing"),  
-        (row_indexing, 2, "indexing rows"), (col_indexing, 2, "indexing columns"), 
+funs = [(integer_indexing, 1, "indexing"), (one_arg_indexing, 1, "1d indexing"),
+        (row_indexing, 2, "indexing rows"), (col_indexing, 2, "indexing columns"),
         (row_col_indexing, 3, "indexing rows & columns")]
 
 # performance tests:

@@ -11,7 +11,15 @@ end
 
 scale{R<:Real}(s::Complex, X::AbstractArray{R}) = scale(X, s)
 
-generic_scale!(X::AbstractArray, s::Number) = generic_scale!(X, X, s)
+# For better performance when input and output are the same array
+# See https://github.com/JuliaLang/julia/issues/8415#issuecomment-56608729
+function generic_scale!(X::AbstractArray, s::Number)
+    for i = 1:length(X)
+        @inbounds X[i] *= s
+    end
+    X
+end
+
 function generic_scale!(C::AbstractArray, X::AbstractArray, s::Number)
     length(C) == length(X) || error("C must be the same length as X")
     for i = 1:length(X)
@@ -21,8 +29,8 @@ function generic_scale!(C::AbstractArray, X::AbstractArray, s::Number)
 end
 scale!(C::AbstractArray, s::Number, X::AbstractArray) = generic_scale!(C, X, s)
 scale!(C::AbstractArray, X::AbstractArray, s::Number) = generic_scale!(C, X, s)
-scale!(X::AbstractArray, s::Number) = generic_scale!(X, X, s)
-scale!(s::Number, X::AbstractArray) = generic_scale!(X, X, s)
+scale!(X::AbstractArray, s::Number) = generic_scale!(X, s)
+scale!(s::Number, X::AbstractArray) = generic_scale!(X, s)
 
 cross(a::AbstractVector, b::AbstractVector) = [a[2]*b[3]-a[3]*b[2], a[3]*b[1]-a[1]*b[3], a[1]*b[2]-a[2]*b[1]]
 
@@ -221,15 +229,16 @@ trace(x::Number) = x
 
 #det(a::AbstractMatrix)
 
-inv(a::AbstractVector) = error("argument must be a square matrix")
+inv(a::StridedMatrix) = error("argument must be a square matrix")
 function inv{T}(A::AbstractMatrix{T})
-    S = typeof(one(T)/one(T))
-    A_ldiv_B!(convert(AbstractMatrix{S}, A), eye(S, chksquare(A)))
+    S = typeof(zero(T)/one(T))
+    A_ldiv_B!(factorize(convert(AbstractMatrix{S}, A)), eye(S, chksquare(A)))
 end
 
-function \{TA,TB,N}(A::AbstractMatrix{TA}, B::AbstractArray{TB,N})
+function \{TA,TB}(A::AbstractMatrix{TA}, B::AbstractVecOrMat{TB})
     TC = typeof(one(TA)/one(TB))
-    A_ldiv_B!(TA == TC ? copy(A) : convert(AbstractMatrix{TC}, A), TB == TC ? copy(B) : convert(AbstractArray{TC,N}, B))
+    size(A,1) == size(B,1) || throw(DimensionMismatch("LHS and RHS should have the same number of rows. LHS has $(size(A,1)) rows, but RHS has $(size(B,1)) rows."))
+    A_ldiv_B!(factorize(TA == TC ? copy(A) : convert(AbstractMatrix{TC}, A)), TB == TC ? copy(B) : convert(AbstractArray{TC}, B))
 end
 \(a::AbstractVector, b::AbstractArray) = reshape(a, length(a), 1) \ b
 /(A::AbstractVecOrMat, B::AbstractVecOrMat) = (B' \ A')'
@@ -332,14 +341,14 @@ end
 #                                          for BlasFloat Arrays)
 function axpy!(alpha, x::AbstractArray, y::AbstractArray)
     n = length(x)
-    n==length(y) || throw(DimensionMismatch(""))
+    n==length(y) || throw(DimensionMismatch())
     for i = 1:n
         @inbounds y[i] += alpha * x[i]
     end
     y
 end
 function axpy!{Ti<:Integer,Tj<:Integer}(alpha, x::AbstractArray, rx::AbstractArray{Ti}, y::AbstractArray, ry::AbstractArray{Tj})
-    length(x)==length(y) || throw(DimensionMismatch(""))
+    length(x)==length(y) || throw(DimensionMismatch())
     if minimum(rx) < 1 || maximum(rx) > length(x) || minimum(ry) < 1 || maximum(ry) > length(y) || length(rx) != length(ry)
         throw(BoundsError())
     end

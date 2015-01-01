@@ -11,11 +11,17 @@
 @test_throws ErrorException Base.parseipv4("192.")
 
 @test ip"::1" == IPv6(1)
-@test ip"2605:2700:0:3::4713:93e3" == IPv6(parseint(Uint128,"260527000000000300000000471393e3",16))
+@test ip"2605:2700:0:3::4713:93e3" == IPv6(parseint(UInt128,"260527000000000300000000471393e3",16))
 
 @test ip"2001:db8:0:0:0:0:2:1" == ip"2001:db8::2:1" == ip"2001:db8::0:2:1"
 
 @test ip"0:0:0:0:0:ffff:127.0.0.1" == IPv6(0xffff7f000001)
+
+# isless and comparisons
+@test ip"1.2.3.4" < ip"1.2.3.7" < ip"2.3.4.5"
+@test ip"1.2.3.4" >= ip"1.2.3.4" >= ip"1.2.3.1"
+@test isless(ip"1.2.3.4", ip"1.2.3.5")
+@test_throws MethodError sort[ip"2.3.4.5", ip"1.2.3.4", ip"2001:1:2::1"]
 
 # RFC 5952 Compliance
 
@@ -28,12 +34,12 @@
 c = Base.Condition()
 port = rand(2000:4000)
 @async begin
-	s = listen(port)
-	Base.notify(c)
-	sock = accept(s)
-	write(sock,"Hello World\n")
-	close(s)
-	close(sock)
+    s = listen(port)
+    Base.notify(c)
+    sock = accept(s)
+    write(sock,"Hello World\n")
+    close(s)
+    close(sock)
 end
 wait(c)
 @test readall(connect(port)) == "Hello World\n"
@@ -41,12 +47,12 @@ wait(c)
 socketname = @windows ? "\\\\.\\pipe\\uv-test" : "testsocket"
 @unix_only isfile(socketname) && Base.FS.unlink(socketname)
 @async begin
-	s = listen(socketname)
-	Base.notify(c)
-	sock = accept(s)
-	write(sock,"Hello World\n")
-	close(s)
-	close(sock)
+    s = listen(socketname)
+    Base.notify(c)
+    sock = accept(s)
+    write(sock,"Hello World\n")
+    close(s)
+    close(sock)
 end
 wait(c)
 @test readall(connect(socketname)) == "Hello World\n"
@@ -67,8 +73,8 @@ close(server)
 
 @test_throws Base.UVError connect(".invalid",80)
 
-a = UdpSocket()
-b = UdpSocket()
+a = UDPSocket()
+b = UDPSocket()
 bind(a,ip"127.0.0.1",port)
 bind(b,ip"127.0.0.1",port+1)
 
@@ -85,7 +91,7 @@ end
 send(b,ip"127.0.0.1",port,"Hello World")
 wait(c)
 
-@test_throws MethodError bind(UdpSocket(),port)
+@test_throws MethodError bind(UDPSocket(),port)
 
 close(a)
 close(b)

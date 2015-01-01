@@ -21,9 +21,9 @@ end
 ####
 #### User-level functions
 ####
-function init(; n::Union(Nothing,Integer) = nothing, delay::Union(Nothing,Float64) = nothing)
+function init(; n::Union(Void,Integer) = nothing, delay::Union(Void,Float64) = nothing)
     n_cur = ccall(:jl_profile_maxlen_data, Csize_t, ())
-    delay_cur = ccall(:jl_profile_delay_nsec, Uint64, ())/10^9
+    delay_cur = ccall(:jl_profile_delay_nsec, UInt64, ())/10^9
     if n == nothing && delay == nothing
         return int(n_cur), delay_cur
     end
@@ -33,7 +33,7 @@ function init(; n::Union(Nothing,Integer) = nothing, delay::Union(Nothing,Float6
 end
 
 function init(n::Integer, delay::Float64)
-    status = ccall(:jl_profile_init, Cint, (Csize_t, Uint64), n, iround(10^9*delay))
+    status = ccall(:jl_profile_init, Cint, (Csize_t, UInt64), n, round(UInt64,10^9*delay))
     if status == -1
         error("could not allocate space for ", n, " instruction pointers")
     end
@@ -41,7 +41,7 @@ end
 
 # init with default values
 # Use a max size of 1M profile samples, and fire timer every 1ms
-__init__() = init(1_000_000, 0.001)
+@windows? (__init__() = init(1_000_000, 0.01)) : (__init__() = init(1_000_000, 0.001))
 
 clear() = ccall(:jl_profile_clear_data, Void, ())
 
@@ -61,12 +61,12 @@ function retrieve()
     copy(data), getdict(data)
 end
 
-function getdict(data::Vector{Uint})
+function getdict(data::Vector{UInt})
     uip = unique(data)
-    Dict(uip, [lookup(ip) for ip in uip])
+    Dict{UInt, LineInfo}([ip=>lookup(ip) for ip in uip])
 end
 
-function callers(funcname::ByteString, bt::Vector{Uint}, lidict; filename = nothing, linerange = nothing)
+function callers(funcname::ByteString, bt::Vector{UInt}, lidict; filename = nothing, linerange = nothing)
     if filename == nothing && linerange == nothing
         return callersf(li -> li.func == funcname, bt, lidict)
     end
@@ -79,8 +79,15 @@ function callers(funcname::ByteString, bt::Vector{Uint}, lidict; filename = noth
 end
 
 callers(funcname::ByteString; kwargs...) = callers(funcname, retrieve()...; kwargs...)
-callers(func::Function, bt::Vector{Uint}, lidict; kwargs...) = callers(string(func), bt, lidict; kwargs...)
+callers(func::Function, bt::Vector{UInt}, lidict; kwargs...) = callers(string(func), bt, lidict; kwargs...)
 callers(func::Function; kwargs...) = callers(string(func), retrieve()...; kwargs...)
+
+##
+## For --track-allocation
+##
+# Reset the malloc log. Used to avoid counting memory allocated during
+# compilation.
+clear_malloc_data() = ccall(:jl_clear_malloc_data, Void, ())
 
 
 ####
@@ -103,8 +110,8 @@ const UNKNOWN = LineInfo("?", "?", -1, true, 0)
 #
 ==(a::LineInfo, b::LineInfo) = a.line == b.line && a.fromC == b.fromC && a.func == b.func && a.file == b.file
 
-function hash(li::LineInfo, h::Uint)
-    h += uint(0xf4fbda67fe20ce88)
+function hash(li::LineInfo, h::UInt)
+    h += 0xf4fbda67fe20ce88 % UInt
     h = hash(li.line, h)
     h = hash(li.file, h)
     h = hash(li.func, h)
@@ -117,13 +124,13 @@ stop_timer() = ccall(:jl_profile_stop_timer, Void, ())
 
 is_running() = bool(ccall(:jl_profile_is_running, Cint, ()))
 
-get_data_pointer() = convert(Ptr{Uint}, ccall(:jl_profile_get_data, Ptr{Uint8}, ()))
+get_data_pointer() = convert(Ptr{UInt}, ccall(:jl_profile_get_data, Ptr{UInt8}, ()))
 
 len_data() = convert(Int, ccall(:jl_profile_len_data, Csize_t, ()))
 
 maxlen_data() = convert(Int, ccall(:jl_profile_maxlen_data, Csize_t, ()))
 
-function lookup(ip::Uint)
+function lookup(ip::UInt)
     info = ccall(:jl_lookup_code_address, Any, (Ptr{Void},Cint), ip, false)
     if length(info) == 5
         return LineInfo(string(info[1]), string(info[2]), int(info[3]), info[4], int(info[5]))
@@ -131,12 +138,13 @@ function lookup(ip::Uint)
         return UNKNOWN
     end
 end
+lookup(ip::Ptr{Void}) = lookup(UInt(ip))
 
-error_codes = (Int=>ASCIIString)[
+error_codes = Dict{Int,ASCIIString}(
     -1=>"cannot specify signal action for profiling",
     -2=>"cannot create the timer for profiling",
     -3=>"cannot start the timer for profiling",
-    -4=>"cannot unblock SIGUSR1"]
+    -4=>"cannot unblock SIGUSR1")
 
 function fetch()
     len = len_data()
@@ -157,7 +165,7 @@ const btskip = 0
 ## Print as a flat list
 # Counts the number of times each line appears, at any nesting level
 function count_flat{T<:Unsigned}(data::Vector{T})
-    linecount = (T=>Int)[]
+    linecount = Dict{T,Int}()
     toskip = btskip
     for ip in data
         if toskip > 0
@@ -193,6 +201,9 @@ function parse_flat(iplist, n, lidict, C::Bool)
 end
 
 function flat{T<:Unsigned}(io::IO, data::Vector{T}, lidict::Dict, C::Bool, combine::Bool, cols::Integer)
+    if !C
+        data = purgeC(data, lidict)
+    end
     iplist, n = count_flat(data)
     if isempty(n)
         warning_empty()
@@ -235,8 +246,8 @@ function print_flat(io::IO, lilist::Vector{LineInfo}, n::Vector{Int}, combine::B
         wfile = maxfile
         wfunc = maxfunc
     else
-        wfile = ifloor(2*ntext/5)
-        wfunc = ifloor(3*ntext/5)
+        wfile = floor(Integer,2*ntext/5)
+        wfunc = floor(Integer,3*ntext/5)
     end
     println(io, lpad("Count", wcounts, " "), " ", rpad("File", wfile, " "), " ", rpad("Function", wfunc, " "), " ", lpad("Line", wline, " "))
     for i = 1:length(n)
@@ -249,7 +260,7 @@ end
 # Identify and counts repetitions of all unique backtraces
 function tree_aggregate{T<:Unsigned}(data::Vector{T})
     iz = find(data .== 0)  # find the breaks between backtraces
-    treecount = (Vector{T}=>Int)[]
+    treecount = Dict{Vector{T},Int}()
     istart = 1+btskip
     for iend in iz
         tmp = data[iend-1:-1:istart]
@@ -270,12 +281,12 @@ end
 tree_format_linewidth(x::LineInfo) = ndigits(x.line)+6
 
 function tree_format(lilist::Vector{LineInfo}, counts::Vector{Int}, level::Int, cols::Integer)
-    nindent = min(ifloor(cols/2), level)
+    nindent = min(cols>>1, level)
     ndigcounts = ndigits(maximum(counts))
     ndigline = maximum([tree_format_linewidth(x) for x in lilist])
     ntext = cols-nindent-ndigcounts-ndigline-5
-    widthfile = ifloor(0.4ntext)
-    widthfunc = ifloor(0.6ntext)
+    widthfile = floor(Integer,0.4ntext)
+    widthfunc = floor(Integer,0.6ntext)
     strs = Array(ByteString, length(lilist))
     showextra = false
     if level > nindent
@@ -321,7 +332,7 @@ function tree{T<:Unsigned}(io::IO, bt::Vector{Vector{T}}, counts::Vector{Int}, l
     # Organize backtraces into groups that are identical up to this level
     if combine
         # Combine based on the line information
-        d = (LineInfo=>Vector{Int})[]
+        d = Dict{LineInfo,Vector{Int}}()
         for i = 1:length(bt)
             ip = bt[i][level+1]
             key = lidict[ip]
@@ -346,7 +357,7 @@ function tree{T<:Unsigned}(io::IO, bt::Vector{Vector{T}}, counts::Vector{Int}, l
         end
     else
         # Combine based on the instruction pointer
-        d = (T=>Vector{Int})[]
+        d = Dict{T,Vector{Int}}()
         for i = 1:length(bt)
             key = bt[i][level+1]
             indx = Base.ht_keyindex(d, key)
@@ -408,7 +419,7 @@ function tree{T<:Unsigned}(io::IO, data::Vector{T}, lidict::Dict, C::Bool, combi
     tree(io, bt[keep], counts[keep], lidict, level, combine, cols)
 end
 
-function callersf(matchfunc::Function, bt::Vector{Uint}, lidict)
+function callersf(matchfunc::Function, bt::Vector{UInt}, lidict)
     counts = Dict{LineInfo, Int}()
     lastmatched = false
     for id in bt

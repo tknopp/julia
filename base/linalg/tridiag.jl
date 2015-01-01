@@ -5,7 +5,7 @@ immutable SymTridiagonal{T} <: AbstractMatrix{T}
     dv::Vector{T}                        # diagonal
     ev::Vector{T}                        # subdiagonal
     function SymTridiagonal(dv::Vector{T}, ev::Vector{T})
-        length(ev)==length(dv)-1 || throw(DimensionMismatch(""))
+        length(dv) - 1 <= length(ev) <= length(dv) || throw(DimensionMismatch("subdiagonal has wrong length. Has length $(length(ev)), but should be either $(length(dv) - 1) or $(length(dv))."))
         new(dv,ev)
     end
 end
@@ -28,12 +28,12 @@ size(m::SymTridiagonal) = (length(m.dv), length(m.dv))
 size(m::SymTridiagonal, d::Integer) = d<1 ? error("dimension out of range") : (d<=2 ? length(m.dv) : 1)
 
 #Elementary operations
-for func in (:copy, :round, :iround, :conj)
-    @eval begin
-        ($func)(M::SymTridiagonal) = SymTridiagonal(($func)(M.dv), ($func)(M.ev))
-    end
+for func in (:conj, :copy, :round, :trunc, :floor, :ceil)
+    @eval ($func)(M::SymTridiagonal) = SymTridiagonal(($func)(M.dv), ($func)(M.ev))
 end
-
+for func in (:round, :trunc, :floor, :ceil)
+    @eval ($func){T<:Integer}(::Type{T},M::SymTridiagonal) = SymTridiagonal(($func)(T,M.dv), (T,$func)(M.ev))
+end
 transpose(M::SymTridiagonal) = M #Identity operation
 ctranspose(M::SymTridiagonal) = conj(M)
 
@@ -49,13 +49,31 @@ end
 /(A::SymTridiagonal, B::Number) = SymTridiagonal(A.dv/B, A.ev/B)
 ==(A::SymTridiagonal, B::SymTridiagonal) = (A.dv==B.dv) && (A.ev==B.ev)
 
-## Solver
-function \{T<:BlasFloat}(M::SymTridiagonal{T}, rhs::StridedVecOrMat{T})
-    if stride(rhs, 1) == 1
-        return LAPACK.gtsv!(copy(M.ev), copy(M.dv), copy(M.ev), copy(rhs))
+function A_mul_B!(C::StridedVecOrMat, S::SymTridiagonal, B::StridedVecOrMat)
+    m, n = size(B, 1), size(B, 2)
+    m == size(S, 1) == size(C, 1) || throw(DimensionMismatch())
+    n == size(C, 2) || throw(DimensionMismatch())
+
+    α = S.dv
+    β = S.ev
+    @inbounds begin
+        for j = 1:n
+            x₀, x₊ = B[1, j], B[2, j]
+            β₀ = β[1]
+            C[1, j] = α[1]*x₀ + x₊*β₀
+            for i = 2:m - 1
+                x₋, x₀, x₊ = x₀, x₊, B[i + 1, j]
+                β₋, β₀ = β₀, β[i]
+                C[i, j] = β₋*x₋ + α[i]*x₀ + β₀*x₊
+            end
+            C[m, j] = β₀*x₀ + α[m]*x₊
+        end
     end
-    solve(Tridiagonal(M), rhs)  # use the Julia "fallback"
+
+    return C
 end
+
+factorize(S::SymTridiagonal) = ldltfact(S)
 
 #Wrap LAPACK DSTE{GR,BZ} to compute eigenvalues
 eigfact!{T<:BlasFloat}(m::SymTridiagonal{T}) = Eigen(LAPACK.stegr!('V', m.dv, m.ev)...)
@@ -81,7 +99,7 @@ eigvecs{T<:BlasFloat,Eigenvalue<:Real}(m::SymTridiagonal{T}, eigvals::Vector{Eig
 type ZeroOffsetVector
     data::Vector
 end
-getindex (a::ZeroOffsetVector, i) = a.data[i+1] 
+getindex (a::ZeroOffsetVector, i) = a.data[i+1]
 setindex!(a::ZeroOffsetVector, x, i) = a.data[i+1]=x
 
 #Implements the inverse using the recurrence relation between principal minors
@@ -116,7 +134,7 @@ function inv_usmani{T}(a::Vector{T}, b::Vector{T}, c::Vector{T})
             α[i,j]=(sign)(prod(a[j:i-1]))*θ[j-1]*φ[i+1]/θ[n]
         end
     end
-    α 
+    α
 end
 
 #Implements the determinant using principal minors
@@ -185,16 +203,21 @@ end
 copy!(dest::Tridiagonal, src::Tridiagonal) = Tridiagonal(copy!(dest.dl, src.dl), copy!(dest.d, src.d), copy!(dest.du, src.du), copy!(dest.du2, src.du2))
 
 #Elementary operations
-for func in (:copy, :round, :iround, :conj) 
-    @eval begin
-        ($func)(M::Tridiagonal) = Tridiagonal(map(($func), (M.dl, M.d, M.du, M.du2))...)
+for func in (:conj, :copy, :round, :trunc, :floor, :ceil)
+    @eval function ($func)(M::Tridiagonal)
+        Tridiagonal(($func)(M.dl), ($func)(M.d), ($func)(M.du), ($func)(M.du2))
+    end
+end
+for func in (:round, :trunc, :floor, :ceil)
+    @eval function ($func){T<:Integer}(::Type{T},M::Tridiagonal)
+        Tridiagonal(($func)(T,M.dl), ($func)(T,M.d), ($func)(T,M.du), ($func)(T,M.du2))
     end
 end
 
 transpose(M::Tridiagonal) = Tridiagonal(M.du, M.d, M.dl)
 ctranspose(M::Tridiagonal) = conj(transpose(M))
 
-diag{T}(M::Tridiagonal{T}, n::Integer=0) = n==0 ? M.d : n==-1 ? M.dl : n==1 ? M.du : abs(n)<size(M,1) ? zeros(T,size(M,1)-abs(n)) : throw(BoundsError()) 
+diag{T}(M::Tridiagonal{T}, n::Integer=0) = n==0 ? M.d : n==-1 ? M.dl : n==1 ? M.du : abs(n)<size(M,1) ? zeros(T,size(M,1)-abs(n)) : throw(BoundsError())
 function getindex{T}(A::Tridiagonal{T}, i::Integer, j::Integer)
     (1<=i<=size(A,2) && 1<=j<=size(A,2)) || throw(BoundsError())
     i==j ? A.d[i] : i==j+1 ? A.dl[j] : i+1==j ? A.du[i] : zero(T)
@@ -232,24 +255,21 @@ convert{T}(::Type{SymTridiagonal{T}}, M::Tridiagonal) = M.dl==M.du ? (SymTridiag
 convert{T}(::Type{SymTridiagonal{T}},M::SymTridiagonal) = SymTridiagonal(convert(Vector{T}, M.dv), convert(Vector{T}, M.ev))
 
 function A_mul_B!(C::AbstractVecOrMat, A::Tridiagonal, B::AbstractVecOrMat)
-    size(C,1) == size(B,1) == (nA = size(A,1)) || throw(DimensionMismatch(""))
-    size(C,2) == (nB = size(B,2)) || throw(DimensionMismatch(""))
+    size(C,1) == size(B,1) == (nA = size(A,1)) || throw(DimensionMismatch())
+    size(C,2) == (nB = size(B,2)) || throw(DimensionMismatch())
     l = A.dl
     d = A.d
     u = A.du
     @inbounds begin
         for j = 1:nB
-            C[1,j] = d[1]*B[1,j] + u[1]*B[2,j]
-            for i = 2:nA-1
-                C[i,j] = l[i-1]*B[i-1,j] + d[i]*B[i,j] + u[i]*B[i+1,j]
+            b₀, b₊ = B[1, j], B[2, j]
+            C[1, j] = d[1]*b₀ + u[1]*b₊
+            for i = 2:nA - 1
+                b₋, b₀, b₊ = b₀, b₊, B[i + 1, j]
+                C[i, j] = l[i - 1]*b₋ + d[i]*b₀ + u[i]*b₊
             end
-            C[nA,j] = l[nA-1]*B[nA-1,j] + d[nA]*B[nA,j]
+            C[nA, j] = l[nA - 1]*b₀ + d[nA]*b₊
         end
     end
     C
 end
-*(A::Tridiagonal, B::AbstractVecOrMat) = A_mul_B!(similar(B), A, B)
-
-A_ldiv_B!(A::Tridiagonal,B::AbstractVecOrMat) = A_ldiv_B!(lufact!(A), B)
-At_ldiv_B!(A::Tridiagonal,B::AbstractVecOrMat) = At_ldiv_B!(lufact!(A), B)
-Ac_ldiv_B!(A::Tridiagonal,B::AbstractVecOrMat) = Ac_ldiv_B!(lufact!(A), B)

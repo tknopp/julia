@@ -12,7 +12,7 @@ function argtype_decl(n, t) # -> (argname, argtype)
     if t === Any && !isempty(s)
         return s, ""
     end
-    if t <: Vararg && t !== None && t.parameters[1] === Any
+    if t <: Vararg && t !== Union() && t.parameters[1] === Any
         return string(s, "..."), ""
     end
     return s, string(t)
@@ -83,7 +83,7 @@ function url(m::Method)
     line <= 0 || ismatch(r"In\[[0-9]+\]", file) && return ""
     if inbase(M)
         return "https://github.com/JuliaLang/julia/tree/$(Base.GIT_VERSION_INFO.commit)/base/$file#L$line"
-    else 
+    else
         try
             d = dirname(file)
             u = Git.readchomp(`config remote.origin.url`, dir=d)
@@ -112,7 +112,7 @@ function writemime(io::IO, ::MIME"text/html", m::Method)
         print(io,"</i>")
     end
     print(io, "(")
-    print_joined(io, [isempty(d[2]) ? d[1] : d[1]*"::<b>"*d[2]*"</b>" 
+    print_joined(io, [isempty(d[2]) ? d[1] : d[1]*"::<b>"*d[2]*"</b>"
                       for d in decls], ",", ",")
     print(io, ")")
     if line > 0
@@ -120,7 +120,7 @@ function writemime(io::IO, ::MIME"text/html", m::Method)
         if isempty(u)
             print(io, " at ", file, ":", line)
         else
-            print(io, """ at <a href="$u" target="_blank">""", 
+            print(io, """ at <a href="$u" target="_blank">""",
                   file, ":", line, "</a>")
         end
     end

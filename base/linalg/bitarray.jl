@@ -1,6 +1,6 @@
 function dot(x::BitVector, y::BitVector)
     # simplest way to mimic Array dot behavior
-    length(x) == length(y) || throw(DimensionMismatch(""))
+    length(x) == length(y) || throw(DimensionMismatch())
     s = 0
     xc = x.chunks
     yc = y.chunks
@@ -17,12 +17,12 @@ end
     #(mA, nA) = size(A)
     #(mB, nB) = size(B)
     #C = falses(nA, nB)
-    #if mA != mB; throw(DimensionMismatch("")) end
+    #if mA != mB; throw(DimensionMismatch()) end
     #if mA == 0; return C; end
     #col_ch = num_bit_chunks(mA)
     ## TODO: avoid using aux chunks and copy (?)
-    #aux_chunksA = zeros(Uint64, col_ch)
-    #aux_chunksB = [zeros(Uint64, col_ch) for j=1:nB]
+    #aux_chunksA = zeros(UInt64, col_ch)
+    #aux_chunksB = [zeros(UInt64, col_ch) for j=1:nB]
     #for j = 1:nB
         #Base.copy_chunks!(aux_chunksB[j], 1, B.chunks, (j-1)*mA+1, mA)
     #end
@@ -85,7 +85,7 @@ function diag(B::BitMatrix)
 end
 
 function diagm(v::Union(BitVector,BitMatrix))
-    isa(v, BitMatrix) && size(v,1)==1 || size(v,2)==1 || throw(DimensionMismatch(""))
+    isa(v, BitMatrix) && size(v,1)==1 || size(v,2)==1 || throw(DimensionMismatch())
     n = length(v)
     a = falses(n, n)
     for i=1:n
@@ -132,10 +132,10 @@ end
 
 ## Structure query functions
 
-issym(A::BitMatrix) = size(A, 1)==size(A, 2) && numnz(A - A.')==0
+issym(A::BitMatrix) = size(A, 1)==size(A, 2) && countnz(A - A.')==0
 ishermitian(A::BitMatrix) = issym(A)
 
-function nonzero_chunks(chunks::Vector{Uint64}, pos0::Int, pos1::Int)
+function nonzero_chunks(chunks::Vector{UInt64}, pos0::Int, pos1::Int)
     k0, l0 = Base.get_chunks_id(pos0)
     k1, l1 = Base.get_chunks_id(pos1)
 

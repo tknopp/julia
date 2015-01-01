@@ -148,8 +148,10 @@ end
 # matrix multiplication and kron
 for i = 1:5
     a = sprand(10, 5, 0.7)
-    b = sprand(5, 10, 0.3)
+    b = sprand(5, 15, 0.3)
     @test maximum(abs(a*b - full(a)*full(b))) < 100*eps()
+    @test maximum(abs(Base.LinAlg.spmatmul(a,b,sortindices=:sortcols) - full(a)*full(b))) < 100*eps()
+    @test maximum(abs(Base.LinAlg.spmatmul(a,b,sortindices=:doubletranspose) - full(a)*full(b))) < 100*eps()
     @test full(kron(a,b)) == kron(full(a), full(b))
 end
 
@@ -190,6 +192,10 @@ mfe22 = eye(Float64, 2)
 K,J,V = findnz(SparseMatrixCSC(2,1,[1,3],[1,2],[1.0,0.0]))
 @test length(K) == length(J) == length(V) == 1
 
+# https://groups.google.com/d/msg/julia-users/Yq4dh8NOWBQ/GU57L90FZ3EJ
+A = speye(Bool, 5)
+@test find(A) == find(x -> x == true, A) == find(full(A))
+
 # issue #5437
 @test nnz(sparse([1,2,3],[1,2,3],[0.0,1.0,2.0])) == 2
 
@@ -208,7 +214,7 @@ end
 @test 4 <= mean(sprb45nnzs) <= 16
 
 # issue #5853, sparse diff
-for i=1:2, a={[1 2 3], [1 2 3]', eye(3)}
+for i=1:2, a=Any[[1 2 3], [1 2 3]', eye(3)]
     @test all(diff(sparse(a),i) == diff(a,i))
 end
 
@@ -237,11 +243,18 @@ end
 # Unary functions
 a = sprand(5,15, 0.5)
 afull = full(a)
-for op in (:sin, :cos, :tan, :iceil, :ifloor, :ceil, :floor, :abs, :abs2)
+for op in (:sin, :cos, :tan, :ceil, :floor, :abs, :abs2)
     @eval begin
         @test ($op)(afull) == full($(op)(a))
     end
 end
+
+for op in (:ceil, :floor)
+    @eval begin
+        @test ($op)(Int,afull) == full($(op)(Int,a))
+    end
+end
+
 
 # getindex tests
 ni = 23
@@ -294,8 +307,8 @@ for (aa116, ss116) in [(a116, s116), (ad116, sd116)]
 end
 
 # workaround issue #7197: comment out let-block
-#let S = SparseMatrixCSC(3, 3, Uint8[1,1,1,1], Uint8[], Int64[])
-S1290 = SparseMatrixCSC(3, 3, Uint8[1,1,1,1], Uint8[], Int64[])
+#let S = SparseMatrixCSC(3, 3, UInt8[1,1,1,1], UInt8[], Int64[])
+S1290 = SparseMatrixCSC(3, 3, UInt8[1,1,1,1], UInt8[], Int64[])
     S1290[1,1] = 1
     S1290[5] = 2
     S1290[end] = 3
@@ -336,7 +349,7 @@ let A = spzeros(Int, 10, 20)
     @test A[4:8,8:16] == 15 * ones(Int, 5, 9)
 end
 
-let ASZ = 1000, TSZ = 800 
+let ASZ = 1000, TSZ = 800
     A = sprand(ASZ, 2*ASZ, 0.0001)
     B = copy(A)
     nA = countnz(A)
@@ -444,9 +457,18 @@ end
 let A = Array(Int,0,0), S = sparse(A)
     iA = try indmax(A) end
     iS = try indmax(S) end
-    @test iA == iS == false
+    @test iA === iS === nothing
     iA = try indmin(A) end
     iS = try indmin(S) end
-    @test iA == iS == false
+    @test iA === iS === nothing
 end
 
+# issue #8225
+@test_throws BoundsError sparse([0],[-1],[1.0],2,2)
+
+# issue #8363
+@test_throws BoundsError sparsevec(Dict(-1=>1,1=>2))
+
+# issue #8976
+@test conj(sparse([1im])) == sparse(conj([1im]))
+@test conj!(sparse([1im])) == sparse(conj!([1im]))

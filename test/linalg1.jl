@@ -28,7 +28,7 @@ for eltya in (Float32, Float64, Complex64, Complex128, BigFloat, Int)
     asym = a'+a                  # symmetric indefinite
     apd  = a'*a                 # symmetric positive-definite
     ε = εa = eps(abs(float(one(eltya))))
-    
+
     for eltyb in (Float32, Float64, Complex64, Complex128, Int)
         b = eltyb == Int ? rand(1:5, n, 2) : convert(Matrix{eltyb}, eltyb <: Complex ? complex(breal, bimg) : breal)
         εb = eps(abs(float(one(eltyb))))
@@ -37,38 +37,45 @@ for eltya in (Float32, Float64, Complex64, Complex128, BigFloat, Int)
 debug && println("\ntype of a: ", eltya, " type of b: ", eltyb, "\n")
 
 debug && println("(Automatic) upper Cholesky factor")
-    if eltya != BigFloat && eltyb != BigFloat # Note! Need to implement cholesky decomposition in julia
-        capd  = factorize(apd)
-        r     = capd[:U]
-        κ     = cond(apd) #condition number
 
-        #Test error bound on reconstruction of matrix: LAWNS 14, Lemma 2.1
-        E = abs(apd - r'*r)
-        for i=1:n, j=1:n
-            @test E[i,j] <= (n+1)ε/(1-(n+1)ε)*real(sqrt(apd[i,i]*apd[j,j]))
-        end
-        E = abs(apd - full(capd))
-        for i=1:n, j=1:n
-            @test E[i,j] <= (n+1)ε/(1-(n+1)ε)*real(sqrt(apd[i,i]*apd[j,j]))
-        end
+    capd  = factorize(apd)
+    r     = capd[:U]
+    κ     = cond(apd, 1) #condition number
 
-        #Test error bound on linear solver: LAWNS 14, Theorem 2.1
-        #This is a surprisingly loose bound...
-        x = capd\b
-        @test norm(x-apd\b)/norm(x) <= (3n^2 + n + n^3*ε)*ε/(1-(n+1)*ε)*κ
-        @test norm(apd*x-b)/norm(b) <= (3n^2 + n + n^3*ε)*ε/(1-(n+1)*ε)*κ
+    #Test error bound on reconstruction of matrix: LAWNS 14, Lemma 2.1
+    E = abs(apd - r'*r)
+    for i=1:n, j=1:n
+        @test E[i,j] <= (n+1)ε/(1-(n+1)ε)*real(sqrt(apd[i,i]*apd[j,j]))
+    end
+    E = abs(apd - full(capd))
+    for i=1:n, j=1:n
+        @test E[i,j] <= (n+1)ε/(1-(n+1)ε)*real(sqrt(apd[i,i]*apd[j,j]))
+    end
 
-        @test_approx_eq apd * inv(capd) eye(n)
-        @test norm(a*(capd\(a'*b)) - b)/norm(b) <= ε*κ*n # Ad hoc, revisit
-        @test abs((det(capd) - det(apd))/det(capd)) <= ε*κ*n # Ad hoc, but statistically verified, revisit
-        @test_approx_eq logdet(capd) log(det(capd)) # logdet is less likely to overflow
+    #Test error bound on linear solver: LAWNS 14, Theorem 2.1
+    #This is a surprisingly loose bound...
+    x = capd\b
+    @test norm(x-apd\b,1)/norm(x,1) <= (3n^2 + n + n^3*ε)*ε/(1-(n+1)*ε)*κ
+    @test norm(apd*x-b,1)/norm(b,1) <= (3n^2 + n + n^3*ε)*ε/(1-(n+1)*ε)*κ
+
+    @test_approx_eq apd * inv(capd) eye(n)
+    @test norm(a*(capd\(a'*b)) - b,1)/norm(b,1) <= ε*κ*n # Ad hoc, revisit
+    @test abs((det(capd) - det(apd))/det(capd)) <= ε*κ*n # Ad hoc, but statistically verified, revisit
+    @test_approx_eq logdet(capd) log(det(capd)) # logdet is less likely to overflow
+
+    apos = asym[1,1]            # test chol(x::Number), needs x>0
+    @test_approx_eq cholfact(apos).UL √apos
+
+    # test chol of 2x2 Strang matrix
+    S = convert(AbstractMatrix{eltya},full(SymTridiagonal([2,2],[-1])))
+    U = Bidiagonal([2,sqrt(eltya(3))],[-1],true) / sqrt(eltya(2))
+    @test_approx_eq full(chol(S)) full(U)
 
 debug && println("lower Cholesky factor")
-        lapd = cholfact(apd, :L)
-        @test_approx_eq full(lapd) apd
-        l = lapd[:L]
-        @test_approx_eq l*l' apd
-    end
+    lapd = cholfact(apd, :L)
+    @test_approx_eq full(lapd) apd
+    l = lapd[:L]
+    @test_approx_eq l*l' apd
 
 debug && println("pivoted Choleksy decomposition")
     if eltya != BigFloat && eltyb != BigFloat # Note! Need to implement pivoted cholesky decomposition in julia
@@ -181,6 +188,18 @@ debug && println("Schur")
         @test istriu(f[:Schur]) || iseltype(a,Real)
     end
 
+debug && println("Reorder Schur")
+    if eltya != BigFloat && eltyb != BigFloat # Revisit when implemented in julia
+        # use asym for real schur to enforce tridiag structure
+        # avoiding partly selection of conj. eigenvalues
+        ordschura = eltya <: Complex ? a : asym
+        S = schurfact(ordschura)
+        select = rand(range(0,2), n)
+        O = ordschur(S, select)
+        bool(sum(select)) && @test_approx_eq S[:values][find(select)] O[:values][1:sum(select)]
+        @test_approx_eq O[:vectors]*O[:Schur]*O[:vectors]' ordschura
+    end
+
 debug && println("Generalized Schur")
     if eltya != BigFloat && eltyb != BigFloat # Revisit when implemented in julia
         f = schurfact(a[1:5,1:5], a[6:10,6:10])
@@ -209,40 +228,6 @@ debug && println("Solve square general system of equations")
     @test_throws DimensionMismatch b'\b
     @test_throws DimensionMismatch b\b'
     @test norm(a*x - b, 1)/norm(b) < ε*κ*n*2 # Ad hoc, revisit!
-
-debug && println("Solve upper triangular system")
-    x = triu(a) \ b
-
-    #Test forward error [JIN 5705] if this is not a BigFloat
-    γ = n*ε/(1-n*ε)
-    if eltya != BigFloat
-        bigA = big(triu(a))
-        x̂ = bigA \ b
-        for i=1:size(b, 2)
-            @test norm(x̂[:,i]-x[:,i], Inf)/norm(x[:,i], Inf) <= abs(condskeel(bigA, x[:,i])*γ/(1-condskeel(bigA)*γ))
-        end
-    end
-    #Test backward error [JIN 5705]
-    for i=1:size(b, 2)
-        @test norm(abs(b[:,i] - triu(a)*x[:,i]), Inf) <= γ * norm(triu(a), Inf) * norm(x[:,i], Inf)
-    end
-
-debug && println("Solve lower triangular system")
-    x = tril(a)\b
-
-    #Test forward error [JIN 5705] if this is not a BigFloat
-    γ = n*ε/(1-n*ε)
-    if eltya != BigFloat
-        bigA = big(tril(a))
-        x̂ = bigA \ b
-        for i=1:size(b, 2)
-            @test norm(x̂[:,i]-x[:,i], Inf)/norm(x[:,i], Inf) <= abs(condskeel(bigA, x[:,i])*γ/(1-condskeel(bigA)*γ))
-        end
-    end
-    #Test backward error [JIN 5705]
-    for i=1:size(b, 2)
-        @test norm(abs(b[:,i] - tril(a)*x[:,i]), Inf) <= γ * norm(tril(a), Inf) * norm(x[:,i], Inf)
-    end
 
 debug && println("Test null")
     if eltya != BigFloat && eltyb != BigFloat # Revisit when implemented in julia
@@ -275,7 +260,7 @@ debug && println("Matrix square root")
 
 debug && println("Lyapunov/Sylvester")
     if eltya != BigFloat
-        let 
+        let
             x = lyap(a, a2)
             @test_approx_eq -a2 a*x + x*a'
             x2 = sylvester(a[1:3, 1:3], a[4:n, 4:n], a2[1:3,4:n])

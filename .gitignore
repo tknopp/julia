@@ -13,5 +13,9 @@
 *.dll
 *.do
 *.o
+*.obj
 *.dylib
 *.dSYM
+*.cov
+
+.DS_Store

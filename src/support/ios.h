@@ -78,6 +78,7 @@ DLLEXPORT off_t ios_skip(ios_t *s, off_t offs);  // relative seek
 DLLEXPORT off_t ios_pos(ios_t *s);  // get current position
 DLLEXPORT int ios_trunc(ios_t *s, size_t size);
 DLLEXPORT int ios_eof(ios_t *s);
+DLLEXPORT int ios_eof_blocking(ios_t *s);
 DLLEXPORT int ios_flush(ios_t *s);
 DLLEXPORT void ios_close(ios_t *s);
 DLLEXPORT int ios_isopen(ios_t *s);
@@ -99,7 +100,7 @@ DLLEXPORT size_t ios_readprep(ios_t *from, size_t n);
 
 /* stream creation */
 DLLEXPORT
-ios_t *ios_file(ios_t *s, char *fname, int rd, int wr, int create, int trunc);
+ios_t *ios_file(ios_t *s, const char *fname, int rd, int wr, int create, int trunc);
 DLLEXPORT ios_t *ios_mem(ios_t *s, size_t initsize);
 ios_t *ios_str(ios_t *s, char *str);
 ios_t *ios_static_buffer(ios_t *s, char *buf, size_t sz);

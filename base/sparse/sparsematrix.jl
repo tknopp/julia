@@ -18,6 +18,10 @@ size(S::SparseMatrixCSC) = (S.m, S.n)
 nnz(S::SparseMatrixCSC) = int(S.colptr[end]-1)
 countnz(S::SparseMatrixCSC) = countnz(S.nzval)
 
+nonzeros(S::SparseMatrixCSC) = S.nzval
+rowvals(S::SparseMatrixCSC) = S.rowval
+nzrange(S::SparseMatrixCSC, col::Integer) = S.colptr[col]:(S.colptr[col+1]-1)
+
 function Base.showarray(io::IO, S::SparseMatrixCSC;
                         header::Bool=true, limit::Bool=Base._limit_output,
                         rows = Base.tty_size()[1], repr=false)
@@ -210,6 +214,7 @@ function sparsevec(I::AbstractVector, V, m::Integer, combine::Function)
     p = sortperm(I)
     @inbounds I = I[p]
     (nI==0 || m >= I[end]) || throw(DimensionMismatch("indices cannot be larger than length of vector"))
+    (nI==0 || I[1] > 0) || throw(BoundsError())
     V = V[p]
     sparse_IJ_sorted!(I, ones(eltype(I), nI), V, m, 1, combine)
 end
@@ -351,8 +356,6 @@ function findnz{Tv,Ti}(S::SparseMatrixCSC{Tv,Ti})
     return (I, J, V)
 end
 
-nonzeros(S::SparseMatrixCSC) = S.nzval
-
 function sprand{T}(m::Integer, n::Integer, density::FloatingPoint,
                    rng::Function,::Type{T}=eltype(rng(1)))
     0 <= density <= 1 || throw(ArgumentError("$density not in [0,1]"))
@@ -361,15 +364,15 @@ function sprand{T}(m::Integer, n::Integer, density::FloatingPoint,
     N == 1 && return rand() <= density ? sparse(rng(1)) : spzeros(T,1,1)
 
     I, J = Array(Int, 0), Array(Int, 0) # indices of nonzero elements
-    sizehint(I, int(N*density))
-    sizehint(J, int(N*density))
+    sizehint!(I, int(N*density))
+    sizehint!(J, int(N*density))
 
     # density of nonzero columns:
     L = log1p(-density)
-    coldensity = -expm1(m*L) # = 1 - (1-density)^m 
+    coldensity = -expm1(m*L) # = 1 - (1-density)^m
     colsparsity = exp(m*L) # = 1 - coldensity
     L = 1/L
-    
+
     rows = Array(Int, 0)
     for j in randsubseq(1:n, coldensity)
         # To get the right statistics, we *must* have a nonempty column j
@@ -430,24 +433,46 @@ end
 
 # Operations that may map nonzeros to zero, and zero to zero
 # Result is sparse
-for (op, restype) in ((:iceil, Int), (:ceil, Nothing),
-                      (:ifloor, Int), (:floor, Nothing),
-                      (:itrunc, Int), (:trunc, Nothing),
-                      (:iround, Int), (:round, Nothing),
-                      (:sin, Nothing), (:tan, Nothing),
-                      (:sinh, Nothing), (:tanh, Nothing),
-                      (:asin, Nothing), (:atan, Nothing),
-                      (:asinh, Nothing), (:atanh, Nothing),
-                      (:sinpi, Nothing), (:cosc, Nothing),
-                      (:sind, Nothing), (:tand, Nothing),
-                      (:asind, Nothing), (:atand, Nothing) )
+for op in (:ceil, :floor, :trunc, :round,
+           :sin, :tan, :asin, :atan,
+           :sinh, :tanh, :asinh, :atanh,
+           :sinpi, :cosc,
+           :sind, :tand, :asind, :atand)
     @eval begin
-
         function ($op){Tv,Ti}(A::SparseMatrixCSC{Tv,Ti})
             nfilledA = nnz(A)
             colptrB = Array(Ti, A.n+1)
             rowvalB = Array(Ti, nfilledA)
-            nzvalB = Array($(restype==Nothing ? (:Tv) : restype), nfilledA)
+            nzvalB = Array(Tv, nfilledA)
+
+            k = 0 # number of additional zeros introduced by op(A)
+            @inbounds for i = 1 : A.n
+                colptrB[i] = A.colptr[i] - k
+                for j = A.colptr[i] : A.colptr[i+1]-1
+                    opAj = $(op)(A.nzval[j])
+                    if opAj == 0
+                        k += 1
+                    else
+                        rowvalB[j - k] = A.rowval[j]
+                        nzvalB[j - k] = opAj
+                    end
+                end
+            end
+            colptrB[end] = A.colptr[end] - k
+            deleteat!(rowvalB, colptrB[end]:nfilledA)
+            deleteat!(nzvalB, colptrB[end]:nfilledA)
+            return SparseMatrixCSC(A.m, A.n, colptrB, rowvalB, nzvalB)
+        end
+    end # quote
+end # macro
+
+for op in (:ceil, :floor, :trunc, :round)
+    @eval begin
+        function ($op){T,Tv,Ti}(::Type{T},A::SparseMatrixCSC{Tv,Ti})
+            nfilledA = nnz(A)
+            colptrB = Array(Ti, A.n+1)
+            rowvalB = Array(Ti, nfilledA)
+            nzvalB = Array(T, nfilledA)
 
             k = 0 # number of additional zeros introduced by op(A)
             @inbounds for i = 1 : A.n
@@ -471,6 +496,8 @@ for (op, restype) in ((:iceil, Int), (:ceil, Nothing),
     end # quote
 end # macro
 
+
+
 # Operations that map nonzeros to nonzeros, and zeros to zeros
 # Result is sparse
 for op in (:-, :abs, :abs2, :log1p, :expm1)
@@ -488,6 +515,16 @@ for op in (:-, :abs, :abs2, :log1p, :expm1)
 
     end
 end
+
+function conj!(A::SparseMatrixCSC)
+    nzvalA = A.nzval
+    @simd for i=1:length(nzvalA)
+        @inbounds nzvalA[i] = conj(nzvalA[i])
+    end
+    return A
+end
+
+conj(A::SparseMatrixCSC) = conj!(copy(A))
 
 # Operations that map nonzeros to nonzeros, and zeros to nonzeros
 # Result is dense
@@ -508,13 +545,13 @@ for op in (:cos, :cosh, :acos, :sec, :csc, :cot, :acot, :sech,
             end
             return B
         end
-        
+
     end
 end
 
 ## Binary arithmetic and boolean operators
 
-for (op, restype) in ( (:+, Nothing), (:-, Nothing), (:.*, Nothing),
+for (op, restype) in ( (:+, Void), (:-, Void), (:.*, Void),
                        (:(.<), Bool) )
     @eval begin
 
@@ -537,7 +574,7 @@ for (op, restype) in ( (:+, Nothing), (:-, Nothing), (:.*, Nothing),
             nnzS = nnz(A) + nnz(B)
             colptrS = Array(Ti, A.n+1)
             rowvalS = Array(Ti, nnzS)
-            nzvalS = Array($(restype==Nothing ? (:Tv) : restype), nnzS)
+            nzvalS = Array($(restype==Void ? (:Tv) : restype), nnzS)
 
             z = zero(Tv)
 
@@ -825,6 +862,8 @@ sum{T}(A::SparseMatrixCSC{T}, region)  = reducedim(+,A,region,zero(T))
 
 prod{T}(A::SparseMatrixCSC{T})         = nnz(A)!=length(A) ? zero(T) : prod(A.nzval)
 prod{T}(A::SparseMatrixCSC{T}, region) = reducedim(*,A,region,one(T))
+
+mean(A::SparseMatrixCSC, region::Integer) = sum(A, region) / size(A, region)
 
 #all(A::SparseMatrixCSC{Bool}, region) = reducedim(all,A,region,true)
 #any(A::SparseMatrixCSC{Bool}, region) = reducedim(any,A,region,false)
@@ -1321,7 +1360,7 @@ function spset!{Tv,Ti<:Integer}(A::SparseMatrixCSC{Tv}, x::Tv, I::AbstractVector
         colptrA[n+1] = rowidx
         deleteat!(rowvalA, rowidx:nnzA)
         deleteat!(nzvalA, rowidx:nnzA)
-        
+
         A.colptr = colptrA
         A.rowval = rowvalA
         A.nzval = nzvalA
@@ -1378,7 +1417,7 @@ function spdelete!{Tv,Ti<:Integer}(A::SparseMatrixCSC{Tv}, I::AbstractVector{Ti}
         colptrA[n+1] = rowidx
         deleteat!(rowvalA, rowidx:nnzA)
         deleteat!(nzvalA, rowidx:nnzA)
-        
+
         A.colptr = colptrA
         A.rowval = rowvalA
         A.nzval = nzvalA
@@ -1429,7 +1468,7 @@ function setindex!{Tv,Ti,T<:Integer}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixC
     colptrS = Array(Ti, n+1)
     rowvalS = Array(Ti, nnzS)
     nzvalS = Array(Tv, nnzS)
-    
+
     colptrS[1] = 1
     colB = 1
     asgn_col = J[colB]
@@ -1444,7 +1483,7 @@ function setindex!{Tv,Ti,T<:Integer}(A::SparseMatrixCSC{Tv,Ti}, B::SparseMatrixC
         # Copy column of A if it is not being assigned into
         if colB > nJ || col != J[colB]
             colptrS[col+1] = colptrS[col] + (colptrA[col+1]-colptrA[col])
-            
+
             for k = colptrA[col]:colptrA[col+1]-1
                 rowvalS[ptrS] = rowvalA[k]
                 nzvalS[ptrS] = nzvalA[k]
@@ -1737,7 +1776,7 @@ end
 
 function vcat(X::SparseMatrixCSC...)
     num = length(X)
-    mX = [ size(x, 1) for x in X ] 
+    mX = [ size(x, 1) for x in X ]
     nX = [ size(x, 2) for x in X ]
     n = nX[1]
     for i = 2 : num
@@ -1798,8 +1837,13 @@ function hcat(X::SparseMatrixCSC...)
     @inbounds for i = 1 : num
         XI = X[i]
         colptr[(1 : nX[i] + 1) + nX_sofar] = XI.colptr .+ nnz_sofar
-        rowval[(1 : nnzX[i]) + nnz_sofar] = XI.rowval
-        nzval[(1 : nnzX[i]) + nnz_sofar] = XI.nzval
+        if nnzX[i] == length(XI.rowval)
+            rowval[(1 : nnzX[i]) + nnz_sofar] = XI.rowval
+            nzval[(1 : nnzX[i]) + nnz_sofar] = XI.nzval
+        else
+            rowval[(1 : nnzX[i]) + nnz_sofar] = XI.rowval[1:nnzX[i]]
+            nzval[(1 : nnzX[i]) + nnz_sofar] = XI.nzval[1:nnzX[i]]
+        end
         nnz_sofar += nnzX[i]
         nX_sofar += nX[i]
     end
@@ -1903,7 +1947,7 @@ function istril{Tv}(A::SparseMatrixCSC{Tv})
     return true
 end
 
-# Create a sparse diagonal matrix by specifying multiple diagonals 
+# Create a sparse diagonal matrix by specifying multiple diagonals
 # packed into a tuple, alongside their diagonal offsets and matrix shape
 
 function spdiagm_internal(B, d)
@@ -2040,4 +2084,61 @@ function diagm{Tv,Ti}(v::SparseMatrixCSC{Tv,Ti})
     end
 
     return SparseMatrixCSC{Tv,Ti}(n, n, colptr, rowval, nzval)
+end
+
+# Sort all the indices in each column of a CSC sparse matrix
+# sortSparseMatrixCSC!(A, sortindices = :sortcols)        # Sort each column with sort()
+# sortSparseMatrixCSC!(A, sortindices = :doubletranspose) # Sort with a double transpose
+function sortSparseMatrixCSC!{Tv,Ti}(A::SparseMatrixCSC{Tv,Ti}; sortindices::Symbol = :sortcols)
+    if sortindices == :doubletranspose
+        nB, mB = size(A)
+        B = SparseMatrixCSC(mB, nB, Array(Ti, nB+1), similar(A.rowval), similar(A.nzval))
+        transpose!(B, A)
+        transpose!(A, B)
+        return A
+    end
+
+    m, n = size(A)
+    colptr = A.colptr; rowval = A.rowval; nzval = A.nzval
+
+    index = zeros(Ti, m)
+    row = zeros(Ti, m)
+    val = zeros(Tv, m)
+
+    for i = 1:n
+        @inbounds col_start = colptr[i]
+        @inbounds col_end = (colptr[i+1] - 1)
+
+        numrows = col_end - col_start + 1
+        if numrows <= 1
+            continue
+        elseif numrows == 2
+            f = col_start
+            s = f+1
+            if rowval[f] > rowval[s]
+                @inbounds rowval[f], rowval[s] = rowval[s], rowval[f]
+                @inbounds nzval[f],  nzval[s]  = nzval[s],  nzval[f]
+            end
+            continue
+        end
+
+        jj = 1
+        @simd for j = col_start:col_end
+            @inbounds row[jj] = rowval[j]
+            @inbounds val[jj] = nzval[j]
+            jj += 1
+        end
+
+        sortperm!(pointer_to_array(pointer(index), numrows),
+                  pointer_to_array(pointer(row), numrows))
+
+        jj = 1;
+        @simd for j = col_start:col_end
+            @inbounds rowval[j] = row[index[jj]]
+            @inbounds nzval[j] = val[index[jj]]
+            jj += 1
+        end
+    end
+
+    return A
 end

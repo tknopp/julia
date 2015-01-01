@@ -60,6 +60,8 @@ jl_module_t *jl_new_main_module(void)
                   (jl_value_t*)jl_main_module);
     jl_current_task->current_module = jl_main_module;
 
+    jl_module_import(jl_main_module, jl_core_module, jl_symbol("eval"));
+
     return old_main;
 }
 
@@ -73,6 +75,8 @@ void jl_module_load_time_initialize(jl_module_t *m)
         if (jl_module_init_order == NULL)
             jl_module_init_order = jl_alloc_cell_1d(0);
         jl_cell_1d_push(jl_module_init_order, (jl_value_t*)m);
+        jl_function_t *f = jl_module_get_initializer(m);
+        if (f) jl_get_specialization(f, jl_null);
     }
     else {
         jl_module_run_initializer(m);
@@ -278,7 +282,7 @@ static jl_module_t *eval_import_path_(jl_array_t *args, int retrying)
     // in A.B, look for A in Main first.
     jl_sym_t *var = (jl_sym_t*)jl_cellref(args,0);
     size_t i=1;
-    assert(jl_is_symbol(var));
+    if (!jl_is_symbol(var)) jl_type_error("import or using", (jl_value_t*)jl_sym_type, (jl_value_t*)var);
     jl_module_t *m;
 
     if (var != dot_sym) {
@@ -288,7 +292,7 @@ static jl_module_t *eval_import_path_(jl_array_t *args, int retrying)
         m = jl_current_module;
         while (1) {
             var = (jl_sym_t*)jl_cellref(args,i);
-            assert(jl_is_symbol(var));
+            if (!jl_is_symbol(var)) jl_type_error("import or using", (jl_value_t*)jl_sym_type, (jl_value_t*)var);
             i++;
             if (var != dot_sym) {
                 if (i == jl_array_len(args))
@@ -395,7 +399,7 @@ jl_value_t *jl_toplevel_eval_flex(jl_value_t *e, int fast)
             jl_error("syntax: malformed \"importall\" statement");
         m = (jl_module_t*)jl_eval_global_var(m, name);
         if (!jl_is_module(m))
-	    jl_errorf("invalid %s statement: name exists but does not refer to a module", ex->head->name);
+            jl_errorf("invalid %s statement: name exists but does not refer to a module", ex->head->name);
         jl_module_importall(jl_current_module, m);
         return jl_nothing;
     }
@@ -518,7 +522,7 @@ jl_value_t *jl_toplevel_eval(jl_value_t *v)
 }
 
 // repeatedly call jl_parse_next and eval everything
-jl_value_t *jl_parse_eval_all(char *fname)
+jl_value_t *jl_parse_eval_all(const char *fname)
 {
     //jl_printf(JL_STDERR, "***** loading %s\n", fname);
     int last_lineno = jl_lineno;
@@ -547,8 +551,13 @@ jl_value_t *jl_parse_eval_all(char *fname)
         fn = jl_pchar_to_string(fname, strlen(fname));
         ln = jl_box_long(jl_lineno);
         jl_lineno = last_lineno;
-        jl_rethrow_other(jl_new_struct(jl_loaderror_type, fn, ln,
-                                       jl_exception_in_transit));
+        if (jl_loaderror_type == NULL) {
+            jl_rethrow();
+        }
+        else {
+            jl_rethrow_other(jl_new_struct(jl_loaderror_type, fn, ln,
+                                           jl_exception_in_transit));
+        }
     }
     jl_stop_parsing();
     jl_lineno = last_lineno;
@@ -561,8 +570,8 @@ jl_value_t *jl_load(const char *fname)
     if (jl_current_module == jl_base_module) {
         //This deliberatly uses ios, because stdio initialization has been moved to Julia
         jl_printf(JL_STDOUT, "%s\r\n", fname);
-#ifdef _OS_WINDOWS_        
-        uv_run(uv_default_loop(), 1);
+#ifdef _OS_WINDOWS_
+        uv_run(uv_default_loop(), (uv_run_mode)1);
 #endif
     }
     char *fpath = (char*)fname;
@@ -617,7 +626,6 @@ void jl_set_datatype_super(jl_datatype_t *tt, jl_value_t *super)
 // method definition ----------------------------------------------------------
 
 extern int jl_boot_file_loaded;
-void jl_add_constructors(jl_datatype_t *t);
 
 static int type_contains(jl_value_t *ty, jl_value_t *x)
 {
@@ -640,12 +648,14 @@ static int type_contains(jl_value_t *ty, jl_value_t *x)
 void print_func_loc(JL_STREAM *s, jl_lambda_info_t *li);
 
 DLLEXPORT jl_value_t *jl_method_def(jl_sym_t *name, jl_value_t **bp, jl_binding_t *bnd,
-                                    jl_tuple_t *argtypes, jl_function_t *f)
+                                    jl_tuple_t *argtypes, jl_function_t *f, jl_value_t *isstaged,
+                                    jl_value_t *call_func, int iskw)
 {
     // argtypes is a tuple ((types...), (typevars...))
     jl_tuple_t *t = (jl_tuple_t*)jl_t1(argtypes);
     argtypes = (jl_tuple_t*)jl_t0(argtypes);
     jl_value_t *gf=NULL;
+    JL_GC_PUSH3(&gf, &argtypes, &t);
 
     if (bnd && bnd->value != NULL && !bnd->constp) {
         jl_errorf("cannot define function %s; it already has a value",
@@ -655,13 +665,55 @@ DLLEXPORT jl_value_t *jl_method_def(jl_sym_t *name, jl_value_t **bp, jl_binding_
     if (*bp != NULL) {
         gf = *bp;
         if (!jl_is_gf(gf)) {
-            if (jl_is_datatype(gf) &&
-                ((jl_function_t*)gf)->fptr == jl_f_ctor_trampoline) {
-                jl_add_constructors((jl_datatype_t*)gf);
+            if (jl_is_datatype(gf)) {
+                // DataType: define `call`, for backwards compat with outer constructors
+                if (call_func == NULL)
+                    call_func = (jl_value_t*)jl_module_call_func(jl_current_module);
+                size_t na = jl_tuple_len(argtypes);
+                jl_tuple_t *newargtypes = jl_alloc_tuple(1 + na);
+                JL_GC_PUSH1(&newargtypes);
+                size_t i=0;
+                if (iskw) {
+                    assert(na > 0);
+                    // for kw sorter, keep container argument first
+                    jl_tupleset(newargtypes, 0, jl_tupleref(argtypes, 0));
+                    i++;
+                }
+                jl_tupleset(newargtypes, i, jl_wrap_Type(gf));
+                i++;
+                for(; i < na+1; i++) {
+                    jl_tupleset(newargtypes, i, jl_tupleref(argtypes, i-1));
+                }
+                argtypes = newargtypes;
+                JL_GC_POP();
+                gf = call_func;
+                name = call_sym;
+                // edit args, insert type first
+                if (!jl_is_expr(f->linfo->ast))
+                    f->linfo->ast = jl_uncompress_ast(f->linfo, f->linfo->ast);
+                jl_array_t *al = jl_lam_args((jl_expr_t*)f->linfo->ast);
+                if (jl_array_len(al) == 0) {
+                    al = jl_alloc_cell_1d(1);
+                    jl_exprarg(f->linfo->ast, 0) = (jl_value_t*)al;
+                }
+                else {
+                    jl_array_grow_beg(al, 1);
+                }
+                if (iskw) {
+                    jl_cellset(al, 0, jl_cellref(al, 1));
+                    jl_cellset(al, 1, (jl_value_t*)jl_gensym());
+                }
+                else {
+                    jl_cellset(al, 0, (jl_value_t*)jl_gensym());
+                }
             }
             if (!jl_is_gf(gf)) {
                 jl_error("invalid method definition: not a generic function");
             }
+        }
+        if (iskw) {
+            bp = (jl_value_t**)&((jl_methtable_t*)((jl_function_t*)gf)->env)->kwsorter;
+            gf = *bp;
         }
     }
 
@@ -695,12 +747,11 @@ DLLEXPORT jl_value_t *jl_method_def(jl_sym_t *name, jl_value_t **bp, jl_binding_
         gf = (jl_value_t*)jl_new_generic_function(name);
         *bp = gf;
     }
-    JL_GC_PUSH1(&gf);
     assert(jl_is_function(f));
     assert(jl_is_tuple(argtypes));
     assert(jl_is_tuple(t));
 
-    jl_add_method((jl_function_t*)gf, argtypes, f, t);
+    jl_add_method((jl_function_t*)gf, argtypes, f, t, isstaged == jl_true);
     if (jl_boot_file_loaded &&
         f->linfo && f->linfo->ast && jl_is_expr(f->linfo->ast)) {
         jl_lambda_info_t *li = f->linfo;

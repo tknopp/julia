@@ -54,6 +54,8 @@ differences that may trip up Julia users accustomed to MATLAB:
    behavior for 1xN arrays; the argument is returned unmodified since it
    still performs ``sort(A,1)``. To sort a 1xN matrix like a vector, use
    ``sort(A,2)``.
+-  If ``A`` is a 2-dimensional array ``fft(A)`` computes a 2D FFT. In particular, 
+   it is not equivalent to ``fft(A,1)``, which computes a 1D FFT acting column-wise.
 -  Parentheses must be used to call a function with zero arguments, as
    in ``tic()`` and ``toc()``.
 -  Do not use semicolons to end statements. The results of statements are
@@ -105,9 +107,9 @@ One of Julia's goals is to provide an effective language for data analysis and s
   functionality for Julia is found in `packages <http://pkg.julialang.org/>`_ like the
   DataFrames and Distributions packages:
 
-	- Distributions functions are found in the `Distributions package <https://github.com/JuliaStats/Distributions.jl>`_
+	- Distributions functions are found in the `Distributions package <https://github.com/JuliaStats/Distributions.jl>`_.
 	- The `DataFrames package <https://github.com/JuliaStats/DataFrames.jl>`_ provides data frames.
-	- Formulas for GLM's must be escaped: use ``:(y ~ x)`` instead of ``y ~ x``.
+	- Generalized linear models are provided by the `GLM package <https://github.com/JuliaStats/GLM.jl>`_.
 
 - Julia provides tuples and real hash tables, but not R's lists. When returning multiple items, you should typically use a tuple: instead of ``list(a = 1, b = 2)``, use ``(1, 2)``.
 - Julia encourages all users to write their own types. Julia's types are much easier to use than S3 or S4 objects in R. Julia's multiple dispatch system means that ``table(x::TypeA)`` and ``table(x::TypeB)`` act like R's ``table.TypeA(x)`` and ``table.TypeB(x)``.
@@ -115,7 +117,7 @@ One of Julia's goals is to provide an effective language for data analysis and s
 - Concatenation of vectors and matrices is done using ``hcat`` and ``vcat``, not ``c``, ``rbind`` and ``cbind``.
 - A Julia range object like ``a:b`` is not shorthand for a vector like in R, but is a specialized type of object that is used for iteration without high memory overhead. To convert a range into a vector, you need to wrap the range with brackets ``[a:b]``.
 - ``max``, ``min`` are the equivalent of ``pmax`` and ``pmin`` in R, but both arguments need to have the same dimensions.  While ``maximum``, ``minimum`` replace ``max`` and ``min`` in R, there are important differences.
-- The functions ``sum``, ``prod``, ``maximum``, ``minimum`` are different from their counterparts in R. They all accept one or two arguments. The first argument is an iterable collection such as an array.  If there is a second argument, then this argument indicates the dimensions, over which the operation is carried out.  For instance, let ``A=[[1 2],[3,4]]`` in Julia and ``B=rbind(c(1,2),c(3,4))`` be the same matrix in R.  Then ``sum(A)`` gives the same result as ``sum(B)``, but ``sum(A,1)`` is a row vector containing the sum over each column and ``sum(A,2)`` is a column vector containing the sum over each row.  This contrasts to the behavior of R, where ``sum(B,1)=11`` and ``sum(B,2)=12``.  If the second argument is a vector, then it specifies all the dimensions over which the sum is performed, e.g., ``sum(A,[1,2])=10``.  It should be noted that there is no error checking regarding the second argument. 
+- The functions ``sum``, ``prod``, ``maximum``, ``minimum`` are different from their counterparts in R. They all accept one or two arguments. The first argument is an iterable collection such as an array.  If there is a second argument, then this argument indicates the dimensions, over which the operation is carried out.  For instance, let ``A=[[1 2],[3 4]]`` in Julia and ``B=rbind(c(1,2),c(3,4))`` be the same matrix in R.  Then ``sum(A)`` gives the same result as ``sum(B)``, but ``sum(A,1)`` is a row vector containing the sum over each column and ``sum(A,2)`` is a column vector containing the sum over each row.  This contrasts to the behavior of R, where ``sum(B,1)=11`` and ``sum(B,2)=12``.  If the second argument is a vector, then it specifies all the dimensions over which the sum is performed, e.g., ``sum(A,[1,2])=10``.  It should be noted that there is no error checking regarding the second argument. 
 - Julia has several functions that can mutate their arguments. For example, it has ``sort(v)`` and ``sort!(v)``.
 - ``colMeans()`` and ``rowMeans()``, ``size(m, 1)`` and ``size(m, 2)``
 - In R, performance requires vectorization. In Julia, almost the opposite is true: the best performing code is often achieved by using devectorized loops.
@@ -142,3 +144,8 @@ Noteworthy differences from Python
   looping over arrays, the order of the loops should be reversed in
   Julia relative to `numpy` (see relevant section of
   :ref:`man-performance-tips`).
+- Julia evaluates default values of function arguments every time the method is
+  invoked (not once when the function is defined as in Python). This means
+  that function ``f(x=rand()) = x`` returns a new random number every time
+  it is invoked without argument. On the other hand function
+  ``g(x=[1,2]) = push!(x,3)`` returns ``[1,2,3]`` every time it is called as ``g()``.

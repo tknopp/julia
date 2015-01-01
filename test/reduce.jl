@@ -23,7 +23,7 @@
 # sum
 
 @test sum(Int8[]) === 0
-@test sum(Int[]) === 0
+@test sum(Int[]) === int(0)
 @test sum(Float64[]) === 0.0
 
 @test sum(int8(3)) === int8(3)
@@ -42,7 +42,9 @@ fz = float(z)
 @test_throws ErrorException sum(sin, Int[])
 @test sum(sin, 3) == sin(3.0)
 @test sum(sin, [3]) == sin(3.0)
-@test sum(sin, z) == sum(sin, fz) == sum(sin(fz))
+a = sum(sin, z)
+@test_approx_eq a sum(sin, fz)
+@test_approx_eq a sum(sin(fz))
 
 z = [-4, -3, 2, 5]
 fz = float(z)
@@ -87,25 +89,29 @@ end
 @test typeof(sum(Int8[])) == typeof(sum(Int8[1])) == typeof(sum(Int8[1 7]))
 
 @test sum_kbn([1,1e100,1,-1e100]) == 2
+@test sum_kbn(Float64[]) == 0.0
 
 # prod
 
-prod(Int[]) === 0
-prod(Int8[]) === 0
-prod(Float64[]) === 0.0
+@test prod(Int[]) === 1
+@test prod(Int8[]) === 1
+@test prod(Float64[]) === 1.0
 
-prod([3]) === 0
-prod([int8(3)]) === 0
-prod([3.0]) === 0.0
+@test prod([3]) === 3
+@test prod([int8(3)]) === 3
+@test prod([3.0]) === 3.0
 
-prod(z) === 120
-prod(fz) === 120.0
+@test prod(z) === 120
+@test prod(fz) === 120.0
+
+@test prod(1:big(16)) == big(20922789888000)
+@test prod(big(typemax(Int64)):big(typemax(Int64))+16) == BigInt("25300281663413827620486300433089141956148633919452440329174083959168114253708467653081909888307573358090001734956158476311046124934597861626299416732205795533726326734482449215730132757595422510465791525610410023802664753402501982524443370512346073948799084936298007821432734720004795146875180123558814648586972474376192000")
 
 # check type-stability
 prod2(itr) = invoke(prod, (Any,), itr)
 @test prod(Int[]) === prod2(Int[]) === 1
 @test prod(Int[7]) === prod2(Int[7]) === 7
-@test typeof(prod(Int8[])) == typeof(prod(Int8[1])) == typeof(prod(Int8[1, 7])) == Int 
+@test typeof(prod(Int8[])) == typeof(prod(Int8[1])) == typeof(prod(Int8[1, 7])) == Int
 @test typeof(prod2(Int8[])) == typeof(prod2(Int8[1])) == typeof(prod2(Int8[1 7])) == Int
 
 # maximum & minimum & extrema
@@ -214,3 +220,5 @@ end
 @test isequal(cummin([1 0; 0 1], 1), [1 0; 0 0])
 @test isequal(cummin([1 0; 0 1], 2), [1 0; 0 0])
 
+@test sum(collect(uint8(0:255))) == 32640
+@test sum(collect(uint8(254:255))) == 509

@@ -38,6 +38,14 @@ the current process. This form can be used to call C library functions,
 functions in the Julia runtime, or functions in an application linked to
 Julia.
 
+By default, Fortran compilers `generate mangled names
+<http://en.wikipedia.org/wiki/Name_mangling#Name_mangling_in_Fortran>`_
+(for example, converting function names to lowercase or uppercase,
+often appending an underscore), and so to call a Fortran function via
+``ccall`` you must pass the mangled identifier corresponding to the rule
+followed by your Fortran compiler.  Also, when calling a Fortran
+function, all inputs must be passed by reference.
+
 Finally, you can use ``ccall`` to actually generate a call to the
 library function. Arguments to ``ccall`` are as follows:
 
@@ -69,21 +77,21 @@ is that a 1-tuple must be written with a trailing comma. For
 example, to call the ``getenv`` function to get a pointer to the value
 of an environment variable, one makes a call like this::
 
-    julia> path = ccall( (:getenv, "libc"), Ptr{Uint8}, (Ptr{Uint8},), "SHELL")
-    Ptr{Uint8} @0x00007fff5fbffc45
+    julia> path = ccall( (:getenv, "libc"), Ptr{UInt8}, (Ptr{UInt8},), "SHELL")
+    Ptr{UInt8} @0x00007fff5fbffc45
 
     julia> bytestring(path)
     "/bin/bash"
 
-Note that the argument type tuple must be written as ``(Ptr{Uint8},)``,
-rather than ``(Ptr{Uint8})``. This is because ``(Ptr{Uint8})`` is just
-``Ptr{Uint8}``, rather than a 1-tuple containing ``Ptr{Uint8}``::
+Note that the argument type tuple must be written as ``(Ptr{UInt8},)``,
+rather than ``(Ptr{UInt8})``. This is because ``(Ptr{UInt8})`` is just
+``Ptr{UInt8}``, rather than a 1-tuple containing ``Ptr{UInt8}``::
 
-    julia> (Ptr{Uint8})
-    Ptr{Uint8}
+    julia> (Ptr{UInt8})
+    Ptr{UInt8}
 
-    julia> (Ptr{Uint8},)
-    (Ptr{Uint8},)
+    julia> (Ptr{UInt8},)
+    (Ptr{UInt8},)
 
 In practice, especially when providing reusable functionality, one
 generally wraps ``ccall`` uses in Julia functions that set up arguments
@@ -95,9 +103,9 @@ inconsistent about how they indicate error conditions. For example, the
 in
 `env.jl <https://github.com/JuliaLang/julia/blob/master/base/env.jl>`_::
 
-    function getenv(var::String)
+    function getenv(var::AbstractString)
       val = ccall( (:getenv, "libc"),
-                  Ptr{Uint8}, (Ptr{Uint8},), var)
+                  Ptr{UInt8}, (Ptr{UInt8},), var)
       if val == C_NULL
         error("getenv: undefined variable: ", var)
       end
@@ -120,11 +128,11 @@ Here is a slightly more complex example that discovers the local
 machine's hostname::
 
     function gethostname()
-      hostname = Array(Uint8, 128)
+      hostname = Array(UInt8, 128)
       ccall( (:gethostname, "libc"), Int32,
-            (Ptr{Uint8}, Uint),
+            (Ptr{UInt8}, UInt),
             hostname, length(hostname))
-      return bytestring(convert(Ptr{Uint8}, hostname))
+      return bytestring(convert(Ptr{UInt8}, hostname))
     end
 
 This example first allocates an array of bytes, then calls the C library
@@ -136,10 +144,9 @@ memory to be passed to the callee and filled in. Allocation of memory
 from Julia like this is generally accomplished by creating an
 uninitialized array and passing a pointer to its data to the C function.
 
-When calling a Fortran function, all inputs must be passed by reference.
-
 A prefix ``&`` is used to indicate that a pointer to a scalar argument
-should be passed instead of the scalar value itself. The following
+should be passed instead of the scalar value itself (required for all
+Fortran function arguments, as noted above). The following
 example computes a dot product using a BLAS function.
 
 ::
@@ -217,21 +224,23 @@ Julia type with the same name, prefixed by C. This can help for writing portable
 **System-independent:**
 
 +------------------------+-------------------+--------------------------------+
-| ``signed char``        |                   | ``Int8``                       |
-+------------------------+-------------------+--------------------------------+
-| ``unsigned char``      | ``Cuchar``        | ``Uint8``                      |
+| ``unsigned char``      | ``Cuchar``        | ``UInt8``                      |
 +------------------------+-------------------+--------------------------------+
 | ``short``              | ``Cshort``        | ``Int16``                      |
 +------------------------+-------------------+--------------------------------+
-| ``unsigned short``     | ``Cushort``       | ``Uint16``                     |
+| ``unsigned short``     | ``Cushort``       | ``UInt16``                     |
 +------------------------+-------------------+--------------------------------+
 | ``int``                | ``Cint``          | ``Int32``                      |
 +------------------------+-------------------+--------------------------------+
-| ``unsigned int``       | ``Cuint``         | ``Uint32``                     |
+| ``unsigned int``       | ``Cuint``         | ``UInt32``                     |
 +------------------------+-------------------+--------------------------------+
 | ``long long``          | ``Clonglong``     | ``Int64``                      |
 +------------------------+-------------------+--------------------------------+
-| ``unsigned long long`` | ``Culonglong``    | ``Uint64``                     |
+| ``unsigned long long`` | ``Culonglong``    | ``UInt64``                     |
++------------------------+-------------------+--------------------------------+
+| ``intmax_t``           | ``Cintmax_t``     | ``Int64``                      |
++------------------------+-------------------+--------------------------------+
+| ``uintmax_t``          | ``Cuintmax_t``    | ``UInt64``                     |
 +------------------------+-------------------+--------------------------------+
 | ``float``              | ``Cfloat``        | ``Float32``                    |
 +------------------------+-------------------+--------------------------------+
@@ -241,19 +250,15 @@ Julia type with the same name, prefixed by C. This can help for writing portable
 +------------------------+-------------------+--------------------------------+
 | ``ssize_t``            | ``Cssize_t``      | ``Int``                        |
 +------------------------+-------------------+--------------------------------+
-| ``size_t``             | ``Csize_t``       | ``Uint``                       |
-+------------------------+-------------------+--------------------------------+
-| ``complex float``      | ``Ccomplex_float`` (future addition)               |
-+------------------------+-------------------+--------------------------------+
-| ``complex double``     | ``Ccomplex_double`` (future addition)              |
+| ``size_t``             | ``Csize_t``       | ``UInt``                       |
 +------------------------+-------------------+--------------------------------+
 | ``void``               |                   | ``Void``                       |
 +------------------------+-------------------+--------------------------------+
 | ``void*``              |                   | ``Ptr{Void}``                  |
 +------------------------+-------------------+--------------------------------+
-| ``char*`` (or ``char[]``, e.g. a string)   | ``Ptr{Uint8}``                 |
+| ``char*`` (or ``char[]``, e.g. a string)   | ``Ptr{UInt8}``                 |
 +------------------------+-------------------+--------------------------------+
-| ``char**`` (or ``*char[]``)                | ``Ptr{Ptr{Uint8}}``            |
+| ``char**`` (or ``*char[]``)                | ``Ptr{Ptr{UInt8}}``            |
 +------------------------+-------------------+--------------------------------+
 | ``struct T*`` (where T represents an       | ``Ptr{T}`` (call using         |
 | appropriately defined bits type)           | &variable_name in the          |
@@ -276,21 +281,21 @@ A C function declared to return ``void`` will give ``nothing`` in Julia.
 ======================  ==============  =======
 ``char``                ``Cchar``       ``Int8`` (x86, x86_64)
 
-                                        ``Uint8`` (powerpc, arm)
+                                        ``UInt8`` (powerpc, arm)
 ``long``                ``Clong``       ``Int`` (UNIX)
 
                                         ``Int32`` (Windows)
-``unsigned long``       ``Culong``      ``Uint`` (UNIX)
+``unsigned long``       ``Culong``      ``UInt`` (UNIX)
 
-                                        ``Uint32`` (Windows)
+                                        ``UInt32`` (Windows)
 ``wchar_t``             ``Cwchar_t``    ``Int32`` (UNIX)
 
-                                        ``Uint16`` (Windows)
+                                        ``UInt16`` (Windows)
 ======================  ==============  =======
 
-For string arguments (``char*``) the Julia type should be ``Ptr{Uint8}``,
+For string arguments (``char*``) the Julia type should be ``Ptr{UInt8}``,
 not ``ASCIIString``. C functions that take an argument of the type ``char**``
-can be called by using a ``Ptr{Ptr{Uint8}}`` type within Julia. For example, 
+can be called by using a ``Ptr{Ptr{UInt8}}`` type within Julia. For example, 
 C functions of the form::
 
     int main(int argc, char **argv);
@@ -298,7 +303,7 @@ C functions of the form::
 can be called via the following Julia code::
 
     argv = [ "a.out", "arg1", "arg2" ]
-    ccall(:main, Int32, (Int32, Ptr{Ptr{Uint8}}), length(argv), argv)
+    ccall(:main, Int32, (Int32, Ptr{Ptr{UInt8}}), length(argv), argv)
 
 For ``wchar_t*`` arguments, the Julia type should be ``Ptr{Wchar_t}``,
 and data can be converted to/from ordinary Julia strings by the
@@ -433,8 +438,8 @@ the platform-default C calling convention is used. Other supported
 conventions are: ``stdcall``, ``cdecl``, ``fastcall``, and ``thiscall``.
 For example (from base/libc.jl)::
 
-    hn = Array(Uint8, 256)
-    err=ccall(:gethostname, stdcall, Int32, (Ptr{Uint8}, Uint32), hn, length(hn))
+    hn = Array(UInt8, 256)
+    err=ccall(:gethostname, stdcall, Int32, (Ptr{UInt8}, UInt32), hn, length(hn))
 
 For more information, please see the `LLVM Language Reference`_.
 

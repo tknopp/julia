@@ -24,7 +24,7 @@ end
 
 # Takes in the raw array of values in vals, along with the benchmark name, description, unit and whether less is better
 function submit_to_codespeed(vals,name,desc,unit,test_group,lessisbetter=true)
-    # Points to the server 
+    # Points to the server
     codespeed_host = "julia-codespeed.csail.mit.edu"
 
     csdata["benchmark"] = name
@@ -38,7 +38,7 @@ function submit_to_codespeed(vals,name,desc,unit,test_group,lessisbetter=true)
     csdata["lessisbetter"] = lessisbetter
 
     println( "$name: $(mean(vals))" )
-    ret = post( "http://$codespeed_host/result/add/json/", {"json" => json([csdata])} )
+    ret = post( "http://$codespeed_host/result/add/json/", Dict("json" => json([csdata])) )
     println( json([csdata]) )
     if ret.http_code != 200 && ret.http_code != 202
         error("Error submitting $name [HTTP code $(ret.http_code)], dumping headers and text: $(ret.headers)\n$(bytestring(ret.body))\n\n")
@@ -56,7 +56,7 @@ macro output_timings(t,name,desc,group)
         elseif print_output
             @printf "julia,%s,%f,%f,%f,%f\n" $name minimum($t) maximum($t) mean($t) std($t)
         end
-        gc()        
+        gc()
     end
 end
 

@@ -1,5 +1,5 @@
 # fallback text/plain representation of any type:
-writemime(io, ::MIME"text/plain", x) = showlimited(io, x)
+writemime(io::IO, ::MIME"text/plain", x) = showlimited(io, x)
 
 function writemime(io::IO, ::MIME"text/plain", f::Function)
     if isgeneric(f)
@@ -28,17 +28,12 @@ writemime(io::IO, ::MIME"text/plain", v::AbstractArray) =
 
 function writemime(io::IO, ::MIME"text/plain", v::DataType)
     show(io, v)
-    methods(v) # force constructor creation
-    if isgeneric(v)
-        n = length(v.env)
-        m = n==1 ? "method" : "methods"
-        print(io, " (constructor with $n $m)")
-    end
+    # TODO: maybe show constructor info?
 end
 
-writemime(io::IO, ::MIME"text/plain", t::Associative) = 
+writemime(io::IO, ::MIME"text/plain", t::Associative) =
     showdict(io, t, limit=true)
-writemime(io::IO, ::MIME"text/plain", t::Union(KeyIterator, ValueIterator)) = 
+writemime(io::IO, ::MIME"text/plain", t::Union(KeyIterator, ValueIterator)) =
     showkv(io, t, limit=true)
 
 
@@ -70,12 +65,12 @@ end
 function showerror(io::IO, e, bt)
     try
         showerror(io, e)
-    finally 
+    finally
         show_backtrace(io, bt)
     end
 end
 
-showerror(io::IO, e::LoadError) = showerror(io, e, {})
+showerror(io::IO, e::LoadError) = showerror(io, e, [])
 function showerror(io::IO, e::LoadError, bt)
     showerror(io, e.error, bt)
     print(io, "\nwhile loading $(e.file), in expression starting on line $(e.line)")
@@ -90,6 +85,10 @@ function showerror(io::IO, e::DomainError, bt)
                 print(io, "\n", code[1],
                       " will only return a complex result if called with a complex argument.",
                       "\ntry ", code[1], "(complex(x))")
+            elseif (code[1] == :^ && code[2] == symbol("intfuncs.jl")) ||
+                   code[1] == :power_by_squaring
+                print(io, "\nCannot raise an integer x to a negative power -n. Make x a float by adding")
+                print(io, "\na zero decimal (e.g. 2.0^-n instead of 2^-n), or write 1/x^n, float(x)^-n, or (x//1)^-n")
             end
             break
         end
@@ -132,10 +131,10 @@ function showerror(io::IO, e::MethodError)
         end
     end
     # Check for row vectors used where a column vector is intended.
-    vec_args = {}
+    vec_args = []
     hasrows = false
     for arg in e.args
-        isrow = isa(arg,AbstractArray) && ndims(arg)==2 && size(arg,1)==1
+        isrow = isa(arg,Array) && ndims(arg)==2 && size(arg,1)==1
         hasrows |= isrow
         push!(vec_args, isrow ? vec(arg) : arg)
     end
@@ -143,6 +142,53 @@ function showerror(io::IO, e::MethodError)
         print(io, "\n\nYou might have used a 2d row vector where a 1d column vector was required.")
         print(io, "\nNote the difference between 1d column vector [1,2,3] and 2d row vector [1 2 3].")
         print(io, "\nYou can convert to a column vector with the vec() function.")
+    end
+
+    # Display up to three closest candidates
+    lines = Array((IOBuffer, Int), 0)
+    for method in methods(e.f)
+        n = length(e.args)
+        if n != length(method.sig)
+            continue
+        end
+        buf = IOBuffer()
+        print(buf, "  $(e.f.env.name)(")
+        first = true
+        right_matches = 0
+        for (arg, sigtype) in Zip2{Any,Any}(e.args, method.sig)
+            if first
+                first = false
+            else
+                print(buf, ", ")
+            end
+            if typeof(arg) <: sigtype
+                right_matches += 1
+                print(buf, "::$(sigtype)")
+            else
+                Base.with_output_color(:red, buf) do buf
+                    print(buf, "::$(sigtype)")
+                end
+            end
+        end
+        if right_matches > 0
+            print(buf, ")")
+            push!(lines, (buf, right_matches))
+        end
+    end
+    if length(lines) != 0
+        Base.with_output_color(:normal, io) do io
+            println(io, "\nClosest candidates are:")
+            sort!(lines, by = x -> -x[2])
+            i = 0
+            for line in lines
+                if i >= 3
+                    println(io, "  ...")
+                    break
+                end
+                i += 1
+                println(io, takebuf_string(line[1]))
+            end
+        end
     end
 end
 

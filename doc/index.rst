@@ -36,6 +36,7 @@
    manual/linear-algebra
    manual/networking-and-streams
    manual/parallel-computing
+   manual/dates
    manual/running-external-programs
    manual/calling-c-and-fortran-code
    manual/interacting-with-julia
@@ -45,6 +46,7 @@
    manual/style-guide
    manual/faq
    manual/noteworthy-differences
+   manual/unicode-input
 
 .. _stdlib:
 
@@ -65,6 +67,7 @@
    stdlib/pkg
    stdlib/collections
    stdlib/graphics
+   stdlib/dates
    stdlib/test
    stdlib/profile
 
@@ -75,6 +78,7 @@ Developer Documentation
 #######################
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
-   devdocs/cartesian
+   devdocs/julia
+   devdocs/C

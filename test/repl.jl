@@ -60,6 +60,35 @@ write(stdin_write, '\x03')
 write(stdin_write, "\\alpha\t")
 readuntil(stdout_read,"α")
 write(stdin_write, '\x03')
+# Test cd feature in shell mode.  We limit to 40 characters when
+# calling readuntil() to suppress the warning it (currently) gives for
+# long strings.
+origpwd = pwd()
+tmpdir = mktempdir()
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd $(escape_string(tmpdir))\n")
+readuntil(stdout_read, "cd $(escape_string(tmpdir))"[max(1,end-39):end])
+readuntil(stdout_read, realpath(tmpdir)[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == realpath(tmpdir)
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd -\n")
+readuntil(stdout_read, origpwd[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == origpwd
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd\n")
+readuntil(stdout_read, homedir()[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == homedir()
+rm(tmpdir)
+cd(origpwd)
 # Close REPL ^D
 write(stdin_write, '\x04')
 wait(repltask)
@@ -86,9 +115,9 @@ begin
     help_mode = interface.modes[3]
     histp = interface.modes[4]
 
-    hp = REPL.REPLHistoryProvider((Symbol=>Any)[:julia => repl_mode,
-                                           :shell => shell_mode,
-                                           :help  => help_mode])
+    hp = REPL.REPLHistoryProvider(Dict{Symbol,Any}(:julia => repl_mode,
+                                                   :shell => shell_mode,
+                                                   :help  => help_mode))
     fakehistory =
     """
     # time: 2014-06-30 17:32:49 EDT
@@ -161,7 +190,7 @@ begin
     LineEdit.accept_result(s, histp)
     @test LineEdit.mode(s) == shell_mode
     @test buffercontents(LineEdit.buffer(s)) == "ll"
-    
+
     # Issue #7551
     # Enter search mode and try accepting an empty result
     REPL.history_reset_state(hp)
@@ -190,7 +219,7 @@ rc != 0 && error("grantpt failed")
 rc = ccall(:unlockpt,Cint,(Cint,),fdm)
 rc != 0 && error("unlockpt")
 
-fds = ccall(:open,Cint,(Ptr{Uint8},Cint),ccall(:ptsname,Ptr{Uint8},(Cint,),fdm), O_RDWR|O_NOCTTY)
+fds = ccall(:open,Cint,(Ptr{UInt8},Cint),ccall(:ptsname,Ptr{UInt8},(Cint,),fdm), O_RDWR|O_NOCTTY)
 
 # slave
 slave   = RawFD(fds)

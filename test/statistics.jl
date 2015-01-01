@@ -2,11 +2,14 @@
 
 @test middle(3) === 3.0
 @test middle(2, 3) === 2.5
+let x = ((realmax(1.0)/4)*3)
+    @test middle(x, x) === x
+end
 @test middle(1:8) === 4.5
 @test middle([1:8]) === 4.5
 
 # ensure type-correctness
-for T in [Bool,Int8,Int16,Int32,Int64,Int128,Uint8,Uint16,Uint32,Uint64,Uint128,Float16,Float32,Float64]
+for T in [Bool,Int8,Int16,Int32,Int64,Int128,UInt8,UInt16,UInt32,UInt64,UInt128,Float16,Float32,Float64]
     @test middle(one(T)) === middle(one(T), one(T))
 end
 
@@ -246,7 +249,7 @@ end
 # test hist
 
 @test sum(hist([1,2,3])[2]) == 3
-@test hist([])[2] == []
+@test hist(Union()[])[2] == []
 @test hist([1])[2] == [1]
 @test hist([1,2,3],[0,2,4]) == ([0,2,4],[2,1])
 @test hist([1,2,3],0:2:4) == (0:2:4,[2,1])

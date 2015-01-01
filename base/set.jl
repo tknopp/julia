@@ -1,13 +1,22 @@
 type Set{T}
-    dict::Dict{T,Nothing}
+    dict::Dict{T,Void}
 
-    Set() = new(Dict{T,Nothing}())
-    Set(itr) = union!(new(Dict{T,Nothing}()), itr)
+    Set() = new(Dict{T,Void}())
+    Set(itr) = union!(new(Dict{T,Void}()), itr)
 end
 Set() = Set{Any}()
 Set(itr) = Set{eltype(itr)}(itr)
 
-show(io::IO, s::Set) = (show(io, typeof(s)); show_comma_array(io, s,"({","})"))
+function show(io::IO, s::Set)
+    print(io,"Set")
+    if isempty(s)
+        print(io,"{",eltype(s),"}()")
+        return
+    end
+    print(io,"(")
+    show_vector(io,s,"[","]")
+    print(io,")")
+end
 
 isempty(s::Set) = isempty(s.dict)
 length(s::Set)  = length(s.dict)
@@ -26,8 +35,10 @@ setdiff!(s::Set, xs) = (for x=xs; delete!(s,x); end; s)
 similar{T}(s::Set{T}) = Set{T}()
 copy(s::Set) = union!(similar(s), s)
 
-sizehint(s::Set, newsz) = (sizehint(s.dict, newsz); s)
+sizehint!(s::Set, newsz) = (sizehint!(s.dict, newsz); s)
 empty!{T}(s::Set{T}) = (empty!(s.dict); s)
+
+rehash!(s::Set) = (rehash!(s.dict); s)
 
 start(s::Set)       = start(s.dict)
 done(s::Set, state) = done(s.dict, state)
@@ -37,7 +48,7 @@ next(s::Set, i)     = (s.dict.keys[i], skip_deleted(s.dict,i+1))
 # TODO: simplify me?
 pop!(s::Set) = (val = s.dict.keys[start(s.dict)]; delete!(s.dict, val); val)
 
-join_eltype() = None
+join_eltype() = Bottom
 join_eltype(v1, vs...) = typejoin(eltype(v1), join_eltype(vs...))
 
 union() = Set()

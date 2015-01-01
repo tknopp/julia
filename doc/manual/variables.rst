@@ -140,11 +140,13 @@ While Julia imposes few restrictions on valid names, it has become useful to
 adopt the following conventions:
 
 - Names of variables are in lower case.
-- Word separation can be indicated by underscores (``'\_'``), but use of
+- Word separation can be indicated by underscores (``'_'``), but use of
   underscores is discouraged unless the name would be hard to read otherwise.
 - Names of ``Type``\ s begin with a capital letter and word separation is
   shown with CamelCase instead of underscores.
 - Names of ``function``\ s and ``macro``\s are in lower case, without
   underscores.
-- Functions that modify their inputs have names that end in ``!``. These
-  functions are sometimes called mutating functions or in-place functions.
+- Functions that write to their arguments have names that end in ``!``. 
+  These are sometimes called "mutating" or "in-place" functions because
+  they are intended to produce changes in their arguments after the
+  function is called, not just return a value.

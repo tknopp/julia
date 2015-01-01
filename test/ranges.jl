@@ -115,6 +115,11 @@ r = (-4*int64(maxintfloat(is(Int,Int32) ? Float32 : Float64))):5
 @test (0:2:10)[7:6] == 12:2:10
 @test_throws BoundsError (0:2:10)[7:7]
 
+# indexing with negative ranges (#8351)
+for a=Range[3:6, 0:2:10], b=Range[0:1, 2:-1:0]
+    @test_throws BoundsError a[b]
+end
+
 # avoiding intermediate overflow (#5065)
 @test length(1:4:typemax(Int)) == div(typemax(Int),4) + 1
 
@@ -147,7 +152,7 @@ let s = 0
 
     # loops covering the full range of smaller integer types
     s = 0
-    for i = typemin(Uint8):typemax(Uint8)
+    for i = typemin(UInt8):typemax(UInt8)
         s += 1
     end
     @test s == 256
@@ -155,12 +160,12 @@ let s = 0
     # loops past typemax(Int)
     n = 0
     s = int128(0)
-    for i = typemax(Uint64)-2:typemax(Uint64)
+    for i = typemax(UInt64)-2:typemax(UInt64)
         n += 1
         s += i
     end
     @test n == 3
-    @test s == 3*int128(typemax(Uint64)) - 3
+    @test s == 3*int128(typemax(UInt64)) - 3
 
     # loops over empty ranges
     s = 0
@@ -260,8 +265,8 @@ end
 
 # comparing and hashing ranges
 let
-    Rs = {1:2, int32(1:3:17), int64(1:3:17), 1:0, 17:-3:0,
-          0.0:0.1:1.0, float32(0.0:0.1:1.0)}
+    Rs = Range[1:2, int32(1:3:17), int64(1:3:17), 1:0, 17:-3:0,
+               0.0:0.1:1.0, float32(0.0:0.1:1.0)]
     for r in Rs
         ar = collect(r)
         @test r != ar
@@ -297,8 +302,8 @@ for s in 3:100
 end
 
 @test length(uint(1):uint(1):uint(0)) == 0
-@test length(typemax(Uint):uint(1):(typemax(Uint)-1)) == 0
-@test length(typemax(Uint):uint(2):(typemax(Uint)-1)) == 0
+@test length(typemax(UInt):uint(1):(typemax(UInt)-1)) == 0
+@test length(typemax(UInt):uint(2):(typemax(UInt)-1)) == 0
 @test length((typemin(Int)+3):5:(typemin(Int)+1)) == 0
 
 # issue #6364
@@ -344,3 +349,29 @@ for r in (0:1, 0.0:1.0)
     @test r*im == [r]*im
     @test r/im == [r]/im
 end
+
+# issue #7709
+@test length(map(identity, 0x01:0x05)) == 5
+@test length(map(identity, 0x0001:0x0005)) == 5
+@test length(map(identity, uint64(1):uint64(5))) == 5
+@test length(map(identity, uint128(1):uint128(5))) == 5
+
+# mean/median
+for f in (mean, median)
+    for n = 2:5
+        @test f(2:n) == f([2:n])
+        @test_approx_eq f(2:0.1:n) f([2:0.1:n])
+    end
+end
+
+# issue #8531
+let smallint = (Int === Int64 ?
+                (Int8,UInt8,Int16,UInt16,Int32,UInt32) :
+                (Int8,UInt8,Int16,UInt16))
+    for T in smallint
+        @test length(typemin(T):typemax(T)) == 2^(8*sizeof(T))
+    end
+end
+
+# issue #8584
+@test (0:1//2:2)[1:2:3] == 0:1//1:1

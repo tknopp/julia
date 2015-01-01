@@ -5,9 +5,16 @@
 ##   your local machine, in a file named `Make.user` in this directory
 
 # OPENBLAS build options
-OPENBLAS_DYNAMIC_ARCH=1
-OPENBLAS_USE_THREAD=1
 OPENBLAS_TARGET_ARCH=
+OPENBLAS_SYMBOLSUFFIX=
+
+# If OPENBLAS_TARGET_ARCH is set, we default to disabling OPENBLAS_DYNAMIC_ARCH
+ifneq ($(OPENBLAS_TARGET_ARCH),)
+OPENBLAS_DYNAMIC_ARCH=0
+else
+OPENBLAS_DYNAMIC_ARCH=1
+endif
+OPENBLAS_USE_THREAD=1
 
 # Use libraries available on the system instead of building them
 USE_SYSTEM_LLVM=0
@@ -25,12 +32,11 @@ USE_SYSTEM_GMP=0
 USE_SYSTEM_MPFR=0
 USE_SYSTEM_ARPACK=0
 USE_SYSTEM_SUITESPARSE=0
-USE_SYSTEM_ZLIB=0
-USE_SYSTEM_GRISU=0
 USE_SYSTEM_RMATH=0
 USE_SYSTEM_LIBUV=0
 USE_SYSTEM_UTF8PROC=0
 USE_SYSTEM_MOJIBAKE=0
+USE_SYSTEM_LIBGIT2=0
 
 # Link to the LLVM shared library
 USE_LLVM_SHLIB = 0
@@ -56,6 +62,9 @@ endif
 # libc++ is standard on OS X 10.9, but not for earlier releases
 USE_LIBCPP = 0
 
+# assume we don't have LIBSSP support in our compiler, will enable later if likely true
+HAVE_SSP = 0
+
 # Prevent picking up $ARCH from the environment variables
 ARCH=
 
@@ -67,7 +76,7 @@ endif
 # disable automatic Makefile rules
 .SUFFIXES:
 
-# find out if git repository is availible
+# find out if git repository is available
 ifeq ($(shell [ -e $(JULIAHOME)/.git ] && echo true || echo "Warning: git information unavailable; versioning information limited" >&2), true)
 NO_GIT = 0
 else
@@ -82,11 +91,15 @@ JULIA_COMMIT = $(JULIA_VERSION)
 endif
 
 # Directories where said libraries get installed to
+prefix ?= $(abspath julia-$(JULIA_COMMIT))
 bindir = $(prefix)/bin
 libdir = $(prefix)/lib
 private_libdir = $(libdir)/julia
 libexecdir = $(prefix)/libexec
 datarootdir = $(prefix)/share
+docdir = $(datarootdir)/doc/julia
+mandir = $(datarootdir)/man
+man1dir = $(mandir)/man1
 includedir = $(prefix)/include
 sysconfdir = $(prefix)/etc
 
@@ -97,9 +110,24 @@ build_libdir = $(build_prefix)/lib
 build_private_libdir = $(build_prefix)/lib/julia
 build_libexecdir = $(build_prefix)/libexec
 build_datarootdir = $(build_prefix)/share
+build_docdir = $(build_datarootdir)/doc/julia
+build_mandir = $(build_datarootdir)/man
+build_man1dir = $(build_mandir)/man1
 build_includedir = $(build_prefix)/include
 build_sysconfdir = $(build_prefix)/etc
 
+
+# Calculate relative paths to libdir, private_libdir, datarootdir, and sysconfdir
+build_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(build_bindir) $(build_libdir))
+libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(libdir))
+build_private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(build_bindir) $(build_private_libdir))
+private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(private_libdir))
+datarootdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(datarootdir))
+docdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(docdir))
+sysconfdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(sysconfdir))
+
+INSTALL_F = $(JULIAHOME)/contrib/install.sh 644
+INSTALL_M = $(JULIAHOME)/contrib/install.sh 755
 
 # This used for debian packaging, to conform to library layout guidelines
 ifeq ($(MULTIARCH_INSTALL), 1)
@@ -123,8 +151,15 @@ BUILD_LLDB = 0
 #XC_HOST = i686-w64-mingw32
 #XC_HOST = x86_64-w64-mingw32
 
+# Path to cmake (override in Make.user if needed)
+CMAKE ?= cmake
+
 # Figure out OS and architecture
 BUILD_OS := $(shell uname)
+
+ifneq (,$(findstring CYGWIN,$(BUILD_OS)))
+XC_HOST ?= $(shell uname -m)-w64-mingw32
+endif
 
 ifeq ($(XC_HOST),)
 CROSS_COMPILE=
@@ -203,16 +238,11 @@ endif
 endif
 
 ifeq ($(USEIFC), 1)
-FC = ifort
+FC_BASE = ifort
 else
-FC = $(CROSS_COMPILE)gfortran
+FC_BASE = $(CROSS_COMPILE)gfortran
 endif
-
-ifeq ($(USEIFC), 1)
-FC = ifort
-else
-FC = $(CROSS_COMPILE)gfortran
-endif
+FC = $(FC_BASE)
 
 STDLIBCPP_FLAG = 
 
@@ -245,8 +275,10 @@ endif
 ifeq ($(SANITIZE),1)
 $(error Address Sanitizer only supported with clang. Try setting SANITIZE=0)
 endif
-CC = $(CROSS_COMPILE)gcc
-CXX = $(CROSS_COMPILE)g++
+CC_BASE = $(CROSS_COMPILE)gcc
+CXX_BASE = $(CROSS_COMPILE)g++
+CC = $(CC_BASE)
+CXX = $(CXX_BASE)
 JCFLAGS = -std=gnu99 -pipe $(fPIC) -fno-strict-aliasing -D_FILE_OFFSET_BITS=64
 JCPPFLAGS =
 JCXXFLAGS = -pipe $(fPIC) -fno-rtti
@@ -255,8 +287,10 @@ SHIPFLAGS = -O3 -ggdb3 -falign-functions
 endif
 
 ifeq ($(USECLANG),1)
-CC = $(CROSS_COMPILE)clang
-CXX = $(CROSS_COMPILE)clang++
+CC_BASE = $(CROSS_COMPILE)clang
+CXX_BASE = $(CROSS_COMPILE)clang++
+CC = $(CC_BASE)
+CXX = $(CXX_BASE)
 JCFLAGS = -pipe $(fPIC) -fno-strict-aliasing -D_FILE_OFFSET_BITS=64
 JCPPFLAGS =
 JCXXFLAGS = -pipe $(fPIC) -fno-rtti
@@ -282,19 +316,35 @@ endif
 ifeq ($(SANITIZE),1)
 $(error Address Sanitizer only supported with clang. Try setting SANITIZE=0)
 endif
-CC  = icc
-CXX = icpc
+CC_BASE  = icc
+CXX_BASE = icpc
+CC = $(CC_BASE)
+CXX = $(CXX_BASE)
 JCFLAGS = -std=gnu99 -pipe $(fPIC) -fno-strict-aliasing -D_FILE_OFFSET_BITS=64 -fp-model precise -fp-model except -no-ftz
 JCPPFLAGS =
 JCXXFLAGS = -pipe $(fPIC) -fno-rtti
-DEBUGFLAGS = -O0 -ggdb3 -DJL_DEBUG_BUILD -fstack-protector-all
+DEBUGFLAGS = -O0 -g -DJL_DEBUG_BUILD -fstack-protector-all
 SHIPFLAGS = -O3 -g -falign-functions
 endif
 
-ifneq ($(USEICC),1)
-JCFLAGS += -m$(BINARY)
-JCXXFLAGS += -m$(BINARY)
-JFFLAGS += -m$(BINARY)
+ifeq ($(USECCACHE), 1)
+# expand CC and CXX at declaration time because we will redefine them
+CC_ARG   := $(CC)         # Expand CC and CXX here already because we want
+CXX_ARG  := $(CXX)        # the original definition and not the ccache version.
+CC_FULL  := ccache $(CC)  # Expand CC and CXX here already to avoid recursive
+CXX_FULL := ccache $(CXX) # referencing.
+CC        = $(CC_FULL)    # Add an extra indirection to make CC/CXX non-simple
+CXX       = $(CXX_FULL)   # vars (because of how -m$(BINARY) is added later on).
+CC_BASE   = ccache
+CXX_BASE  = ccache
+ifeq ($(USECLANG),1)
+# ccache and Clang don't do well together
+# http://petereisentraut.blogspot.be/2011/05/ccache-and-clang.html
+CC += -Qunused-arguments -fcolor-diagnostics
+CXX += -Qunused-arguments -fcolor-diagnostics
+# http://petereisentraut.blogspot.be/2011/09/ccache-and-clang-part-2.html
+export CCACHE_CPP2 := yes
+endif
 endif
 
 ifeq ($(LLVM_VER),svn)
@@ -308,25 +358,18 @@ CPP = $(CC) -E
 AR := $(CROSS_COMPILE)ar
 AS := $(CROSS_COMPILE)as
 LD := $(CROSS_COMPILE)ld
-else
+else #USEMSVC
 CPP = $(CC) -EP
 AR := lib
 ifeq ($(ARCH),x86_64)
 AS := ml64
 else
 AS := ml
-endif
+endif #ARCH
 LD := link
-endif
+endif #USEMSVC
 RANLIB := $(CROSS_COMPILE)ranlib
 
-
-# Calculate relative paths to libdir and private_libdir
-build_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(build_bindir) $(build_libdir))
-libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(libdir))
-
-build_private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(build_bindir) $(build_private_libdir))
-private_libdir_rel = $(shell $(JULIAHOME)/contrib/relative_path.sh $(bindir) $(private_libdir))
 
 # if not absolute, then relative to the directory of the julia executable
 JCPPFLAGS += "-DJL_SYSTEM_IMAGE_PATH=\"$(build_private_libdir_rel)/sys.ji\""
@@ -372,6 +415,10 @@ ifeq ($(ARCH),)
 override ARCH := $(shell $(CC) -dumpmachine | sed "s/\([^-]*\).*$$/\1/")
 ifeq ($(ARCH),mingw32)
 $(error "the mingw32 compiler you are using fails the openblas testsuite. please see the README.windows document for a replacement")
+else ifeq (cygwin, $(shell $(CC) -dumpmachine | cut -d\- -f3))
+$(error "cannot build julia with cygwin-target compilers. set XC_HOST to i686-w64-mingw32 or x86_64-w64-mingw32 for mingw cross-compile")
+else ifeq (msys, $(shell $(CC) -dumpmachine | cut -d\- -f3))
+$(error "cannot build julia with msys-target compilers. please see the README.windows document for instructions on setting up mingw-w64 compilers")
 endif
 ifeq ($(BUILD_OS),Darwin)
 ## Mac is a rather amazing 64-bit user-space on 32-bit kernel architecture, so to determine arch we detect
@@ -414,6 +461,15 @@ AS += -q
 endif
 endif
 
+# Set some ARCH-specific flags
+ifneq ($(USEICC),1)
+ifneq ($(ARCH), arm)
+CC += -m$(BINARY)
+CXX += -m$(BINARY)
+FC += -m$(BINARY)
+endif
+endif
+
 JULIA_CPU_TARGET ?= native
 JCPPFLAGS += -DJULIA_TARGET_ARCH=$(JULIA_CPU_TARGET)
 
@@ -434,12 +490,14 @@ else ifeq ($(ARCH),i686)
 BINARY=32
 else ifeq ($(ARCH),x86_64)
 BINARY=64
+else ifeq ($(ARCH),arm)
 else
 $(error "unknown word-size for arch: $(ARCH)")
 endif
 
 ifeq ($(USEGCC),1)
-ifneq ($(ARCH), ppc64)
+ifeq ($(ARCH), arm)
+else ifneq ($(ARCH), ppc64)
   SHIPFLAGS += -momit-leaf-frame-pointer
 endif
 endif
@@ -601,6 +659,9 @@ endif
 ifeq ($(OS), Linux)
 OSLIBS += -ldl -lrt -lpthread -Wl,--export-dynamic -Wl,--version-script=$(JULIAHOME)/src/julia.expmap -Wl,--no-whole-archive $(LIBUNWIND)
 JLDFLAGS = -Wl,-Bdynamic
+JLIBLDFLAGS = -Wl,-Bsymbolic-functions
+else
+JLIBLDFLAGS =
 endif
 
 ifeq ($(OS), FreeBSD)
@@ -616,21 +677,23 @@ OSLIBS += -ldl -Wl,-w -framework CoreFoundation -framework CoreServices $(LIBUNW
 WHOLE_ARCHIVE = -Xlinker -all_load
 NO_WHOLE_ARCHIVE =
 JLDFLAGS =
+HAVE_SSP = 1
 endif
 
 ifeq ($(OS), WINNT)
 ifneq ($(USEMSVC), 1)
+HAVE_SSP = 1
 OSLIBS += -Wl,--export-all-symbols -Wl,--version-script=$(JULIAHOME)/src/julia.expmap \
-	$(NO_WHOLE_ARCHIVE) -lpsapi -lkernel32 -lws2_32 -liphlpapi -lwinmm -ldbghelp -lssp
+	$(NO_WHOLE_ARCHIVE) -lpsapi -lkernel32 -lws2_32 -liphlpapi -lwinmm -ldbghelp
 JLDFLAGS = -Wl,--stack,8388608
 ifeq ($(ARCH),i686)
 JLDFLAGS += -Wl,--large-address-aware
 endif
-else
+else #USEMSVC
 OSLIBS += kernel32.lib ws2_32.lib psapi.lib advapi32.lib iphlpapi.lib shell32.lib winmm.lib
-JLDFLAGS =
+JLDFLAGS = -stack:8388608
 endif
-JCPPFLAGS += -D_WIN32_WINNT=0x0600
+JCPPFLAGS += -D_WIN32_WINNT=0x0502
 UNTRUSTED_SYSTEM_LIBM = 1
 endif
 
@@ -676,6 +739,13 @@ LIBFFTWNAME = libmkl_rt
 LIBFFTWFNAME = libmkl_rt
 endif
 
+ifeq ($(HAVE_SSP),1)
+JCPPFLAGS += -DHAVE_SSP=1
+ifeq ($(USEGCC),1)
+OSLIBS += -lssp
+endif
+endif
+
 # ATLAS
 
 # ATLAS must have been previously built with "make -C deps compile-atlas" (without -jN),
@@ -693,6 +763,13 @@ LIBBLAS = -L$(ATLAS_LIBDIR) -lsatlas
 LIBLAPACK = $(LIBBLAS)
 LIBBLASNAME = libsatlas
 LIBLAPACKNAME = $(LIBBLASNAME)
+endif
+
+# Renaming OpenBLAS symbols, see #4923 and #8734
+ifeq ($(USE_SYSTEM_BLAS), 0)
+ifeq ($(USE_BLAS64), 1)
+OPENBLAS_SYMBOLSUFFIX = 64_
+endif
 endif
 
 # Custom libcxx
@@ -742,22 +819,20 @@ else
 endif
 endef
 
-ifeq ($(BUILD_OS), WINNT)
+ifeq ($(BUILD_OS), WINNT) # MSYS
 spawn = $(1)
-else ifneq (,$(findstring CYGWIN,$(BUILD_OS)))
+cygpath_w = $(1)
+else ifneq (,$(findstring CYGWIN,$(BUILD_OS))) # Cygwin
 spawn = $(1)
-else
-ifeq ($(OS), WINNT)
-spawn = wine $(1)
-else
-spawn = $(1)
-endif
-endif
-
-ifneq (,$(findstring CYGWIN,$(BUILD_OS)))
 cygpath_w = `cygpath -w $(1)`
 else
+ifeq ($(OS), WINNT) # unix-to-Windows cross-compile
+spawn = wine $(1)
+cygpath_w = `winepath -w $(1)`
+else # not Windows
+spawn = $(1)
 cygpath_w = $(1)
+endif
 endif
 
 exec = $(shell $(call spawn,$(1)))
@@ -771,14 +846,7 @@ pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(2)))))
 
 JULIA_EXECUTABLE_debug = $(build_bindir)/julia-debug$(EXE)
 JULIA_EXECUTABLE_release = $(build_bindir)/julia$(EXE)
-
-ifeq ($(OS), WINNT)
 JULIA_EXECUTABLE = $(JULIA_EXECUTABLE_release)
-else ifdef JULIA_VAGRANT_BUILD
-JULIA_EXECUTABLE = $(JULIA_EXECUTABLE_release)
-else
-JULIA_EXECUTABLE = $(JULIAHOME)/julia
-endif
 
 # Colors for make
 ifndef VERBOSE
@@ -800,7 +868,7 @@ BINCOLOR="\033[37;1m"
 JULCOLOR="\033[34;1m"
 ENDCOLOR="\033[0m"
 
-GOAL=$(subst $(abspath $(JULIAHOME))/,,$(abspath $@))
+GOAL=$(subst ','\'',$(subst $(abspath $(JULIAHOME))/,,$(abspath $@)))
 
 PRINT_CC = printf '    %b %b\n' $(CCCOLOR)CC$(ENDCOLOR) $(SRCCOLOR)$(GOAL)$(ENDCOLOR); $(1)
 PRINT_LINK = printf '    %b %b\n' $(LINKCOLOR)LINK$(ENDCOLOR) $(BINCOLOR)$(GOAL)$(ENDCOLOR); $(1)
@@ -810,10 +878,10 @@ PRINT_JULIA = printf '    %b %b\n' $(JULIACOLOR)JULIA$(ENDCOLOR) $(BINCOLOR)$(GO
 
 else
 QUIET_MAKE =
-PRINT_CC = echo $(1); $(1)
-PRINT_LINK = echo $(1); $(1)
-PRINT_PERL = echo $(1); $(1)
-PRINT_FLISP = echo $(1); $(1)
-PRINT_JULIA = echo $(1); $(1)
+PRINT_CC = echo '$(subst ','\'',$(1))'; $(1)
+PRINT_LINK = echo '$(subst ','\'',$(1))'; $(1)
+PRINT_PERL = echo '$(subst ','\'',$(1))'; $(1)
+PRINT_FLISP = echo '$(subst ','\'',$(1))'; $(1)
+PRINT_JULIA = echo '$(subst ','\'',$(1))'; $(1)
 
 endif

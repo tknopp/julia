@@ -7,10 +7,13 @@ export
     Operators,
     Pkg,
     Profile,
+    Dates,
     Sys,
     Test,
     BLAS,
     LAPACK,
+    Docs,
+    Markdown,
 
 # Types
     AbstractMatrix,
@@ -27,6 +30,7 @@ export
     BitArray,
     BitMatrix,
     BitVector,
+    CartesianIndex,
     CFILE,
     Cmd,
     Colon,
@@ -51,6 +55,7 @@ export
     FloatRange,
     Hermitian,
     UniformScaling,
+    IndexIterator,
     InsertionSort,
     IntSet,
     IO,
@@ -60,8 +65,10 @@ export
     MathConst,
     Matrix,
     MergeSort,
+    Nullable,
     ObjectIdDict,
     OrdinalRange,
+    Pair,
     PollingFileWatcher,
     ProcessGroup,
     QuickSort,
@@ -78,6 +85,8 @@ export
     RoundDown,
     RoundingMode,
     RoundNearest,
+    RoundNearestTiesAway,
+    RoundNearestTiesUp,
     RoundToZero,
     RoundUp,
     Set,
@@ -104,12 +113,14 @@ export
     UnitRange,
     UTF16String,
     UTF32String,
+    Val,
     VecOrMat,
     Vector,
     VersionNumber,
     WeakKeyDict,
     WeakRef,
     Woodbury,
+    WorkerConfig,
     WString,
     Zip,
 
@@ -118,6 +129,7 @@ export
     Cdouble,
     Cfloat,
     Cint,
+    Cintmax_t,
     Clong,
     Clonglong,
     Coff_t,
@@ -127,12 +139,11 @@ export
     Cssize_t,
     Cuchar,
     Cuint,
+    Cuintmax_t,
     Culong,
     Culonglong,
     Cushort,
     Cwchar_t,
-    #Ccomplex_float,
-    #Ccomplex_double,
 
 # Exceptions
     ArgumentError,
@@ -142,6 +153,7 @@ export
     KeyError,
     LoadError,
     MethodError,
+    NullException,
     ParseError,
     ProcessExitedException,
     SystemError,
@@ -157,6 +169,7 @@ export
     Inf,
     Inf16,
     Inf32,
+    JULIA_HOME,
     LOAD_PATH,
     MS_ASYNC,
     MS_INVALIDATE,
@@ -194,7 +207,7 @@ export
     ≠,
     !==,
     ≡,
-    ≢, 
+    ≢,
     $,
     %,
     &,
@@ -238,6 +251,7 @@ export
     ~,
     :,
     ÷,
+    =>,
     A_ldiv_B!,
     A_ldiv_Bc,
     A_ldiv_Bt,
@@ -264,6 +278,7 @@ export
     At_mul_Bt!,
     At_rdiv_B,
     At_rdiv_Bt,
+    call,
 
 # scalar math
     @evalpoly,
@@ -297,6 +312,7 @@ export
     ceil,
     cis,
     clamp,
+    cld,
     cmp,
     combinations,
     complex,
@@ -351,10 +367,7 @@ export
     gcdx,
     hex2num,
     hypot,
-    iceil,
-    ifloor,
     imag,
-    inf,
     int,
     int128,
     int16,
@@ -365,7 +378,6 @@ export
     inv,
     invdigamma,
     invmod,
-    iround,
     isapprox,
     iseltype,
     iseven,
@@ -379,7 +391,6 @@ export
     isqrt,
     isreal,
     issubnormal,
-    itrunc,
     lcm,
     ldexp,
     leading_ones,
@@ -395,7 +406,6 @@ export
     mod1,
     modf,
     mod2pi,
-    nan,
     nextfloat,
     nextpow,
     nextpow2,
@@ -508,6 +518,7 @@ export
     cumsum,
     cumsum!,
     cumsum_kbn,
+    eachindex,
     extrema,
     fill!,
     fill,
@@ -595,6 +606,7 @@ export
     sort,
     sortcols,
     sortperm,
+    sortperm!,
     sortrows,
     squeeze,
     step,
@@ -624,6 +636,7 @@ export
     cond,
     condskeel,
     cross,
+    ctranspose!,
     ctranspose,
     det,
     diag,
@@ -662,6 +675,8 @@ export
     lyap,
     norm,
     null,
+    ordschur!,
+    ordschur,
     peakflops,
     pinv,
     qr,
@@ -682,6 +697,7 @@ export
     svdvals,
     sylvester,
     trace,
+    transpose!,
     transpose,
     tril!,
     tril,
@@ -705,6 +721,8 @@ export
     sprandn,
     spzeros,
     symperm,
+    rowvals,
+    nzrange,
 
 # bitarrays
     bitpack,
@@ -768,7 +786,7 @@ export
     setdiff,
     setindex!,
     similar,
-    sizehint,
+    sizehint!,
     splice!,
     symdiff!,
     symdiff,
@@ -789,8 +807,10 @@ export
 # strings and text output
     ascii,
     base,
-    base64,
-    Base64Pipe,
+    base64encode,
+    base64decode,
+    Base64EncodePipe,
+    Base64DecodePipe,
     beginswith,
     bin,
     bits,
@@ -810,6 +830,7 @@ export
     escape_string,
     float32_isvalid,
     float64_isvalid,
+    graphemes,
     hex,
     hex2bytes,
     ind2chr,
@@ -822,12 +843,12 @@ export
     isalnum,
     isalpha,
     isascii,
-    isblank,
     iscntrl,
     isdigit,
     isgraph,
     islower,
     ismatch,
+    isnumber,
     isprint,
     ispunct,
     isspace,
@@ -859,6 +880,7 @@ export
     repeat,
     replace,
     repr,
+    reverseind,
     rpad,
     rsearch,
     rsearchindex,
@@ -889,12 +911,14 @@ export
 # random numbers
     AbstractRNG,
     MersenneTwister,
+    RandomDevice,
     rand!,
     rand,
-    randbool!,
     randbool,
     randn!,
     randn,
+    randexp!,
+    randexp,
     srand,
 
 # bigfloat & precision
@@ -961,7 +985,7 @@ export
     rfft,
     xcorr,
 
-#   numerical integration
+# numerical integration
     quadgk,
 
 # iteration
@@ -1007,6 +1031,11 @@ export
     toc,
     toq,
 
+# dates
+    Date,
+    DateTime,
+    now,
+
 # errors
     assert,
     backtrace,
@@ -1042,6 +1071,7 @@ export
     current_module,
     edit,
     code_typed,
+    code_warntype,
     code_lowered,
     code_llvm,
     code_native,
@@ -1072,11 +1102,11 @@ export
 
 # RTS internals
     finalizer,
+    finalize,
     gc,
     gc_disable,
     gc_enable,
     precompile,
-    clear_malloc_data,
 
 # misc
     atexit,
@@ -1166,7 +1196,8 @@ export
     write,
     writecsv,
     writedlm,
-    UdpSocket,
+    TCPSocket,
+    UDPSocket,
 
 # multiprocessing
     addprocs,
@@ -1174,6 +1205,8 @@ export
     fetch,
     interrupt,
     isready,
+    launch,
+    manage,
     myid,
     nprocs,
     nworkers,
@@ -1205,6 +1238,8 @@ export
     popdisplay,
     pushdisplay,
     redisplay,
+    HTML,
+    Text,
 
 # distributed arrays
     dfill,
@@ -1220,7 +1255,7 @@ export
 # shared arrays
     sdata,
     indexpids,
-    
+
 # paths and file names
     abspath,
     basename,
@@ -1314,12 +1349,19 @@ export
     unsafe_pointer_to_objref,
     unsafe_store!,
 
+# nullable types
+    isnull,
+
 # Macros
     @__FILE__,
     @b_str,
     @r_str,
     @r_mstr,
     @v_str,
+    @text_str,
+    @text_mstr,
+    @html_str,
+    @html_mstr,
     @int128_str,
     @uint128_str,
     @bigint_str,
@@ -1336,6 +1378,7 @@ export
     @edit,
     @less,
     @code_typed,
+    @code_warntype,
     @code_lowered,
     @code_llvm,
     @code_native,
@@ -1372,4 +1415,9 @@ export
     @inbounds,
     @simd,
     @label,
-    @goto
+    @goto,
+    @inline,
+    @noinline,
+    @doc,
+    @doc_str,
+    @doc_mstr

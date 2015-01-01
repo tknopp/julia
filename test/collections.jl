@@ -36,7 +36,7 @@ end
 for i=10000:20000
     @test h[i]==i+1
 end
-h = {"a" => 3}
+h = Dict{Any,Any}("a" => 3)
 @test h["a"] == 3
 h["a","b"] = 4
 @test h["a","b"] == h[("a","b")] == 4
@@ -54,25 +54,59 @@ let
     @test get_KeyError
 end
 
-_d = {"a"=>0}
+_d = Dict("a"=>0)
 @test isa([k for k in filter(x->length(x)==1, collect(keys(_d)))], Vector{Any})
+
+let
+    d = Dict(((1, 2), (3, 4)))
+    @test d[1] === 2
+    @test d[3] === 4
+    d2 = Dict(1 => 2, 3 => 4)
+    d3 = Dict((1 => 2, 3 => 4))
+    @test d == d2 == d3
+    @test typeof(d) == typeof(d2) == typeof(d3) == Dict{Int,Int}
+
+    d = Dict(((1, 2), (3, "b")))
+    @test d[1] === 2
+    @test d[3] == "b"
+    d2 = Dict(1 => 2, 3 => "b")
+    d3 = Dict((1 => 2, 3 => "b"))
+    @test d == d2 == d3
+    @test typeof(d) == typeof(d2) == typeof(d3) == Dict{Int,Any}
+
+    d = Dict(((1, 2), ("a", 4)))
+    @test d[1] === 2
+    @test d["a"] === 4
+    d2 = Dict(1 => 2, "a" => 4)
+    d3 = Dict((1 => 2, "a" => 4))
+    @test d == d2 == d3
+    @test typeof(d) == typeof(d2) == typeof(d3) == Dict{Any,Int}
+
+    d = Dict(((1, 2), ("a", "b")))
+    @test d[1] === 2
+    @test d["a"] == "b"
+    d2 = Dict(1 => 2, "a" => "b")
+    d3 = Dict((1 => 2, "a" => "b"))
+    @test d == d2 == d3
+    @test typeof(d) == typeof(d2) == typeof(d3) == Dict{Any,Any}
+end
 
 # issue #1821
 let
     d = Dict{UTF8String, Vector{Int}}()
     d["a"] = [1, 2]
     @test_throws MethodError d["b"] = 1
-    @test isa(repr(d), String)  # check that printable without error
+    @test isa(repr(d), AbstractString)  # check that printable without error
 end
 
 # issue #2344
 let
     local bar
     bestkey(d, key) = key
-    bestkey{K<:String,V}(d::Associative{K,V}, key) = string(key)
+    bestkey{K<:AbstractString,V}(d::Associative{K,V}, key) = string(key)
     bar(x) = bestkey(x, :y)
-    @test bar([:x => [1,2,5]]) == :y
-    @test bar(["x" => [1,2,5]]) == "y"
+    @test bar(Dict(:x => [1,2,5])) == :y
+    @test bar(Dict("x" => [1,2,5])) == "y"
 end
 
 # issue #1438
@@ -80,7 +114,7 @@ type I1438T
     id
 end
 import Base.hash
-hash(x::I1438T, h::Uint) = hash(x.id, h)
+hash(x::I1438T, h::UInt) = hash(x.id, h)
 
 begin
     local seq, xs, s
@@ -100,16 +134,16 @@ begin
 end
 
 @test  isequal(Dict(), Dict())
-@test  isequal({1 => 1}, {1 => 1})
-@test !isequal({1 => 1}, {})
-@test !isequal({1 => 1}, {1 => 2})
-@test !isequal({1 => 1}, {2 => 1})
+@test  isequal(Dict(1 => 1), Dict(1 => 1))
+@test !isequal(Dict(1 => 1), Dict())
+@test !isequal(Dict(1 => 1), Dict(1 => 2))
+@test !isequal(Dict(1 => 1), Dict(2 => 1))
 
 # Generate some data to populate dicts to be compared
 data_in = [ (rand(1:1000), randstring(2)) for _ in 1:1001 ]
 
 # Populate the first dict
-d1 = Dict{Int, String}()
+d1 = Dict{Int, AbstractString}()
 for (k,v) in data_in
     d1[k] = v
 end
@@ -121,7 +155,7 @@ for i in 1:length(data_in)
 end
 # Inserting data in different (shuffled) order should result in
 # equivalent dict.
-d2 = Dict{Int, String}()
+d2 = Dict{Int, AbstractString}()
 for (k,v) in data_in
     d2[k] = v
 end
@@ -139,19 +173,17 @@ d3[data_in[rand(1:length(data_in))][1]] = randstring(3)
 d4[1001] = randstring(3)
 @test !isequal(d1, d4)
 
-@test isequal(Dict(), sizehint(Dict(),96))
+@test isequal(Dict(), sizehint!(Dict(),96))
 
 # Here is what currently happens when dictionaries of different types
 # are compared. This is not necessarily desirable. These tests are
 # descriptive rather than proscriptive.
-@test !isequal({1 => 2}, {"dog" => "bone"})
-@test isequal(Dict{Int, Int}(), Dict{String, String}())
+@test !isequal(Dict(1 => 2), Dict("dog" => "bone"))
+@test isequal(Dict{Int,Int}(), Dict{AbstractString,AbstractString}())
 
 # get! (get with default values assigned to the given location)
 
-let f(x) = x^2,
-    d = {8=>19},
-    def = {}
+let f(x) = x^2, d = Dict(8=>19)
 
     @test get!(d, 8, 5) == 19
     @test get!(d, 19, 2) == 2
@@ -168,15 +200,15 @@ let f(x) = x^2,
         f(4)
     end == 16
 
-    @test d == {8=>19, 19=>2, 42=>4}
+    @test d == Dict(8=>19, 19=>2, 42=>4)
 end
 
 # show
-for d in (["\n" => "\n", "1" => "\n", "\n" => "2"],
+for d in (Dict("\n" => "\n", "1" => "\n", "\n" => "2"),
           [string(i) => i for i = 1:30],
           [reshape(1:i^2,i,i) => reshape(1:i^2,i,i) for i = 1:24],
           [utf8(Char['α':'α'+i]) => utf8(Char['α':'α'+i]) for i = (1:10)*10],
-          ["key" => zeros(0, 0)])
+          Dict("key" => zeros(0, 0)))
     for cols in (12, 40, 80), rows in (2, 10, 24)
         # Ensure output is limited as requested
         s = IOBuffer()
@@ -204,15 +236,20 @@ for d in (["\n" => "\n", "1" => "\n", "\n" => "2"],
     @test !isempty(summary(values(d)))
 end
 
+# issue #9463
+type Alpha end
+Base.show(io::IO, ::Alpha) = print(io,"α")
+sbuff = IOBuffer()
+Base.showdict(sbuff, Dict(Alpha()=>1), limit=true, sz=(10,20))
+@test !contains(bytestring(sbuff), "…")
 
 # issue #2540
-d = {x => 1
-    for x in ['a', 'b', 'c']}
-@test d == {'a'=>1, 'b'=>1, 'c'=> 1}
+d = Dict{Any,Any}([x => 1 for x in ['a', 'b', 'c']])
+@test d == Dict('a'=>1, 'b'=>1, 'c'=> 1)
 
 # issue #2629
-d = (String => String)[ a => "foo" for a in ["a","b","c"]]
-@test d == ["a"=>"foo","b"=>"foo","c"=>"foo"]
+d = Dict{AbstractString,AbstractString}([ a => "foo" for a in ["a","b","c"]])
+@test d == Dict("a"=>"foo","b"=>"foo","c"=>"foo")
 
 # issue #5886
 d5886 = Dict()
@@ -222,6 +259,13 @@ end
 for k5886 in keys(d5886)
    # undefined ref if not fixed
    d5886[k5886] += 1
+end
+
+# issue #8877
+let
+    a = Dict("foo"  => 0.0, "bar" => 42.0)
+    b = Dict("フー" => 17, "バー" => 4711)
+    @test is(typeof(merge(a, b)), Dict{UTF8String,Float64})
 end
 
 # ############# end of dict tests #############
@@ -234,7 +278,7 @@ end
 @test  isempty(Set())
 @test !isempty(Set([1]))
 @test !isempty(Set(["banana", "apple"]))
-@test !isempty(Set({1, 1:10, "pear"}))
+@test !isempty(Set([1, 1:10, "pear"]))
 
 # ordering
 @test Set() < Set([1])
@@ -284,8 +328,8 @@ data_out = collect(s)
 @test is(typeof(Set{Int}([3])), Set{Int})
 
 # eltype
-@test is(eltype(Set({1,"hello"})), Any)
-@test is(eltype(Set{String}()), String)
+@test is(eltype(Set([1,"hello"])), Any)
+@test is(eltype(Set{AbstractString}()), AbstractString)
 
 # no duplicates
 s = Set([1,2,3])
@@ -302,36 +346,36 @@ pop!(s)
 @test length(s) == 1
 
 # union
-s = union(Set(1,2), Set(3,4))
-@test isequal(s, Set(1,2,3,4))
-s = union(Set(5,6,7,8), Set(7,8,9))
-@test isequal(s, Set(5,6,7,8,9))
+s = union(Set([1,2]), Set([3,4]))
+@test isequal(s, Set([1,2,3,4]))
+s = union(Set([5,6,7,8]), Set([7,8,9]))
+@test isequal(s, Set([5,6,7,8,9]))
 
 # intersect
-s = intersect(Set(1,2), Set(3,4))
+s = intersect(Set([1,2]), Set([3,4]))
 @test isequal(s, Set())
-s = intersect(Set(5,6,7,8), Set(7,8,9))
-@test isequal(s, Set(7,8))
-@test isequal(intersect(Set(2,3,1), Set(4,2,3), Set(5,4,3,2)), Set(2,3))
+s = intersect(Set([5,6,7,8]), Set([7,8,9]))
+@test isequal(s, Set([7,8]))
+@test isequal(intersect(Set([2,3,1]), Set([4,2,3]), Set([5,4,3,2])), Set([2,3]))
 
 # setdiff
-@test isequal(setdiff(Set(1,2,3), Set()), Set(1,2,3))
-@test isequal(setdiff(Set(1,2,3), Set(1)),  Set(2,3))
-@test isequal(setdiff(Set(1,2,3), Set(1,2)),  Set(3))
-@test isequal(setdiff(Set(1,2,3), Set(1,2,3)), Set())
-@test isequal(setdiff(Set(1,2,3), Set(4)),  Set(1,2,3))
-@test isequal(setdiff(Set(1,2,3), Set(4,1)),  Set(2,3))
+@test isequal(setdiff(Set([1,2,3]), Set()), Set([1,2,3]))
+@test isequal(setdiff(Set([1,2,3]), Set([1])),  Set([2,3]))
+@test isequal(setdiff(Set([1,2,3]), Set([1,2])),  Set([3]))
+@test isequal(setdiff(Set([1,2,3]), Set([1,2,3])), Set())
+@test isequal(setdiff(Set([1,2,3]), Set([4])),  Set([1,2,3]))
+@test isequal(setdiff(Set([1,2,3]), Set([4,1])),  Set([2,3]))
 
-for (l,r) in ((Set(1,2),     Set(3,4)),
-              (Set(5,6,7,8), Set(7,8,9)),
-              (Set(1,2),     Set(3,4)),
-              (Set(5,6,7,8), Set(7,8,9)),
-              (Set(1,2,3),   Set()),
-              (Set(1,2,3),   Set(1)),
-              (Set(1,2,3),   Set(1,2)),
-              (Set(1,2,3),   Set(1,2,3)),
-              (Set(1,2,3),   Set(4)),
-              (Set(1,2,3),   Set(4,1)))
+for (l,r) in ((Set([1,2]),     Set([3,4])),
+              (Set([5,6,7,8]), Set([7,8,9])),
+              (Set([1,2]),     Set([3,4])),
+              (Set([5,6,7,8]), Set([7,8,9])),
+              (Set([1,2,3]),   Set()),
+              (Set([1,2,3]),   Set([1])),
+              (Set([1,2,3]),   Set([1,2])),
+              (Set([1,2,3]),   Set([1,2,3])),
+              (Set([1,2,3]),   Set([4])),
+              (Set([1,2,3]),   Set([4,1])))
     @test issubset(intersect(l,r), l)
     @test issubset(intersect(l,r), r)
     @test issubset(l, union(l,r))
@@ -339,35 +383,35 @@ for (l,r) in ((Set(1,2),     Set(3,4)),
     @test isequal(union(intersect(l,r),symdiff(l,r)), union(l,r))
 end
 
-@test setdiff(IntSet(1, 2, 3, 4), IntSet(2, 4, 5, 6)) == IntSet(1, 3)
-@test setdiff(Set(1, 2, 3, 4), Set(2, 4, 5, 6)) == Set(1, 3)
+@test setdiff(IntSet([1, 2, 3, 4]), IntSet([2, 4, 5, 6])) == IntSet([1, 3])
+@test setdiff(Set([1, 2, 3, 4]), Set([2, 4, 5, 6])) == Set([1, 3])
 
-@test symdiff(IntSet(1, 2, 3, 4), IntSet(2, 4, 5, 6)) == IntSet(1, 3, 5, 6)
-@test symdiff(Set(1, 2, 3, 4), Set(2, 4, 5, 6)) == Set(1, 3, 5, 6)
+@test symdiff(IntSet([1, 2, 3, 4]), IntSet([2, 4, 5, 6])) == IntSet([1, 3, 5, 6])
+@test symdiff(Set([1, 2, 3, 4]), Set([2, 4, 5, 6])) == Set([1, 3, 5, 6])
 
-s1 = Set(1, 2, 3, 4)
-setdiff!(s1, Set(2, 4, 5, 6))
+s1 = Set([1, 2, 3, 4])
+setdiff!(s1, Set([2, 4, 5, 6]))
 
-@test s1 == Set(1, 3)
+@test s1 == Set([1, 3])
 
-s2 = IntSet(1, 2, 3, 4)
-setdiff!(s2, IntSet(2, 4, 5, 6))
+s2 = IntSet([1, 2, 3, 4])
+setdiff!(s2, IntSet([2, 4, 5, 6]))
 
-@test s2 == IntSet(1, 3)
+@test s2 == IntSet([1, 3])
 
 # issue #7851
 @test_throws ArgumentError IntSet(-1)
 @test !(-1 in IntSet(0:10))
 
 # union!
-s = Set(1,3,5,7)
+s = Set([1,3,5,7])
 union!(s,(2,3,4,5))
-@test isequal(s,Set(1,2,3,4,5,7))
+@test isequal(s,Set([1,2,3,4,5,7]))
 
 # setdiff!
-s = Set(1,3,5,7)
+s = Set([1,3,5,7])
 setdiff!(s,(3,5))
-@test isequal(s,Set(1,7))
+@test isequal(s,Set([1,7]))
 
 # similar
 s = similar(Set([1,"Banana"]))
@@ -436,16 +480,16 @@ s3 = Set{ASCIIString}(["baz"])
 
 # isequal
 @test  isequal(Set(), Set())
-@test !isequal(Set(), Set(1))
-@test  isequal(Set{Any}({1,2}), Set{Int}([1,2]))
-@test !isequal(Set{Any}({1,2}), Set{Int}([1,2,3]))
+@test !isequal(Set(), Set([1]))
+@test  isequal(Set{Any}(Any[1,2]), Set{Int}([1,2]))
+@test !isequal(Set{Any}(Any[1,2]), Set{Int}([1,2,3]))
 
 # Comparison of unrelated types seems rather inconsistent
 
-@test  isequal(Set{Int}(), Set{String}())
-@test !isequal(Set{Int}(), Set{String}([""]))
-@test !isequal(Set{String}(), Set{Int}([0]))
-@test !isequal(Set{Int}([1]), Set{String}())
+@test  isequal(Set{Int}(), Set{AbstractString}())
+@test !isequal(Set{Int}(), Set{AbstractString}([""]))
+@test !isequal(Set{AbstractString}(), Set{Int}([0]))
+@test !isequal(Set{Int}([1]), Set{AbstractString}())
 
 @test  isequal(Set{Any}([1,2,3]), Set{Int}([1,2,3]))
 @test  isequal(Set{Int}([1,2,3]), Set{Any}([1,2,3]))
@@ -460,7 +504,7 @@ s3 = Set{ASCIIString}(["baz"])
 
 ## IntSet
 
-s = IntSet(0,1,10,20,200,300,1000,10000,10002)
+s = IntSet([0,1,10,20,200,300,1000,10000,10002])
 @test last(s) == 10002
 @test first(s) == 0
 @test length(s) == 9
@@ -474,10 +518,14 @@ s = IntSet(0,1,10,20,200,300,1000,10000,10002)
 @test_throws ErrorException first(IntSet())
 @test_throws ErrorException last(IntSet())
 t = copy(s)
-sizehint(t, 20000) #check that hash does not depend on size of internal Array{Uint32, 1}
+sizehint!(t, 20000) #check that hash does not depend on size of internal Array{UInt32, 1}
 @test hash(s) == hash(t)
 @test hash(complement(s)) == hash(complement(t))
 
+# issue #8570
+s = IntSet(2^32)
+@test length(s) == 1
+for b in s; b; end
 
 # Ranges
 

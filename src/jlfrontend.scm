@@ -18,30 +18,33 @@
 	       `(incomplete ,msg)
 	       e))
 	 (begin
-	   ;;(newline)
-	   ;;(display "unexpected error: ")
-	   ;;(prn e)
-	   ;;(print-stack-trace (stacktrace))
+	   (newline)
+	   (display "unexpected error: ")
+	   (prn e)
+	   (print-stack-trace (stacktrace))
 	   '(error "malformed expression"))))
    thk))
 
 ;; assigned variables except those marked local or inside inner functions
-(define (find-possible-globals e)
-  (cond ((atom? e)   '())
-	((quoted? e) '())
+(define (find-possible-globals- e tab)
+  (cond ((atom? e)   tab)
+	((quoted? e) tab)
 	(else (case (car e)
-		((=)            (list (decl-var (cadr e))))
+		((=)            (put! tab (decl-var (cadr e)) #t))
 		((method)       (let ((n (method-expr-name e)))
 				  (if (symbol? n)
-				      (list n)
-				      '())))
-		((lambda)       '())
-		((local local!) '())
-		((break-block)  (find-possible-globals (caddr e)))
+				      (put! tab n #t)
+				      tab)))
+		((lambda)       tab)
+		((local local!) tab)
+		((break-block)  (find-possible-globals- (caddr e) tab))
 		(else
-		 (delete-duplicates
-		  (apply append!
-			 (map find-possible-globals (cdr e)))))))))
+		 (for-each (lambda (x) (find-possible-globals- x tab))
+			   (cdr e))
+		 tab)))))
+
+(define (find-possible-globals e)
+  (table.keys (find-possible-globals- e (table))))
 
 ;; this is overwritten when we run in actual julia
 (define (defined-julia-global v) #f)
@@ -183,6 +186,12 @@
   (set! current-token-stream (car *ts-stack*))
   (set! *filename-stack* (cdr *filename-stack*))
   (set! *ts-stack* (cdr *ts-stack*)))
+
+(define *depwarn* #t)
+(define (jl-parser-depwarn w)
+  (let ((prev *depwarn*))
+    (set! *depwarn* (eq? w #t))
+    prev))
 
 (define (jl-parser-next)
   (let* ((err (parser-wrap

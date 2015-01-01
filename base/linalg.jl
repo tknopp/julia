@@ -3,7 +3,7 @@ module LinAlg
 importall Base
 import Base: USE_BLAS64, size, copy, copy_transpose!, power_by_squaring, print_matrix, transpose!
 
-export 
+export
 # Modules
     LAPACK,
     BLAS,
@@ -85,6 +85,8 @@ export
     lyap,
     norm,
     null,
+    ordschur!,
+    ordschur,
     peakflops,
     pinv,
     qr,
@@ -159,22 +161,22 @@ end
 
 #Check that stride of matrix/vector is 1
 function chkstride1(A::StridedVecOrMat...)
-    for a in A 
-        stride(a,1)== 1 || error("Matrix does not have contiguous columns")
-    end  
+    for a in A
+        stride(a,1)== 1 || error("matrix does not have contiguous columns")
+    end
 end
 
 #Check that matrix is square
 function chksquare(A::AbstractMatrix)
     m,n = size(A)
-    m == n || throw(DimensionMismatch("Matrix is not square"))
+    m == n || throw(DimensionMismatch("matrix is not square"))
     m
 end
 
 function chksquare(A...)
-    sizes=Int[]
-    for a in A 
-        size(a,1)==size(a,2) || throw(DimensionMismatch("Matrix is not square: dimensions are $(size(a))"))
+    sizes = Int[]
+    for a in A
+        size(a,1)==size(a,2) || throw(DimensionMismatch("matrix is not square: dimensions are $(size(a))"))
         push!(sizes, size(a,1))
     end
     length(A)==1 ? sizes[1] : sizes
@@ -183,9 +185,14 @@ end
 #Check that upper/lower (for special matrices) is correctly specified
 macro chkuplo()
    :((uplo=='U' || uplo=='L') || throw(ArgumentError("""invalid uplo = $uplo
-            
+
 Valid choices are 'U' (upper) or 'L' (lower).""")))
 end
+
+const CHARU = 'U'
+const CHARL = 'L'
+char_uplo(uplo::Symbol) = uplo == :U ? CHARU : (uplo == :L ? CHARL : throw(ArgumentError("uplo argument must be either :U or :L")))
+
 
 include("linalg/exceptions.jl")
 include("linalg/generic.jl")
@@ -198,6 +205,7 @@ include("linalg/dense.jl")
 include("linalg/tridiag.jl")
 include("linalg/triangular.jl")
 include("linalg/factorization.jl")
+include("linalg/cholesky.jl")
 include("linalg/lu.jl")
 
 include("linalg/bunchkaufman.jl")

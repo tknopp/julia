@@ -13,12 +13,6 @@ namespace JL_I {
         eq_float, ne_float,
         lt_float, le_float,
         fpiseq, fpislt,
-        // mixed-type comparisons
-        eqfsi64, eqfui64,
-        ltfsi64, ltfui64,
-        lefsi64, lefui64,
-        ltsif64, ltuif64,
-        lesif64, leuif64,
         // bitwise operators
         and_int, or_int, xor_int, not_int, shl_int, lshr_int, ashr_int,
         bswap_int, ctpop_int, ctlz_int, cttz_int,
@@ -27,14 +21,15 @@ namespace JL_I {
         fptoui, fptosi, uitofp, sitofp,
         fptrunc, fpext,
         // checked conversion
-        fpsiround, fpuiround, checked_fptosi, checked_fptoui,
-        checked_trunc_sint, checked_trunc_uint,
+        checked_fptosi, checked_fptoui,
+        checked_trunc_sint, checked_trunc_uint, check_top_bit,
         // checked arithmetic
         checked_sadd, checked_uadd, checked_ssub, checked_usub,
         checked_smul, checked_umul,
         nan_dom_err,
         // functions
         abs_float, copysign_float, flipsign_int, select_value,
+        ceil_llvm, floor_llvm, trunc_llvm, rint_llvm,
         sqrt_llvm, powi_llvm,
         // pointer access
         pointerref, pointerset, pointertoref,
@@ -72,7 +67,7 @@ static Type *FTnbits(size_t nb)
         return Type::getDoubleTy(jl_LLVMContext);
     else if (nb == 128)
         return Type::getFP128Ty(jl_LLVMContext);
-    else 
+    else
         jl_error("Unsupported Float Size");
 }
 // convert int type to same-size float type
@@ -167,6 +162,7 @@ static Constant *julia_const_to_llvm(jl_value_t *e)
     }
     else if (jl_isbits(jt)) {
         size_t nf = jl_tuple_len(bt->names), i;
+        size_t llvm_nf = 0;
         Constant **fields = (Constant**)alloca(nf * sizeof(Constant*));
         jl_value_t *f=NULL;
         JL_GC_PUSH1(&f);
@@ -183,7 +179,8 @@ static Constant *julia_const_to_llvm(jl_value_t *e)
                 JL_GC_POP();
                 return NULL;
             }
-            fields[i] = val;
+            if (val->getType() != NoopType)
+                fields[llvm_nf++] = val;
         }
         JL_GC_POP();
         Type *t = julia_struct_to_llvm(jt);
@@ -191,7 +188,7 @@ static Constant *julia_const_to_llvm(jl_value_t *e)
             return UndefValue::get(NoopType);
         StructType *st = dyn_cast<StructType>(t);
         assert(st);
-        return ConstantStruct::get(st, ArrayRef<Constant*>(fields,nf));
+        return ConstantStruct::get(st, ArrayRef<Constant*>(fields,llvm_nf));
     }
     return NULL;
 }
@@ -317,7 +314,7 @@ static Value *auto_unbox(jl_value_t *x, jl_codectx_t *ctx)
 }
 
 // figure out how many bits a bitstype has at compile time, or -1
-static int try_to_determine_bitstype_nbits(jl_value_t *targ, jl_codectx_t *ctx)
+int try_to_determine_bitstype_nbits(jl_value_t *targ, jl_codectx_t *ctx)
 {
     jl_value_t *et = expr_type(targ, ctx);
     if (jl_is_type_type(et)) {
@@ -356,8 +353,11 @@ static Value *generic_unbox(jl_value_t *targ, jl_value_t *x, jl_codectx_t *ctx)
         }
         JL_CATCH {
         }
-        if (bt == NULL || !jl_is_bitstype(bt))
-            jl_error("unbox: could not determine argument size");
+        if (bt == NULL || !jl_is_bitstype(bt)) {
+            //jl_error("unbox: could not determine argument size");
+            emit_error("unbox: could not determine argument size", ctx);
+            return UndefValue::get(T_void);
+        }
         nb = (bt==(jl_value_t*)jl_bool_type) ? 1 : jl_datatype_size(bt)*8;
     }
     Type *to = IntegerType::get(jl_LLVMContext, nb);
@@ -388,7 +388,8 @@ static Value *generic_box(jl_value_t *targ, jl_value_t *x, jl_codectx_t *ctx)
     if (bt == NULL) {
     }
     else if (!jl_is_bitstype(bt)) {
-        jl_error("box: expected bits type as first argument");
+        emit_error("reinterpret: expected bits type as first argument", ctx);
+        return UndefValue::get(jl_pvalue_llvmt);
     }
     else {
         llvmt = julia_type_to_llvm(bt);
@@ -401,8 +402,10 @@ static Value *generic_box(jl_value_t *targ, jl_value_t *x, jl_codectx_t *ctx)
             nb = (bt==(jl_value_t*)jl_bool_type) ? 1 : jl_datatype_size(bt)*8;
     }
 
-    if (nb == -1)
-        jl_error("box: could not determine argument size");
+    if (nb == -1) {
+        emit_error("box: could not determine argument size", ctx);
+        return UndefValue::get(jl_pvalue_llvmt);
+    }
 
     if (llvmt == NULL)
         llvmt = IntegerType::get(jl_LLVMContext, nb);
@@ -416,6 +419,9 @@ static Value *generic_box(jl_value_t *targ, jl_value_t *x, jl_codectx_t *ctx)
     if (vxt != llvmt) {
         if (vxt == T_void)
             return vx;
+        if (!vxt->isSingleValueType()) {
+            jl_error("box: argument not of a primitive type");
+        }
         if (llvmt == T_int1) {
             vx = builder.CreateTrunc(vx, llvmt);
         }
@@ -428,7 +434,7 @@ static Value *generic_box(jl_value_t *targ, jl_value_t *x, jl_codectx_t *ctx)
                 !(vxt->isPointerTy() && llvmt->getPrimitiveSizeInBits() == sizeof(void*)*8) &&
                 !(llvmt->isPointerTy() && vxt->getPrimitiveSizeInBits() == sizeof(void*)*8)) {
                 emit_error("box: argument is of incorrect size", ctx);
-                return vx;
+                return UndefValue::get(llvmt);
             }
             // PtrToInt and IntToPtr ignore size differences
             if (vxt->isPointerTy() && !llvmt->isPointerTy()) {
@@ -572,126 +578,32 @@ static Value *emit_checked_fptoui(jl_value_t *targ, Value *x, jl_codectx_t *ctx)
     return emit_checked_fptoui(staticeval_bitstype(targ, "checked_fptoui", ctx), x, ctx);
 }
 
-static Value *emit_iround(Type *to, Value *x, bool issigned, jl_codectx_t *ctx)
+static Value *emit_runtime_pointerref(jl_value_t *e, jl_value_t *i, jl_codectx_t *ctx)
 {
-    int nmantissa, expoffs, expbits;
-    int64_t topbit;
-    Type *intt, *floatt;
-    Value *bits = JL_INT(x);
-    Value *max, *min;
-    int tobits = to->getPrimitiveSizeInBits();
-
-    if (bits->getType()->getPrimitiveSizeInBits() == 32) {
-        nmantissa = 23;
-        expoffs = 127;
-        expbits = 0xff;
-        topbit = BIT31;
-        intt = T_int32; floatt = T_float32;
-        if (issigned) {
-            switch (tobits) {
-            case 8:  max = ConstantFP::get(floatt,  127.99999);
-                     min = ConstantFP::get(floatt, -128.99998); break;
-            case 16: max = ConstantFP::get(floatt,  32767.998);
-                     min = ConstantFP::get(floatt, -32768.996); break;
-            case 32: max = ConstantFP::get(floatt,  2.1474835e9);
-                     min = ConstantFP::get(floatt, -2.1474836e9); break;
-            case 64: max = ConstantFP::get(floatt,  9.2233715e18);
-                     min = ConstantFP::get(floatt, -9.223372e18); break;
-            default:
-                jl_error("unsupported type in fpsiround");
-            }
-        }
-        else {
-            switch (tobits) {
-            case 8:  max = ConstantFP::get(floatt, 255.99998); break;
-            case 16: max = ConstantFP::get(floatt, 65535.996); break;
-            case 32: max = ConstantFP::get(floatt, 4.294967e9); break;
-            case 64: max = ConstantFP::get(floatt, 1.8446743e19); break;
-            default:
-                jl_error("unsupported type in fpuiround");
-            }
-            // most negative number that truncates to zero
-            min = ConstantFP::get(floatt, -0.99999994);
-        }
-    }
-    else {
-        nmantissa = 52;
-        expoffs = 1023;
-        expbits = 0x7ff;
-        topbit = BIT63;
-        intt = T_int64; floatt = T_float64;
-        if (issigned) {
-            switch (tobits) {
-            case 8:  max = ConstantFP::get(floatt,  127.99999999999999);
-                     min = ConstantFP::get(floatt, -128.99999999999997); break;
-            case 16: max = ConstantFP::get(floatt,  32767.999999999996);
-                     min = ConstantFP::get(floatt, -32768.99999999999); break;
-            case 32: max = ConstantFP::get(floatt,  2.1474836479999998e9);
-                     min = ConstantFP::get(floatt, -2.1474836489999995e9); break;
-            case 64: max = ConstantFP::get(floatt,  9.223372036854775e18);
-                     min = ConstantFP::get(floatt, -9.223372036854776e18); break;
-            default:
-                jl_error("unsupported type in fpsiround");
-            }
-        }
-        else {
-            switch (tobits) {
-            case 8:  max = ConstantFP::get(floatt, 255.99999999999997); break;
-            case 16: max = ConstantFP::get(floatt, 65535.99999999999); break;
-            case 32: max = ConstantFP::get(floatt, 4.2949672959999995e9); break;
-            case 64: max = ConstantFP::get(floatt, 1.844674407370955e19); break;
-            default:
-                jl_error("unsupported type in fpuiround");
-            }
-            min = ConstantFP::get(floatt, -0.9999999999999999);
-        }
-    }
-
-    // itrunc(x + copysign(0.5,x))
-    // values with exponent >= nbits are already integers, and this
-    // rounding method doesn't always give the right answer there.
-    x = FP(x);
-    Value *expo = builder.CreateAShr(bits, ConstantInt::get(intt,nmantissa));
-    expo = builder.CreateAnd(expo, ConstantInt::get(intt,expbits));
-    Value *isint = builder.CreateICmpSGE(expo,
-                                         ConstantInt::get(intt,expoffs+nmantissa));
-    Value *half = builder.CreateBitCast(ConstantFP::get(floatt, 0.5), intt);
-    Value *signedhalf =
-        builder.CreateOr(half,
-                         builder.CreateAnd(bits,
-                                           ConstantInt::get(intt,topbit)));
-    Value *sum = builder.CreateFAdd(x,
-                                    builder.CreateBitCast(signedhalf, floatt));
-
-    Value *src = builder.
-        CreateSelect(builder.
-                     CreateOr(isint, builder.
-                              // need to give 0 for -0.5 < x < 0.5 (exponent < -1)
-                              // otherwise iround(prevfloat(0.5)) == 1
-                              CreateICmpSLT(expo,
-                                            ConstantInt::get(intt,expoffs-1))),
-                     x, sum);
-
-    raise_exception_unless(builder.CreateAnd(builder.CreateFCmpOLE(src, max),
-                                             builder.CreateFCmpOGE(src, min)),
-                           prepare_global(jlinexacterr_var), ctx);
-    if (issigned)
-        return builder.CreateFPToSI(src, to);
-    else
-        return builder.CreateFPToUI(src, to);
+    Value *preffunc =
+        jl_Module->getOrInsertFunction("jl_pointerref",
+                                       FunctionType::get(jl_pvalue_llvmt, two_pvalue_llvmt, false));
+    int ldepth = ctx->argDepth;
+    Value *parg = emit_boxed_rooted(e, ctx);
+    Value *iarg = boxed(emit_expr(i, ctx), ctx);
+    Value *ret = builder.CreateCall2(prepare_call(preffunc), parg, iarg);
+    ctx->argDepth = ldepth;
+    return ret;
 }
 
 static Value *emit_pointerref(jl_value_t *e, jl_value_t *i, jl_codectx_t *ctx)
 {
     jl_value_t *aty = expr_type(e, ctx);
     if (!jl_is_cpointer_type(aty))
-        jl_error("pointerref: expected pointer type as first argument");
+        return emit_runtime_pointerref(e, i, ctx);
+        //jl_error("pointerref: expected pointer type as first argument");
     jl_value_t *ety = jl_tparam0(aty);
     if (jl_is_typevar(ety))
-        jl_error("pointerref: invalid pointer");
-    if (expr_type(i, ctx) != (jl_value_t*)jl_long_type) {
-        jl_error("pointerref: invalid index type");
-    }
+        return emit_runtime_pointerref(e, i, ctx);
+        //jl_error("pointerref: invalid pointer");
+    if (expr_type(i, ctx) != (jl_value_t*)jl_long_type)
+        return emit_runtime_pointerref(e, i, ctx);
+        //jl_error("pointerref: invalid index type");
     Value *thePtr = auto_unbox(e,ctx);
     Value *idx = emit_unbox(T_size, emit_unboxed(i, ctx), (jl_value_t*)jl_long_type);
     Value *im1 = builder.CreateSub(idx, ConstantInt::get(T_size, 1));
@@ -718,7 +630,21 @@ static Value *emit_pointerref(jl_value_t *e, jl_value_t *i, jl_codectx_t *ctx)
                             thePtr, size, 1);
         return mark_julia_type(strct, ety);
     }
-    return typed_load(thePtr, im1, ety, ctx);
+    return typed_load(thePtr, im1, ety, ctx, tbaa_user);
+}
+
+static Value *emit_runtime_pointerset(jl_value_t *e, jl_value_t *x, jl_value_t *i, jl_codectx_t *ctx)
+{
+    Value *psetfunc =
+        jl_Module->getOrInsertFunction("jl_pointerset",
+                                       FunctionType::get(T_void, three_pvalue_llvmt, false));
+    int ldepth = ctx->argDepth;
+    Value *parg = emit_boxed_rooted(e, ctx);
+    Value *iarg = emit_boxed_rooted(i, ctx);
+    Value *xarg = boxed(emit_expr(x, ctx), ctx);
+    builder.CreateCall3(prepare_call(psetfunc), parg, xarg, iarg);
+    ctx->argDepth = ldepth;
+    return parg;
 }
 
 // e[i] = x
@@ -726,10 +652,12 @@ static Value *emit_pointerset(jl_value_t *e, jl_value_t *x, jl_value_t *i, jl_co
 {
     jl_value_t *aty = expr_type(e, ctx);
     if (!jl_is_cpointer_type(aty))
-        jl_error("pointerset: expected pointer type as first argument");
+        return emit_runtime_pointerset(e, x, i, ctx);
+        //jl_error("pointerset: expected pointer type as first argument");
     jl_value_t *ety = jl_tparam0(aty);
     if (jl_is_typevar(ety))
-        jl_error("pointerset: invalid pointer");
+        return emit_runtime_pointerset(e, x, i, ctx);
+        //jl_error("pointerset: invalid pointer");
     jl_value_t *xty = expr_type(x, ctx);
     Value *val=NULL;
     if (!jl_subtype(xty, ety, 0)) {
@@ -737,7 +665,8 @@ static Value *emit_pointerset(jl_value_t *e, jl_value_t *x, jl_value_t *i, jl_co
         emit_typecheck(val, ety, "pointerset: type mismatch in assign", ctx);
     }
     if (expr_type(i, ctx) != (jl_value_t*)jl_long_type)
-        jl_error("pointerset: invalid index type");
+        return emit_runtime_pointerset(e, x, i, ctx);
+        //jl_error("pointerset: invalid index type");
     Value *idx = emit_unbox(T_size, emit_unboxed(i, ctx),(jl_value_t*)jl_long_type);
     Value *im1 = builder.CreateSub(idx, ConstantInt::get(T_size, 1));
     Value *thePtr = auto_unbox(e,ctx);
@@ -760,7 +689,7 @@ static Value *emit_pointerset(jl_value_t *e, jl_value_t *x, jl_value_t *i, jl_co
             else
                 val = emit_unboxed(x,ctx);
         }
-        (void)typed_store(thePtr, im1, val, ety, ctx);
+        typed_store(thePtr, im1, val, ety, ctx, tbaa_user);
     }
     return mark_julia_type(thePtr, aty);
 }
@@ -887,25 +816,11 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
             jl_error("fptosi: wrong number of arguments");
         }
 
-    case fpsiround:
-    case fpuiround:
-        if (nargs == 1) {
-            Value *x = FP(auto_unbox(args[1], ctx));
-            return emit_iround(JL_INTT(x->getType()), x, f == fpsiround, ctx);
-        }
-        else if (nargs == 2) {
-            return emit_iround(Type::getIntNTy(jl_LLVMContext, try_to_determine_bitstype_nbits(args[1],ctx)),
-                               FP(auto_unbox(args[2],ctx)), f == fpsiround, ctx);
-        }
-        else {
-            jl_errorf("%s: wrong number of arguments", f == fpsiround ? "fpsiround" : "fpuiround");
-        }
-
     HANDLE(fptrunc,2) return builder.CreateFPTrunc(FP(auto_unbox(args[2],ctx)), FTnbits(try_to_determine_bitstype_nbits(args[1],ctx)));
     HANDLE(fpext,2) {
         Value *x = auto_unbox(args[2],ctx);
 #if JL_NEED_FLOATTEMP_VAR
-        // Target platform might carry extra precision.  
+        // Target platform might carry extra precision.
         // Force rounding to single precision first. The reason is that it's
         // fine to keep working in extended precision as long as it's
         // understood that everything is implicitly rounded to 23 bits,
@@ -1049,6 +964,16 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
         return builder.CreateExtractValue(res, ArrayRef<unsigned>(0));
     }
 
+    HANDLE(check_top_bit,1)
+        // raise InexactError if argument's top bit is set
+        x = JL_INT(x);
+        raise_exception_if(builder.
+                           CreateTrunc(builder.
+                                       CreateLShr(x, ConstantInt::get(t, t->getPrimitiveSizeInBits()-1)),
+                                       T_int1),
+                           prepare_global(jlinexacterr_var), ctx);
+        return x;
+
     HANDLE(eq_int,2)  return builder.CreateICmpEQ(JL_INT(x), JL_INT(y));
     HANDLE(ne_int,2)  return builder.CreateICmpNE(JL_INT(x), JL_INT(y));
     HANDLE(slt_int,2) return builder.CreateICmpSLT(JL_INT(x), JL_INT(y));
@@ -1060,133 +985,6 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
     HANDLE(ne_float,2) return builder.CreateFCmpUNE(FP(x), FP(y));
     HANDLE(lt_float,2) return builder.CreateFCmpOLT(FP(x), FP(y));
     HANDLE(le_float,2) return builder.CreateFCmpOLE(FP(x), FP(y));
-
-    HANDLE(eqfsi64,2) return emit_eqfsi(x, y);
-    HANDLE(eqfui64,2) return emit_eqfui(x, y);
-    HANDLE(ltfsi64,2) {
-        x = FP(x);
-        fy = JL_INT(y);
-        Value *ffy = builder.CreateSIToFP(fy, T_float64);
-        Value *siffy = builder.CreateFPToSI(ffy, T_int64);
-        return builder.CreateOr(
-            builder.CreateFCmpOLT(x, ffy),
-            builder.CreateAnd(
-                              // ensure x < 2.0^63
-                builder.CreateFCmpOLT(x, ConstantFP::get(T_float64,
-                                                         9.223372036854776e18)),
-                builder.CreateAnd(builder.CreateFCmpOEQ(x, ffy),
-                                  builder.CreateICmpSGT(fy, siffy))
-            )
-        );
-    }
-    HANDLE(ltfui64,2) {
-        x = FP(x);
-        fy = JL_INT(y);
-        Value *ffy = builder.CreateUIToFP(fy, T_float64);
-        Value *uiffy = builder.CreateFPToUI(ffy, T_int64);
-        return builder.CreateOr(
-            builder.CreateFCmpOLT(x, ffy),
-            builder.CreateAnd(
-                              // ensure x < 2.0^64
-                builder.CreateFCmpOLT(x, ConstantFP::get(T_float64,
-                                                         1.8446744073709552e19)),
-                builder.CreateAnd(builder.CreateFCmpOEQ(x, ffy),
-                                  builder.CreateICmpUGT(fy, uiffy))
-            )
-        );
-    }
-    HANDLE(lefsi64,2) {
-        x = FP(x);
-        fy = JL_INT(y);
-        Value *ffy = builder.CreateSIToFP(fy, T_float64);
-        return builder.CreateOr(
-            builder.CreateFCmpOLT(x, ffy),
-            builder.CreateAnd(
-                builder.CreateFCmpOLT(x, ConstantFP::get(T_float64,
-                                                         9.223372036854776e18)),
-                builder.CreateAnd(
-                    builder.CreateFCmpOEQ(x, ffy),
-                    builder.CreateICmpSGE(fy, builder.CreateFPToSI(ffy,T_int64))
-                )
-            )
-        );
-    }
-    HANDLE(lefui64,2) {
-        x = FP(x);
-        fy = JL_INT(y);
-        Value *ffy = builder.CreateUIToFP(fy, T_float64);
-        return builder.CreateOr(
-            builder.CreateFCmpOLT(x, ffy),
-            builder.CreateAnd(
-                builder.CreateFCmpOLT(x, ConstantFP::get(T_float64,
-                                                         1.8446744073709552e19)),
-                builder.CreateAnd(
-                    builder.CreateFCmpOEQ(x, ffy),
-                    builder.CreateICmpUGE(fy, builder.CreateFPToUI(ffy, T_int64))
-                )
-            )
-        );
-    }
-    HANDLE(ltsif64,2) {
-        x = JL_INT(x);
-        fy = FP(y);
-        Value *fx = builder.CreateSIToFP(x, T_float64);
-        return builder.CreateOr(
-                   builder.CreateOr(
-                       builder.CreateFCmpOGE(fy, ConstantFP::get(T_float64,
-                                                                 9.223372036854776e18)),
-                       builder.CreateFCmpOLT(fx, fy)),
-                   builder.CreateAnd(
-                       builder.CreateFCmpOEQ(fx, fy),
-                       builder.CreateICmpSLT(x, builder.CreateFPToSI(fx, T_int64))
-                   )
-               );
-    }
-    HANDLE(ltuif64,2) {
-        x = JL_INT(x);
-        fy = FP(y);
-        Value *fx = builder.CreateUIToFP(x, T_float64);
-        return builder.CreateOr(
-                   builder.CreateOr(
-                       builder.CreateFCmpOGE(fy, ConstantFP::get(T_float64,
-                                                                 1.8446744073709552e19)),
-                       builder.CreateFCmpOLT(fx, fy)),
-                   builder.CreateAnd(
-                       builder.CreateFCmpOEQ(fx, fy),
-                       builder.CreateICmpULT(x, builder.CreateFPToUI(fx, T_int64))
-                   )
-               );
-    }
-    HANDLE(lesif64,2) {
-        x = JL_INT(x);
-        fy = FP(y);
-        Value *fx = builder.CreateSIToFP(x, T_float64);
-        return builder.CreateOr(
-                   builder.CreateOr(
-                       builder.CreateFCmpOGE(fy, ConstantFP::get(T_float64,
-                                                                 9.223372036854776e18)),
-                       builder.CreateFCmpOLT(fx, fy)),
-                   builder.CreateAnd(
-                       builder.CreateFCmpOEQ(fx, fy),
-                       builder.CreateICmpSLE(x, builder.CreateFPToSI(fx, T_int64))
-                   )
-               );
-    }
-    HANDLE(leuif64,2) {
-        x = JL_INT(x);
-        fy = FP(y);
-        Value *fx = builder.CreateUIToFP(x, T_float64);
-        return builder.CreateOr(
-                   builder.CreateOr(
-                       builder.CreateFCmpOGE(fy, ConstantFP::get(T_float64,
-                                                                 1.8446744073709552e19)),
-                       builder.CreateFCmpOLT(fx, fy)),
-                   builder.CreateAnd(
-                       builder.CreateFCmpOEQ(fx, fy),
-                       builder.CreateICmpULE(x, builder.CreateFPToUI(fx, T_int64))
-                   )
-               );
-    }
 
     HANDLE(fpiseq,2) {
         Value *xi = JL_INT(x);
@@ -1302,12 +1100,18 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
     HANDLE(abs_float,1)
     {
         x = FP(x);
+#ifdef LLVM34
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::fabs,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+#else
         Type *intt = JL_INTT(x->getType());
         Value *bits = builder.CreateBitCast(FP(x), intt);
         Value *absbits =
             builder.CreateAnd(bits,
                               ConstantInt::get(intt, APInt::getSignedMaxValue(((IntegerType*)intt)->getBitWidth())));
         return builder.CreateBitCast(absbits, x->getType());
+#endif
     }
     HANDLE(copysign_float,2)
     {
@@ -1350,6 +1154,30 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
     HANDLE(jl_alloca,1) {
         return builder.CreateAlloca(IntegerType::get(jl_LLVMContext, 8),JL_INT(x));
     }
+    HANDLE(ceil_llvm,1) {
+        x = FP(x);
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::ceil,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+    }
+    HANDLE(floor_llvm,1) {
+        x = FP(x);
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::floor,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+    }
+    HANDLE(trunc_llvm,1) {
+        x = FP(x);
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::trunc,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+    }
+    HANDLE(rint_llvm,1) {
+        x = FP(x);
+        return builder.CreateCall(Intrinsic::getDeclaration(jl_Module, Intrinsic::rint,
+                                                            ArrayRef<Type*>(x->getType())),
+                                  x);
+    }
     HANDLE(sqrt_llvm,1) {
         x = FP(x);
         raise_exception_unless(builder.CreateFCmpUGE(x, ConstantFP::get(x->getType(),0.0)),
@@ -1362,13 +1190,19 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
         x = FP(x);
         y = JL_INT(y);
         Type *tx = x->getType();
-        // TODO: use powi when LLVM is fixed. issue #6506
-        // http://llvm.org/bugs/show_bug.cgi?id=19530
+#ifdef LLVM36
+        Type *ts[1] = { tx };
+        return builder.CreateCall2(Intrinsic::getDeclaration(jl_Module, Intrinsic::powi,
+                                                             ArrayRef<Type*>(ts)),
+                                   x, y);
+#else
+        // issue #6506
         Type *ts[2] = { tx, tx };
         return builder.
             CreateCall2(jl_Module->getOrInsertFunction(tx==T_float64 ? "pow" : "powf",
                                                        FunctionType::get(tx, ts, false)),
                         x, builder.CreateSIToFP(y, tx));
+#endif
     }
     default:
         assert(false);
@@ -1433,23 +1267,18 @@ extern "C" void jl_init_intrinsic_functions(void)
     ADD_I(sle_int); ADD_I(ule_int);
     ADD_I(eq_float); ADD_I(ne_float);
     ADD_I(lt_float); ADD_I(le_float);
-    ADD_I(eqfsi64); ADD_I(eqfui64);
-    ADD_I(ltfsi64); ADD_I(ltfui64);
-    ADD_I(lefsi64); ADD_I(lefui64);
-    ADD_I(ltsif64); ADD_I(ltuif64);
-    ADD_I(lesif64); ADD_I(leuif64);
     ADD_I(fpiseq); ADD_I(fpislt);
     ADD_I(and_int); ADD_I(or_int); ADD_I(xor_int); ADD_I(not_int);
     ADD_I(shl_int); ADD_I(lshr_int); ADD_I(ashr_int); ADD_I(bswap_int);
     ADD_I(ctpop_int); ADD_I(ctlz_int); ADD_I(cttz_int);
     ADD_I(sext_int); ADD_I(zext_int); ADD_I(trunc_int);
     ADD_I(fptoui); ADD_I(fptosi);
-    ADD_I(fpsiround); ADD_I(fpuiround);
     ADD_I(uitofp); ADD_I(sitofp);
     ADD_I(fptrunc); ADD_I(fpext);
     ADD_I(abs_float); ADD_I(copysign_float);
-    ADD_I(flipsign_int); ADD_I(select_value); ADD_I(sqrt_llvm);
-    ADD_I(powi_llvm);
+    ADD_I(flipsign_int); ADD_I(select_value);
+    ADD_I(ceil_llvm); ADD_I(floor_llvm); ADD_I(trunc_llvm); ADD_I(rint_llvm);
+    ADD_I(sqrt_llvm); ADD_I(powi_llvm);
     ADD_I(pointerref); ADD_I(pointerset); ADD_I(pointertoref);
     ADD_I(checked_sadd); ADD_I(checked_uadd);
     ADD_I(checked_ssub); ADD_I(checked_usub);
@@ -1457,6 +1286,7 @@ extern "C" void jl_init_intrinsic_functions(void)
     ADD_I(checked_fptosi); ADD_I(checked_fptoui);
     ADD_I(checked_trunc_sint);
     ADD_I(checked_trunc_uint);
+    ADD_I(check_top_bit);
     ADD_I(nan_dom_err);
     ADD_I(ccall); ADD_I(cglobal);
     ADD_I(jl_alloca);

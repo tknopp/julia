@@ -41,10 +41,10 @@
 		  (if capt
 		      (and (equal? expr (cdr capt)) state)
 		      (cons (cons p expr) state))))))
-	
+
 	((procedure? p)
 	 (and (p expr) state))
-	
+
 	((pair? p)
 	 (cond ((eq? (car p) '-/)
 		(and (equal? (cadr p) expr)             state))
@@ -62,7 +62,7 @@
 		     (equal? (car p) (car expr))
 		     (match-seq (cdr p) (cdr expr) state (length
 							  (cdr expr)))))))
-	
+
 	(else
 	 (and (equal? p expr) state))))
 
@@ -98,7 +98,7 @@
    (else
     (or (match-star- p prest expr state var 0 0   L sofar)
 	(match-star- p prest expr state var 1 max L sofar)))))
-(define (match-star p prest expr state var min max L) 
+(define (match-star p prest expr state var min max L)
   (match-star- p prest expr state var min max L '()))
 
 ; match sequences of expressions
@@ -107,29 +107,26 @@
 	((symbol? p) (cons (cons p expr) state))
 	((null? p) (if (null? expr) state #f))
 	(else
-	 (let ((subp (car p))
-	       (var  #f))
-	   (if (and (pair? subp)
-		    (eq? (car subp) '--))
-	       (begin (set! var (cadr subp))
-		      (set! subp (caddr subp)))
-	       #f)
-	   (let ((head (if (pair? subp) (car subp) '())))
-	     (cond ((eq? subp '...)
-		    (match-star '_ (cdr p) expr state var 0 L L))
-		   ((eq? head '-*)
-		    (match-star (cadr subp) (cdr p) expr state var 0 L L))
-		   ((eq? head '-+)
-		    (match-star (cadr subp) (cdr p) expr state var 1 L L))
-		   ((eq? head '-?)
-		    (match-star (cadr subp) (cdr p) expr state var 0 1 L))
-		   ((eq? head '-$)
-		    (match-alt (cdr subp) (cdr p) expr state var L))
-		   (else
-		    (and (pair? expr)
-			 (match-seq (cdr p) (cdr expr)
-				    (match- (car p) (car expr) state)
-				    (- L 1))))))))))
+	 (let ((capt? (and (pair? (car p))
+			   (eq? (car (car p)) '--))))
+	   (let ((subp (if capt? (caddr (car p)) (car p)))
+		 (var  (if capt? (cadr  (car p)) #f)))
+	     (let ((head (if (pair? subp) (car subp) '())))
+	       (cond ((eq? subp '...)
+		      (match-star '_ (cdr p) expr state var 0 L L))
+		     ((eq? head '-*)
+		      (match-star (cadr subp) (cdr p) expr state var 0 L L))
+		     ((eq? head '-+)
+		      (match-star (cadr subp) (cdr p) expr state var 1 L L))
+		     ((eq? head '-?)
+		      (match-star (cadr subp) (cdr p) expr state var 0 1 L))
+		     ((eq? head '-$)
+		      (match-alt (cdr subp) (cdr p) expr state var L))
+		     (else
+		      (and (pair? expr)
+			   (match-seq (cdr p) (cdr expr)
+				      (match- (car p) (car expr) state)
+				      (- L 1)))))))))))
 
 (define (match p expr) (match- p expr (list (cons '__ expr))))
 
@@ -235,12 +232,12 @@
     (cond ((and (symbol? p)
 		(not (memq p '(_ ...))))
 	   (list p))
-	  
+
 	  ((pair? p)
 	   (if (eq? (car p) '-/)
 	       '()
-	       (unique (apply append (map patargs- (to-proper (cdr p)))))))
-	  
+	       (delete-duplicates (apply append (map patargs- (to-proper (cdr p)))))))
+
 	  (else '())))
   (define (patargs p)
     (cons '__ (patargs- p)))
